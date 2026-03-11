@@ -540,7 +540,7 @@ def profile_model(
     records: List[KernelRecord] = []
     for evt in key_averages:
         # We only care about events that ran on CUDA
-        cuda_time_us = evt.self_cuda_time_total
+        cuda_time_us = getattr(evt, "self_device_time_total", None) or getattr(evt, "self_cuda_time_total", 0)
         if cuda_time_us <= 0:
             continue
 

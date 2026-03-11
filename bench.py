@@ -1156,7 +1156,10 @@ def run_profile(kernel_fn: Callable, config: dict):
     print(f"profile_trace: {trace_path}")
 
     # Print summary table
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
+    try:
+        print(prof.key_averages().table(sort_by="self_device_time_total", row_limit=20))
+    except Exception:
+        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
 
 
 # =========================================================================
