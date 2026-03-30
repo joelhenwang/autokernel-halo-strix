@@ -1,95 +1,81 @@
 """
-AutoKernel -- The file the agent modifies.
+AutoKernel -- Softmax kernel.
 
-Current kernel: Matrix Multiplication
-Exp-M6: Fine-tune around M5 winner (128x128x32, w=8, s=2).
-         Try BLOCK_SIZE_K=64, waves_per_eu, and more num_warps options.
+Exp-S1: Autotune num_warps + BLOCK_SIZE, multi-row processing for small rows.
 """
 
-KERNEL_TYPE = "matmul"
+KERNEL_TYPE = "softmax"
 
 import torch
 import triton
 import triton.language as tl
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=2),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=2),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4}, num_warps=8, num_stages=2),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 16}, num_warps=8, num_stages=2),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=1),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=1),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=16, num_stages=2),
-        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=2),
-        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=2),
-    ],
-    key=['M', 'N', 'K'],
-)
 @triton.jit
-def matmul_kernel(
-    A_ptr, B_ptr, C_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    BLOCK_SIZE_M: tl.constexpr,
-    BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,
-    GROUP_SIZE_M: tl.constexpr,
+def softmax_kernel(
+    input_ptr,
+    output_ptr,
+    n_cols,
+    stride_input_row,
+    stride_output_row,
+    BLOCK_SIZE: tl.constexpr,
+    NUM_ROWS_PER_PROGRAM: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    row_start = pid * NUM_ROWS_PER_PROGRAM
 
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * GROUP_SIZE_M
-    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
-    pid_n = (pid % num_pid_in_group) // group_size_m
+    for row_off in range(NUM_ROWS_PER_PROGRAM):
+        row_idx = row_start + row_off
 
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
+        row_start_input = input_ptr + row_idx * stride_input_row
+        row_start_output = output_ptr + row_idx * stride_output_row
 
-    a_ptrs = A_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
-    b_ptrs = B_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
+        col_offsets = tl.arange(0, BLOCK_SIZE)
+        mask = col_offsets < n_cols
 
-    acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-        acc = tl.dot(a, b, acc)
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
-
-    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = C_ptr + offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
-    mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    c = acc.to(C_ptr.dtype.element_ty)
-    tl.store(c_ptrs, c, mask=mask)
+        row = tl.load(row_start_input + col_offsets, mask=mask, other=float("-inf"))
+        row_max = tl.max(row, axis=0)
+        row = row - row_max
+        numerator = tl.exp(row)
+        denominator = tl.sum(numerator, axis=0)
+        result = numerator / denominator
+        tl.store(row_start_output + col_offsets, result, mask=mask)
 
 
-def kernel_fn(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def kernel_fn(x: torch.Tensor) -> torch.Tensor:
     """Entry point called by bench.py."""
-    assert A.is_cuda and B.is_cuda
-    M, K = A.shape
-    K2, N = B.shape
-    assert K == K2
+    assert x.is_cuda
 
-    C = torch.empty((M, N), device=A.device, dtype=A.dtype)
+    orig_shape = x.shape
+    if x.ndim == 1:
+        x = x.unsqueeze(0)
+    elif x.ndim > 2:
+        x = x.view(-1, x.shape[-1])
 
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
+    n_rows, n_cols = x.shape
+    output = torch.empty_like(x)
 
-    matmul_kernel[grid](
-        A, B, C,
-        M, N, K,
-        A.stride(0), A.stride(1),
-        B.stride(0), B.stride(1),
-        C.stride(0), C.stride(1),
+    BLOCK_SIZE = triton.next_power_of_2(n_cols)
+
+    if n_cols <= 2048:
+        num_warps = 4
+    elif n_cols <= 8192:
+        num_warps = 8
+    else:
+        num_warps = 16
+
+    ROWS_PER_PROG = 4
+    grid = (triton.cdiv(n_rows, ROWS_PER_PROG),)
+
+    softmax_kernel[grid](
+        x, output,
+        n_cols,
+        x.stride(0),
+        output.stride(0),
+        BLOCK_SIZE=BLOCK_SIZE,
+        NUM_ROWS_PER_PROGRAM=ROWS_PER_PROG,
+        num_warps=num_warps,
+        num_stages=2,
     )
-    return C
+
+    return output.view(orig_shape)
