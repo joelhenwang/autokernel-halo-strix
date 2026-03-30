@@ -19,6 +19,7 @@
 | S1 | softmax | multi-row (4 rows/prog) + adaptive num_warps | ✅ **KEEP** | **2.259x** (from 1.16x) | correctness ALL PASS, 798 GB/s (15% peak BW) |
 | F1 | fused_mlp | autotune + grouped + 3-arg tl.dot | ✅ **KEEP** | **1.019x** (from 0.92x) | 132 TFLOPS, 3 bf16 tol fails at xlarge |
 | R1 | rotary_emb | multi-row + native dtype (no fp32 cast) | ✅ **KEEP** | **1.09x** (from 0.82x) | bf16/fp32 PASS, fp16 fails at large sizes (HIP precision) |
+| A1 | flash_attn | BLOCK_M=128 + native dtype tl.dot (MFMA) + w=8 | ✅ **KEEP** | **2.202x** (from 0.50x) | 35.4 TFLOPS, ALL correctness PASS |
 
 ---
 
