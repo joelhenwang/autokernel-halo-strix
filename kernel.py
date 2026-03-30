@@ -35,22 +35,22 @@ def rotary_embedding_kernel(
 
     for row_off in range(ROWS_PER_PROG):
         row_idx = row_start + row_off
-        if row_idx >= seq_len:
-            break
+        row_valid = row_idx < seq_len
 
         x_row_base = X_ptr + row_idx * stride_x_row
-        x1 = tl.load(x_row_base + col_offsets * 2, mask=mask_half, other=0.0).to(tl.float32)
-        x2 = tl.load(x_row_base + col_offsets * 2 + 1, mask=mask_half, other=0.0).to(tl.float32)
+        load_mask = mask_half & row_valid
+        x1 = tl.load(x_row_base + col_offsets * 2, mask=load_mask, other=0.0).to(tl.float32)
+        x2 = tl.load(x_row_base + col_offsets * 2 + 1, mask=load_mask, other=0.0).to(tl.float32)
 
-        cos = tl.load(COS_ptr + row_idx * stride_cos_row + col_offsets, mask=mask_half, other=1.0).to(tl.float32)
-        sin = tl.load(SIN_ptr + row_idx * stride_sin_row + col_offsets, mask=mask_half, other=0.0).to(tl.float32)
+        cos = tl.load(COS_ptr + row_idx * stride_cos_row + col_offsets, mask=load_mask, other=1.0).to(tl.float32)
+        sin = tl.load(SIN_ptr + row_idx * stride_sin_row + col_offsets, mask=load_mask, other=0.0).to(tl.float32)
 
         rx1 = x1 * cos - x2 * sin
         rx2 = x1 * sin + x2 * cos
 
         out_row_base = OUT_ptr + row_idx * stride_out_row
-        tl.store(out_row_base + col_offsets * 2, rx1.to(X_ptr.dtype.element_ty), mask=mask_half)
-        tl.store(out_row_base + col_offsets * 2 + 1, rx2.to(X_ptr.dtype.element_ty), mask=mask_half)
+        tl.store(out_row_base + col_offsets * 2, rx1.to(X_ptr.dtype.element_ty), mask=load_mask)
+        tl.store(out_row_base + col_offsets * 2 + 1, rx2.to(X_ptr.dtype.element_ty), mask=load_mask)
 
 
 def kernel_fn(
