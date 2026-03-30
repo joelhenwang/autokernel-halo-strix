@@ -1,18 +1,8 @@
 """
 AutoKernel -- Fused SwiGLU MLP kernel.
 
-Current kernel: Fused Gate + Up projection + SiLU + elementwise multiply
-Target metric: throughput (higher is better)
-Secondary: correctness must ALWAYS pass
-
-Fuses the following operations:
-  gate = x @ w_gate.T
-  up   = x @ w_up.T
-  hidden = silu(gate) * up
-  out  = hidden @ w_down.T
-
-The first three operations (gate proj, up proj, activation, multiply) are fused
-into a single kernel. The down projection is a separate matmul.
+Exp-F1: Apply matmul optimizations (autotune, 3-arg tl.dot, grouped ordering,
+         128x128 tiles, num_warps=8) to fused gate+up kernel.
 """
 
 KERNEL_TYPE = "fused_mlp"
@@ -22,6 +12,16 @@ import triton
 import triton.language as tl
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=4, num_stages=2),
+    ],
+    key=['M', 'N', 'K'],
+)
 @triton.jit
 def fused_gate_up_kernel(
     X_ptr,
@@ -37,67 +37,55 @@ def fused_gate_up_kernel(
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
 ):
-    """
-    Fused kernel: computes activation(X @ W_gate^T) * (X @ W_up^T).
-    W_gate and W_up are [intermediate_size, hidden_size] (transposed access).
-    X is [M, K], output is [M, N] where N = intermediate_size, K = hidden_size.
-    """
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid = tl.program_id(0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
 
-    offs_m = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     offs_k = tl.arange(0, BLOCK_SIZE_K)
 
-    # Pointers for X
-    x_ptrs = X_ptr + offs_m[:, None] * stride_xm + offs_k[None, :] * stride_xk
+    x_ptrs = X_ptr + offs_am[:, None] * stride_xm + offs_k[None, :] * stride_xk
+    wg_ptrs = W_gate_ptr + offs_k[:, None] * stride_wgk + offs_bn[None, :] * stride_wgn
+    wu_ptrs = W_up_ptr + offs_k[:, None] * stride_wuk + offs_bn[None, :] * stride_wun
 
-    # Pointers for W_gate (shape [K, N] after transpose -- stored as [N, K])
-    wg_ptrs = W_gate_ptr + offs_k[:, None] * stride_wgk + offs_n[None, :] * stride_wgn
-    # Pointers for W_up
-    wu_ptrs = W_up_ptr + offs_k[:, None] * stride_wuk + offs_n[None, :] * stride_wun
-
-    # Accumulators
     acc_gate = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     acc_up = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for k_start in range(0, K, BLOCK_SIZE_K):
-        k_offs = k_start + offs_k
-        # Load X tile
-        x_mask = (offs_m[:, None] < M) & (k_offs[None, :] < K)
-        x = tl.load(x_ptrs, mask=x_mask, other=0.0)
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        x = tl.load(x_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        wg = tl.load(wg_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        wu = tl.load(wu_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
 
-        # Load W_gate tile
-        wg_mask = (k_offs[:, None] < K) & (offs_n[None, :] < N)
-        wg = tl.load(wg_ptrs, mask=wg_mask, other=0.0)
-
-        # Load W_up tile
-        wu_mask = (k_offs[:, None] < K) & (offs_n[None, :] < N)
-        wu = tl.load(wu_ptrs, mask=wu_mask, other=0.0)
-
-        acc_gate += tl.dot(x, wg)
-        acc_up += tl.dot(x, wu)
+        acc_gate = tl.dot(x, wg, acc_gate)
+        acc_up = tl.dot(x, wu, acc_up)
 
         x_ptrs += BLOCK_SIZE_K * stride_xk
         wg_ptrs += BLOCK_SIZE_K * stride_wgk
         wu_ptrs += BLOCK_SIZE_K * stride_wuk
 
-    # Apply activation to gate and multiply with up
     if USE_SILU:
-        # SiLU(x) = x * sigmoid(x)
         gate_activated = acc_gate * tl.sigmoid(acc_gate)
     else:
-        # GELU approximation (tanh via sigmoid identity for HIP/ROCm portability)
         tanh_arg = 0.7978845608 * (acc_gate + 0.044715 * acc_gate * acc_gate * acc_gate)
         tanh_val = 2.0 * tl.sigmoid(2.0 * tanh_arg) - 1.0
         gate_activated = 0.5 * acc_gate * (1.0 + tanh_val)
 
     result = gate_activated * acc_up
 
-    # Store
-    out_ptrs = Out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
-    out_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    out_ptrs = Out_ptr + offs_cm[:, None] * stride_om + offs_cn[None, :] * stride_on
+    out_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     tl.store(out_ptrs, result.to(Out_ptr.dtype.element_ty), mask=out_mask)
 
 
@@ -108,62 +96,32 @@ def kernel_fn(
     w_down: torch.Tensor,
     activation: str = "silu",
 ) -> torch.Tensor:
-    """
-    Entry point called by bench.py. Must match reference.fused_mlp_ref signature.
-
-    SwiGLU MLP:
-      hidden = activation(x @ w_gate.T) * (x @ w_up.T)
-      out = hidden @ w_down.T
-
-    Args:
-        x: [batch, hidden_size] or [batch, seq_len, hidden_size]
-        w_gate: [intermediate_size, hidden_size]
-        w_up: [intermediate_size, hidden_size]
-        w_down: [hidden_size, intermediate_size]
-        activation: "silu" or "gelu"
-    """
+    """Entry point called by bench.py."""
     assert x.is_cuda
 
-    # Handle multi-dim input
     orig_shape = x.shape
     if x.ndim > 2:
         x = x.view(-1, x.shape[-1])
 
     M, K = x.shape
     N, K2 = w_gate.shape
-    assert K == K2, f"Hidden dim mismatch: x has {K}, w_gate has {K2}"
-    assert w_up.shape == (N, K), f"w_up shape mismatch"
+    assert K == K2
+    assert w_up.shape == (N, K)
 
     hidden = torch.empty((M, N), device=x.device, dtype=x.dtype)
 
-    BLOCK_SIZE_M = 64
-    BLOCK_SIZE_N = 64
-    BLOCK_SIZE_K = 32
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
 
-    grid = (triton.cdiv(M, BLOCK_SIZE_M), triton.cdiv(N, BLOCK_SIZE_N))
-
-    # W_gate and W_up are [N, K]. We access them as transposed: X[M,K] @ W^T[K,N]
-    # So stride_wgk corresponds to stride along the K dimension (stride(1) of [N,K])
-    # and stride_wgn corresponds to stride along N dimension (stride(0) of [N,K])
     fused_gate_up_kernel[grid](
-        x,
-        w_gate,
-        w_up,
-        hidden,
+        x, w_gate, w_up, hidden,
         M, N, K,
         x.stride(0), x.stride(1),
-        w_gate.stride(1), w_gate.stride(0),  # transposed: K-stride, N-stride
-        w_up.stride(1), w_up.stride(0),      # transposed: K-stride, N-stride
+        w_gate.stride(1), w_gate.stride(0),
+        w_up.stride(1), w_up.stride(0),
         hidden.stride(0), hidden.stride(1),
         USE_SILU=(activation == "silu"),
-        BLOCK_SIZE_M=BLOCK_SIZE_M,
-        BLOCK_SIZE_N=BLOCK_SIZE_N,
-        BLOCK_SIZE_K=BLOCK_SIZE_K,
     )
 
-    # Down projection (not fused -- separate matmul)
-    # hidden: [M, N], w_down: [hidden_size, intermediate_size]
-    # out = hidden @ w_down.T
     out = hidden @ w_down.t()
 
     if len(orig_shape) > 2:
