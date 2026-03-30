@@ -35,6 +35,8 @@ def rotary_embedding_kernel(
 
     for row_off in range(ROWS_PER_PROG):
         row_idx = row_start + row_off
+        if row_idx >= seq_len:
+            break
 
         x_row_base = X_ptr + row_idx * stride_x_row
         x1 = tl.load(x_row_base + col_offsets * 2, mask=mask_half, other=0.0).to(tl.float32)
@@ -47,8 +49,8 @@ def rotary_embedding_kernel(
         rx2 = x1 * sin + x2 * cos
 
         out_row_base = OUT_ptr + row_idx * stride_out_row
-        tl.store(out_row_base + col_offsets * 2, rx1, mask=mask_half)
-        tl.store(out_row_base + col_offsets * 2 + 1, rx2, mask=mask_half)
+        tl.store(out_row_base + col_offsets * 2, rx1.to(X_ptr.dtype.element_ty), mask=mask_half)
+        tl.store(out_row_base + col_offsets * 2 + 1, rx2.to(X_ptr.dtype.element_ty), mask=mask_half)
 
 
 def kernel_fn(
