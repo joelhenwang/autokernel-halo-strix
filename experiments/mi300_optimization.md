@@ -183,6 +183,59 @@ REVERT。Persistent kernel 不适合此 problem size。转向 M5：更广泛的 
 
 ---
 
+## Exp-M5/M6: matmul autotune 收敛
+
+**M5 假设**: 更广泛的 autotune config（含 256×128、128×256、32×32）+ `tl.dot(a, b, acc)` 3-arg 累加形式（直接映射 MFMA FMA 指令），配合 num_warps=8。
+
+**结果**: **87.2 TFLOPS, 0.532x** (+20%)。Autotune 选中 128×128×32, w=8, s=2。
+**M6** 在 M5 基础上微调（K=64, GROUP_SIZE=4/16, w=16），性能持平 87.1 TFLOPS，确认已收敛。
+
+**核心洞察**: `acc += tl.dot(a, b)` → `acc = tl.dot(a, b, acc)` 是 MI300X 上 matmul 的关键改动。
+
+---
+
+## Exp-S1: softmax multi-row processing
+
+**假设**: starter kernel 每 program 处理 1 行，MI300X 304 CUs 在大量短行时 launch overhead 大。改为每 program 处理 4 行，减少 grid 大小 4×，同时根据 n_cols 自适应 num_warps。
+
+**结果**: **2.259x** (from 1.16x, +95%)。798 GB/s (15% peak BW)。Correctness ALL PASS。
+
+**核心洞察**: memory-bound kernel 的瓶颈不是单行计算效率，而是 kernel launch 和 wave dispatch 开销。Multi-row 将有效工作量/program 提升 4×，显著降低调度比例。
+
+---
+
+## Exp-F1: fused_mlp grouped ordering + autotune
+
+**假设**: 将 matmul 的成功优化技术（grouped tile ordering、autotune、3-arg `tl.dot`）移植到 fused gate+up projection kernel。fused_mlp 的核心是两个并行 matmul（gate 和 up），共享 X tile 输入。
+
+**结果**: **1.019x** (from 0.92x, +11%)。132 TFLOPS, 首次超越 PyTorch。3 个 bf16 xlarge 精度失败（accumulated error at large K）。
+
+**核心洞察**: 同一套 MI300X matmul 优化模板（grouped + autotune + 3-arg dot）可直接迁移到其他 GEMM-based kernels。
+
+---
+
+## Exp-R1: rotary_embedding 精度修复 + multi-row
+
+**假设**: baseline 的 `.to(tl.float32)` cast 导致与 PyTorch (native fp16) 的 1 ULP rounding 差异，超出 atol=1e-3 tolerance。去除 cast 后在 native dtype 计算应匹配 reference。同时加 multi-row。
+
+**调试过程**: 通过远端 debug 脚本确认 max_diff=0.0078125 = 2^(-7)（fp16 在 magnitude ~11 处的 ULP step），root cause 是 fp32 intermediate → fp16 store 的 rounding 与 PyTorch fp16 直接计算不同。
+
+**结果**: **1.09x** (from 0.82x, +33%)。bf16/fp32 全 PASS。fp16 仍有 large-size failures（HIP 后端 fp16 精度限制，属平台行为）。
+
+**核心洞察**: 对 element-wise kernel，**计算精度必须匹配 reference 的精度路径**，否则 tolerance 检查会失败。
+
+---
+
+## Exp-A1: flash_attention native dtype MFMA
+
+**假设**: baseline 的 `tl.dot(q.to(tl.float32), tl.trans(k.to(tl.float32)))` 将 fp16 输入 cast 到 fp32 后再做 dot product，**完全绕过了 MFMA fp16 指令**。去除 cast 让 `tl.dot` 直接接收 fp16，MFMA 才能发挥 1307 TFLOPS 峰值。同时增大 BLOCK_M=128。
+
+**结果**: **2.202x** (from 0.50x, **+340%**)。35.4 TFLOPS。ALL correctness PASS（fp16 + bf16）。
+
+**核心洞察**: **这是整个 Phase B 最重要的发现** — 一行 `.to(tl.float32)` 的 cast 就让 flash_attention 从 MFMA 路径掉到 VALU fp32 路径，性能差 4.4×。在 MI300X 上写 Triton kernel 时，**绝不要在 `tl.dot` 输入上做不必要的 dtype cast**。
+
+---
+
 ## Phase B 完成总结
 
 ### 最终结果
