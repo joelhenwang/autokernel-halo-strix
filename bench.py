@@ -114,8 +114,9 @@ _KNOWN_GPUS: Dict[str, Tuple[float, float, float]] = {
     "4080":       (305.0,  716.8,  64.0),
     "3090":       (142.0,  936.2,  6.0),
     "3080":       (119.5,  760.3,  5.0),
-    # AMD Instinct GPUs
+    # AMD Instinct GPUs (specs sourced from GEAK knowledge-base)
     "MI300X":     (1307.4, 5300.0, 256.0),
+    "MI308X":     (1307.4, 5300.0, 256.0),  # MI308XHF variant, same gfx942
     "MI325X":     (1307.4, 6000.0, 256.0),
     "MI350X":     (2300.0, 8000.0, 256.0),
     "MI355X":     (2300.0, 8000.0, 256.0),
@@ -142,17 +143,14 @@ def detect_gpu() -> GPUSpec:
     memory_gb = round(props.total_memory / (1024 ** 3), 1)
     cc = (props.major, props.minor)
 
-    # On ROCm, device name may be empty; try gcnArchName-based lookup first
+    # On ROCm, device name may be empty or generic; try gcnArchName-based lookup
     gcn_arch = getattr(props, 'gcnArchName', '')
     if gcn_arch and not name:
-        matched_amd = None
         for arch_prefix, amd_specs in _KNOWN_AMD_GPUS.items():
             if gcn_arch.startswith(arch_prefix):
-                matched_amd = amd_specs
+                name = amd_specs[0]
                 break
-        if matched_amd is not None:
-            name, peak_fp16, peak_bw, l2 = matched_amd
-        else:
+        if not name:
             name = f"AMD GPU ({gcn_arch})"
 
     # Try to match a known GPU by name
@@ -161,6 +159,13 @@ def detect_gpu() -> GPUSpec:
         if fragment in name:
             matched = specs
             break
+
+    # If name didn't match, fall back to gcnArchName-based specs (handles MI308XHF etc.)
+    if matched is None and gcn_arch:
+        for arch_prefix, amd_specs in _KNOWN_AMD_GPUS.items():
+            if gcn_arch.startswith(arch_prefix):
+                matched = amd_specs[1:]  # (peak_fp16, peak_bw, l2)
+                break
 
     if matched is not None:
         peak_fp16, peak_bw, l2 = matched

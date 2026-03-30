@@ -1,0 +1,10 @@
+# GPU node inventory (project scope)
+# Format: one SSH host alias per line.
+# Source of truth for multi-node automation.
+
+banff-sc-cx41-05.dh170.dcgpu
+banff-sc-cs41-29.dh170.dcgpu
+banff-cyxtera-s71-4.ctr.dcgpu
+hjbog-srdc-35.amd.com
+smc300x-clt-r4c11-02.cs-clt.dcgpu
+smc300x-clt-r4c7-37.cs-clt.dcgpu
