@@ -14,7 +14,8 @@
 | M2 | matmul | 去除 inner-loop M/N masking via modular offsets | ✅ done | 73.9 TFLOPS, 0.451x | 同 M1，masking 不是瓶颈 |
 | M3 | matmul | num_stages=0 (HIP) | ❌ crash | num_stages=0 不允许 on AMD Triton | 必须 >= 1 |
 | M4 | matmul | Persistent kernel (tile loop) | ✅ done | 67.2 TFLOPS, 0.410x | 回退！tile-loop 开销大于收益 |
-| M5 | matmul | num_stages=1 + wide autotune sweep + num_warps=8 | 🔄 running | — | — |
+| M5 | matmul | broad autotune + tl.dot 3-arg acc + num_warps=8 | ✅ KEEP | **87.2 TFLOPS, 0.532x** | +20% 提升！winner: 128×128×32 w=8 s=2 |
+| M6 | matmul | 在 M5 winner 基础上精细调优 (K=64, waves_per_eu) | 🔄 running | — | — |
 
 ---
 
