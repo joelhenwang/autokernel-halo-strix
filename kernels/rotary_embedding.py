@@ -1,17 +1,7 @@
 """
 AutoKernel -- Rotary Position Embedding (RoPE) kernel.
 
-Current kernel: RoPE application
-Target metric: throughput (higher is better)
-Secondary: correctness must ALWAYS pass
-
-Applies precomputed cos/sin rotary embeddings to input tensor.
-The rotation is applied to pairs of elements along the last dimension
-using interleaved (even/odd) decomposition:
-  x1 = x[..., 0], x[..., 2], x[..., 4], ...   (even indices)
-  x2 = x[..., 1], x[..., 3], x[..., 5], ...   (odd indices)
-  x_rot[..., 2i]   = x1[i] * cos[i] - x2[i] * sin[i]
-  x_rot[..., 2i+1] = x1[i] * sin[i] + x2[i] * cos[i]
+Exp-R1: Coalesced loads (load full row, split in registers), multi-row.
 """
 
 KERNEL_TYPE = "rotary_embedding"
@@ -35,41 +25,32 @@ def rotary_embedding_kernel(
     stride_out_row,
     half_dim,
     BLOCK_SIZE: tl.constexpr,
+    ROWS_PER_PROG: tl.constexpr,
 ):
-    """
-    Apply rotary embeddings using interleaved (even/odd) decomposition.
-
-    One program per row. Each row has head_dim elements.
-    x1 = even-indexed elements (0, 2, 4, ...)
-    x2 = odd-indexed elements  (1, 3, 5, ...)
-
-    out[2i]   = x1[i] * cos[i] - x2[i] * sin[i]
-    out[2i+1] = x1[i] * sin[i] + x2[i] * cos[i]
-    """
-    row_idx = tl.program_id(0)
+    pid = tl.program_id(0)
+    row_start = pid * ROWS_PER_PROG
 
     col_offsets = tl.arange(0, BLOCK_SIZE)
     mask_half = col_offsets < half_dim
 
-    # Compute pointers to even-indexed (x1) and odd-indexed (x2) elements
-    # even indices: 0, 2, 4, ... => col_offsets * 2
-    # odd indices:  1, 3, 5, ... => col_offsets * 2 + 1
-    x_row_base = X_ptr + row_idx * stride_x_row
-    x1 = tl.load(x_row_base + col_offsets * 2, mask=mask_half, other=0.0).to(tl.float32)
-    x2 = tl.load(x_row_base + col_offsets * 2 + 1, mask=mask_half, other=0.0).to(tl.float32)
+    for row_off in range(ROWS_PER_PROG):
+        row_idx = row_start + row_off
+        row_valid = row_idx < seq_len
 
-    # Load cos and sin (shape [n_rows, half_dim])
-    cos = tl.load(COS_ptr + row_idx * stride_cos_row + col_offsets, mask=mask_half, other=1.0).to(tl.float32)
-    sin = tl.load(SIN_ptr + row_idx * stride_sin_row + col_offsets, mask=mask_half, other=0.0).to(tl.float32)
+        x_row_base = X_ptr + row_idx * stride_x_row
+        load_mask = mask_half & row_valid
+        x1 = tl.load(x_row_base + col_offsets * 2, mask=load_mask, other=0.0)
+        x2 = tl.load(x_row_base + col_offsets * 2 + 1, mask=load_mask, other=0.0)
 
-    # Apply rotation
-    rx1 = x1 * cos - x2 * sin
-    rx2 = x1 * sin + x2 * cos
+        cos = tl.load(COS_ptr + row_idx * stride_cos_row + col_offsets, mask=load_mask, other=1.0)
+        sin = tl.load(SIN_ptr + row_idx * stride_sin_row + col_offsets, mask=load_mask, other=0.0)
 
-    # Store results interleaved: out[2i] = rx1[i], out[2i+1] = rx2[i]
-    out_row_base = OUT_ptr + row_idx * stride_out_row
-    tl.store(out_row_base + col_offsets * 2, rx1, mask=mask_half)
-    tl.store(out_row_base + col_offsets * 2 + 1, rx2, mask=mask_half)
+        rx1 = x1 * cos - x2 * sin
+        rx2 = x1 * sin + x2 * cos
+
+        out_row_base = OUT_ptr + row_idx * stride_out_row
+        tl.store(out_row_base + col_offsets * 2, rx1, mask=load_mask)
+        tl.store(out_row_base + col_offsets * 2 + 1, rx2, mask=load_mask)
 
 
 def kernel_fn(
@@ -77,36 +58,23 @@ def kernel_fn(
     cos: torch.Tensor,
     sin: torch.Tensor,
 ) -> torch.Tensor:
-    """
-    Entry point called by bench.py. Must match reference.rotary_embedding_ref signature.
-
-    Args:
-        x: [..., head_dim] tensor to apply rotary embeddings to
-        cos: [..., head_dim // 2] precomputed cosines
-        sin: [..., head_dim // 2] precomputed sines
-
-    Returns:
-        Tensor of same shape as x with rotary embeddings applied.
-    """
+    """Entry point called by bench.py."""
     assert x.is_cuda
 
     orig_shape = x.shape
     head_dim = x.shape[-1]
     half_dim = head_dim // 2
 
-    assert head_dim % 2 == 0, "head_dim must be even for RoPE"
+    assert head_dim % 2 == 0
     assert cos.shape[-1] == half_dim
     assert sin.shape[-1] == half_dim
 
-    # Flatten to 2D: [n_rows, head_dim]
     x_flat = x.contiguous().view(-1, head_dim)
     n_rows = x_flat.shape[0]
 
-    # Flatten cos/sin and broadcast to match x rows
     cos_flat = cos.contiguous().view(-1, half_dim)
     sin_flat = sin.contiguous().view(-1, half_dim)
 
-    # Handle broadcasting: if cos/sin have fewer rows, expand to match
     if cos_flat.shape[0] < n_rows:
         repeat_factor = (n_rows + cos_flat.shape[0] - 1) // cos_flat.shape[0]
         cos_flat = cos_flat.repeat(repeat_factor, 1)[:n_rows]
@@ -115,21 +83,28 @@ def kernel_fn(
     out = torch.empty_like(x_flat)
 
     BLOCK_SIZE = triton.next_power_of_2(half_dim)
+    ROWS_PER_PROG = 4
 
-    grid = (n_rows,)
+    if half_dim <= 64:
+        num_warps = 2
+    elif half_dim <= 256:
+        num_warps = 4
+    else:
+        num_warps = 8
+
+    grid = (triton.cdiv(n_rows, ROWS_PER_PROG),)
     rotary_embedding_kernel[grid](
-        x_flat,
-        cos_flat,
-        sin_flat,
-        out,
-        n_rows,
-        head_dim,
+        x_flat, cos_flat, sin_flat, out,
+        n_rows, head_dim,
         x_flat.stride(0),
         cos_flat.stride(0),
         sin_flat.stride(0),
         out.stride(0),
         half_dim,
         BLOCK_SIZE=BLOCK_SIZE,
+        ROWS_PER_PROG=ROWS_PER_PROG,
+        num_warps=num_warps,
+        num_stages=2,
     )
 
     return out.view(orig_shape)

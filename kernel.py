@@ -1,110 +1,141 @@
 """
-AutoKernel -- Rotary Position Embedding (RoPE) kernel.
+AutoKernel -- Flash Attention kernel.
 
-Exp-R1: Coalesced loads (load full row, split in registers), multi-row.
+Exp-A1: Optimized for MI300X: larger blocks, 8 warps, native dtype tl.dot for MFMA.
 """
 
-KERNEL_TYPE = "rotary_embedding"
+KERNEL_TYPE = "flash_attention"
 
 import torch
 import triton
 import triton.language as tl
+import math
 
 
 @triton.jit
-def rotary_embedding_kernel(
-    X_ptr,
-    COS_ptr,
-    SIN_ptr,
-    OUT_ptr,
-    seq_len,
-    head_dim,
-    stride_x_row,
-    stride_cos_row,
-    stride_sin_row,
-    stride_out_row,
-    half_dim,
-    BLOCK_SIZE: tl.constexpr,
-    ROWS_PER_PROG: tl.constexpr,
+def flash_attention_kernel(
+    Q_ptr, K_ptr, V_ptr, O_ptr,
+    stride_qz, stride_qh, stride_qm, stride_qk,
+    stride_kz, stride_kh, stride_kn, stride_kk,
+    stride_vz, stride_vh, stride_vn, stride_vk,
+    stride_oz, stride_oh, stride_om, stride_ok,
+    Z, H, M_size, N_size,
+    D: tl.constexpr,
+    sm_scale,
+    IS_CAUSAL: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
 ):
-    pid = tl.program_id(0)
-    row_start = pid * ROWS_PER_PROG
+    pid_z = tl.program_id(2)
+    pid_h = tl.program_id(1)
+    pid_m = tl.program_id(0)
 
-    col_offsets = tl.arange(0, BLOCK_SIZE)
-    mask_half = col_offsets < half_dim
+    qkv_offset = pid_z * stride_qz + pid_h * stride_qh
+    k_offset = pid_z * stride_kz + pid_h * stride_kh
+    v_offset = pid_z * stride_vz + pid_h * stride_vh
+    o_offset = pid_z * stride_oz + pid_h * stride_oh
 
-    for row_off in range(ROWS_PER_PROG):
-        row_idx = row_start + row_off
-        row_valid = row_idx < seq_len
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_d = tl.arange(0, D)
 
-        x_row_base = X_ptr + row_idx * stride_x_row
-        load_mask = mask_half & row_valid
-        x1 = tl.load(x_row_base + col_offsets * 2, mask=load_mask, other=0.0)
-        x2 = tl.load(x_row_base + col_offsets * 2 + 1, mask=load_mask, other=0.0)
+    q_ptrs = Q_ptr + qkv_offset + offs_m[:, None] * stride_qm + offs_d[None, :] * stride_qk
+    q_mask = offs_m[:, None] < M_size
+    q = tl.load(q_ptrs, mask=q_mask, other=0.0)
 
-        cos = tl.load(COS_ptr + row_idx * stride_cos_row + col_offsets, mask=load_mask, other=1.0)
-        sin = tl.load(SIN_ptr + row_idx * stride_sin_row + col_offsets, mask=load_mask, other=0.0)
+    m_i = tl.full((BLOCK_M,), float("-inf"), dtype=tl.float32)
+    l_i = tl.zeros((BLOCK_M,), dtype=tl.float32)
+    acc = tl.zeros((BLOCK_M, D), dtype=tl.float32)
 
-        rx1 = x1 * cos - x2 * sin
-        rx2 = x1 * sin + x2 * cos
+    if IS_CAUSAL:
+        kv_end = tl.minimum(N_size, (pid_m + 1) * BLOCK_M)
+    else:
+        kv_end = N_size
 
-        out_row_base = OUT_ptr + row_idx * stride_out_row
-        tl.store(out_row_base + col_offsets * 2, rx1, mask=load_mask)
-        tl.store(out_row_base + col_offsets * 2 + 1, rx2, mask=load_mask)
+    for start_n in range(0, kv_end, BLOCK_N):
+        offs_n = start_n + tl.arange(0, BLOCK_N)
+
+        k_ptrs = K_ptr + k_offset + offs_n[:, None] * stride_kn + offs_d[None, :] * stride_kk
+        k_mask = offs_n[:, None] < N_size
+        k = tl.load(k_ptrs, mask=k_mask, other=0.0)
+
+        qk = tl.dot(q, tl.trans(k))
+        qk *= sm_scale
+
+        if IS_CAUSAL:
+            causal_mask = offs_m[:, None] >= offs_n[None, :]
+            qk = tl.where(causal_mask, qk, float("-inf"))
+
+        kv_mask = offs_n[None, :] < N_size
+        qk = tl.where(kv_mask, qk, float("-inf"))
+
+        m_ij = tl.max(qk, axis=1)
+        m_new = tl.maximum(m_i, m_ij)
+
+        alpha = tl.exp(m_i - m_new)
+        p = tl.exp(qk - m_new[:, None])
+
+        l_i = l_i * alpha + tl.sum(p, axis=1)
+        acc = acc * alpha[:, None]
+
+        v_ptrs = V_ptr + v_offset + offs_n[:, None] * stride_vn + offs_d[None, :] * stride_vk
+        v_mask = offs_n[:, None] < N_size
+        v = tl.load(v_ptrs, mask=v_mask, other=0.0)
+
+        acc += tl.dot(p.to(v.dtype), v)
+
+        m_i = m_new
+
+    acc = acc / l_i[:, None]
+
+    o_ptrs = O_ptr + o_offset + offs_m[:, None] * stride_om + offs_d[None, :] * stride_ok
+    o_mask = offs_m[:, None] < M_size
+    tl.store(o_ptrs, acc.to(O_ptr.dtype.element_ty), mask=o_mask)
 
 
 def kernel_fn(
-    x: torch.Tensor,
-    cos: torch.Tensor,
-    sin: torch.Tensor,
+    Q: torch.Tensor,
+    K: torch.Tensor,
+    V: torch.Tensor,
+    causal: bool = True,
+    sm_scale: float = None,
 ) -> torch.Tensor:
     """Entry point called by bench.py."""
-    assert x.is_cuda
+    assert Q.is_cuda and K.is_cuda and V.is_cuda
 
-    orig_shape = x.shape
-    head_dim = x.shape[-1]
-    half_dim = head_dim // 2
+    Z, H, M_size, D = Q.shape
+    _, _, N_size, _ = K.shape
 
-    assert head_dim % 2 == 0
-    assert cos.shape[-1] == half_dim
-    assert sin.shape[-1] == half_dim
+    if sm_scale is None:
+        sm_scale = 1.0 / math.sqrt(D)
 
-    x_flat = x.contiguous().view(-1, head_dim)
-    n_rows = x_flat.shape[0]
+    O = torch.empty_like(Q)
 
-    cos_flat = cos.contiguous().view(-1, half_dim)
-    sin_flat = sin.contiguous().view(-1, half_dim)
+    assert D in (16, 32, 64, 128, 256)
 
-    if cos_flat.shape[0] < n_rows:
-        repeat_factor = (n_rows + cos_flat.shape[0] - 1) // cos_flat.shape[0]
-        cos_flat = cos_flat.repeat(repeat_factor, 1)[:n_rows]
-        sin_flat = sin_flat.repeat(repeat_factor, 1)[:n_rows]
+    BLOCK_M = 128
+    BLOCK_N = 64
 
-    out = torch.empty_like(x_flat)
-
-    BLOCK_SIZE = triton.next_power_of_2(half_dim)
-    ROWS_PER_PROG = 4
-
-    if half_dim <= 64:
-        num_warps = 2
-    elif half_dim <= 256:
+    if D <= 64:
         num_warps = 4
     else:
         num_warps = 8
 
-    grid = (triton.cdiv(n_rows, ROWS_PER_PROG),)
-    rotary_embedding_kernel[grid](
-        x_flat, cos_flat, sin_flat, out,
-        n_rows, head_dim,
-        x_flat.stride(0),
-        cos_flat.stride(0),
-        sin_flat.stride(0),
-        out.stride(0),
-        half_dim,
-        BLOCK_SIZE=BLOCK_SIZE,
-        ROWS_PER_PROG=ROWS_PER_PROG,
+    grid = (triton.cdiv(M_size, BLOCK_M), H, Z)
+
+    flash_attention_kernel[grid](
+        Q, K, V, O,
+        Q.stride(0), Q.stride(1), Q.stride(2), Q.stride(3),
+        K.stride(0), K.stride(1), K.stride(2), K.stride(3),
+        V.stride(0), V.stride(1), V.stride(2), V.stride(3),
+        O.stride(0), O.stride(1), O.stride(2), O.stride(3),
+        Z, H, M_size, N_size,
+        D=D,
+        sm_scale=sm_scale,
+        IS_CAUSAL=causal,
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
         num_warps=num_warps,
         num_stages=2,
     )
 
-    return out.view(orig_shape)
+    return O

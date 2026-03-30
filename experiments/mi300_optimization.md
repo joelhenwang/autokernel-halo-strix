@@ -18,6 +18,7 @@
 | M6 | matmul | fine-tune K=64, GROUP_SIZE, num_warps=16 | ✅ done | 87.1 TFLOPS, 0.531x | 同 M5，已收敛于 128×128×32 w=8 s=2 |
 | S1 | softmax | multi-row (4 rows/prog) + adaptive num_warps | ✅ **KEEP** | **2.259x** (from 1.16x) | correctness ALL PASS, 798 GB/s (15% peak BW) |
 | F1 | fused_mlp | autotune + grouped + 3-arg tl.dot | ✅ **KEEP** | **1.019x** (from 0.92x) | 132 TFLOPS, 3 bf16 tol fails at xlarge |
+| R1 | rotary_emb | multi-row + native dtype (no fp32 cast) | ✅ **KEEP** | **1.09x** (from 0.82x) | bf16/fp32 PASS, fp16 fails at large sizes (HIP precision) |
 
 ---
 
