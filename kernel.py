@@ -1,81 +1,130 @@
 """
-AutoKernel -- Softmax kernel.
+AutoKernel -- Fused SwiGLU MLP kernel.
 
-Exp-S1: Autotune num_warps + BLOCK_SIZE, multi-row processing for small rows.
+Exp-F1: Apply matmul optimizations (autotune, 3-arg tl.dot, grouped ordering,
+         128x128 tiles, num_warps=8) to fused gate+up kernel.
 """
 
-KERNEL_TYPE = "softmax"
+KERNEL_TYPE = "fused_mlp"
 
 import torch
 import triton
 import triton.language as tl
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8}, num_warps=4, num_stages=2),
+    ],
+    key=['M', 'N', 'K'],
+)
 @triton.jit
-def softmax_kernel(
-    input_ptr,
-    output_ptr,
-    n_cols,
-    stride_input_row,
-    stride_output_row,
-    BLOCK_SIZE: tl.constexpr,
-    NUM_ROWS_PER_PROGRAM: tl.constexpr,
+def fused_gate_up_kernel(
+    X_ptr,
+    W_gate_ptr,
+    W_up_ptr,
+    Out_ptr,
+    M, N, K,
+    stride_xm, stride_xk,
+    stride_wgk, stride_wgn,
+    stride_wuk, stride_wun,
+    stride_om, stride_on,
+    USE_SILU: tl.constexpr,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    row_start = pid * NUM_ROWS_PER_PROGRAM
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
 
-    for row_off in range(NUM_ROWS_PER_PROGRAM):
-        row_idx = row_start + row_off
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
 
-        row_start_input = input_ptr + row_idx * stride_input_row
-        row_start_output = output_ptr + row_idx * stride_output_row
+    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
 
-        col_offsets = tl.arange(0, BLOCK_SIZE)
-        mask = col_offsets < n_cols
+    x_ptrs = X_ptr + offs_am[:, None] * stride_xm + offs_k[None, :] * stride_xk
+    wg_ptrs = W_gate_ptr + offs_k[:, None] * stride_wgk + offs_bn[None, :] * stride_wgn
+    wu_ptrs = W_up_ptr + offs_k[:, None] * stride_wuk + offs_bn[None, :] * stride_wun
 
-        row = tl.load(row_start_input + col_offsets, mask=mask, other=float("-inf"))
-        row_max = tl.max(row, axis=0)
-        row = row - row_max
-        numerator = tl.exp(row)
-        denominator = tl.sum(numerator, axis=0)
-        result = numerator / denominator
-        tl.store(row_start_output + col_offsets, result, mask=mask)
+    acc_gate = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    acc_up = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        x = tl.load(x_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+        wg = tl.load(wg_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+        wu = tl.load(wu_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+
+        acc_gate = tl.dot(x, wg, acc_gate)
+        acc_up = tl.dot(x, wu, acc_up)
+
+        x_ptrs += BLOCK_SIZE_K * stride_xk
+        wg_ptrs += BLOCK_SIZE_K * stride_wgk
+        wu_ptrs += BLOCK_SIZE_K * stride_wuk
+
+    if USE_SILU:
+        gate_activated = acc_gate * tl.sigmoid(acc_gate)
+    else:
+        tanh_arg = 0.7978845608 * (acc_gate + 0.044715 * acc_gate * acc_gate * acc_gate)
+        tanh_val = 2.0 * tl.sigmoid(2.0 * tanh_arg) - 1.0
+        gate_activated = 0.5 * acc_gate * (1.0 + tanh_val)
+
+    result = gate_activated * acc_up
+
+    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+    out_ptrs = Out_ptr + offs_cm[:, None] * stride_om + offs_cn[None, :] * stride_on
+    out_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(out_ptrs, result.to(Out_ptr.dtype.element_ty), mask=out_mask)
 
 
-def kernel_fn(x: torch.Tensor) -> torch.Tensor:
+def kernel_fn(
+    x: torch.Tensor,
+    w_gate: torch.Tensor,
+    w_up: torch.Tensor,
+    w_down: torch.Tensor,
+    activation: str = "silu",
+) -> torch.Tensor:
     """Entry point called by bench.py."""
     assert x.is_cuda
 
     orig_shape = x.shape
-    if x.ndim == 1:
-        x = x.unsqueeze(0)
-    elif x.ndim > 2:
+    if x.ndim > 2:
         x = x.view(-1, x.shape[-1])
 
-    n_rows, n_cols = x.shape
-    output = torch.empty_like(x)
+    M, K = x.shape
+    N, K2 = w_gate.shape
+    assert K == K2
+    assert w_up.shape == (N, K)
 
-    BLOCK_SIZE = triton.next_power_of_2(n_cols)
+    hidden = torch.empty((M, N), device=x.device, dtype=x.dtype)
 
-    if n_cols <= 2048:
-        num_warps = 4
-    elif n_cols <= 8192:
-        num_warps = 8
-    else:
-        num_warps = 16
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']),)
 
-    ROWS_PER_PROG = 4
-    grid = (triton.cdiv(n_rows, ROWS_PER_PROG),)
-
-    softmax_kernel[grid](
-        x, output,
-        n_cols,
-        x.stride(0),
-        output.stride(0),
-        BLOCK_SIZE=BLOCK_SIZE,
-        NUM_ROWS_PER_PROGRAM=ROWS_PER_PROG,
-        num_warps=num_warps,
-        num_stages=2,
+    fused_gate_up_kernel[grid](
+        x, w_gate, w_up, hidden,
+        M, N, K,
+        x.stride(0), x.stride(1),
+        w_gate.stride(1), w_gate.stride(0),
+        w_up.stride(1), w_up.stride(0),
+        hidden.stride(0), hidden.stride(1),
+        USE_SILU=(activation == "silu"),
     )
 
-    return output.view(orig_shape)
+    out = hidden @ w_down.t()
+
+    if len(orig_shape) > 2:
+        out = out.view(*orig_shape[:-1], out.shape[-1])
+
+    return out
