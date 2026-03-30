@@ -13,7 +13,8 @@ expected = reference.rotary_embedding_ref(x, cos, sin)
 
 import importlib.util
 spec = importlib.util.spec_from_file_location("kernel", "kernel.py")
-mod = importlib.util.load_module("kernel", spec.loader, "kernel", spec)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
 output = mod.kernel_fn(x, cos, sin)
 
 diff = (output.float() - expected.float()).abs()
