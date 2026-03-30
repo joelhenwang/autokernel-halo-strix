@@ -12,7 +12,7 @@ import torch
 import triton
 import triton.language as tl
 
-NUM_SMS = 304
+NUM_SMS: tl.constexpr = 304
 
 
 @triton.autotune(
@@ -30,7 +30,6 @@ def matmul_kernel(
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
-    num_tiles,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
@@ -39,8 +38,9 @@ def matmul_kernel(
     pid = tl.program_id(0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    total_tiles = num_pid_m * num_pid_n
 
-    for tile_id in range(pid, num_tiles, NUM_SMS):
+    for tile_id in range(pid, total_tiles, NUM_SMS):
         num_pid_in_group = GROUP_SIZE_M * num_pid_n
         group_id = tile_id // num_pid_in_group
         first_pid_m = group_id * GROUP_SIZE_M
@@ -86,14 +86,11 @@ def kernel_fn(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
         NUM_SMS
     ),)
 
-    num_tiles = triton.cdiv(M, 64) * triton.cdiv(N, 64)
-
     matmul_kernel[grid](
         A, B, C,
         M, N, K,
         A.stride(0), A.stride(1),
         B.stride(0), B.stride(1),
         C.stride(0), C.stride(1),
-        num_tiles,
     )
     return C
