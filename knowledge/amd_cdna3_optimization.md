@@ -102,7 +102,7 @@ triton.Config({'BLOCK_SIZE': 256}, num_warps=4, waves_per_eu=4)  # memory-bound
 | `tl.sigmoid` | Works |
 | `tl.math.tanh` | **NOT available** — use `2*tl.sigmoid(2*x) - 1` |
 | `tl.math.rsqrt` | Works |
-| `num_stages` | Supported but effect is compiler-dependent |
+| `num_stages` | **Must be >= 1** (0 crashes). Use 2 for default pipelining. |
 | `tl.load(..., eviction_policy=...)` | May be ignored on HIP |
 
 ### Environment Variables for Debugging

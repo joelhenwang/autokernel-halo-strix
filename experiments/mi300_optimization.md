@@ -124,6 +124,41 @@ HIP 后端没有 `cp.async`，`num_stages=2` 可能生成不必要的 buffer 管
 - 假设不成立: TFLOPS ≈ 73 或 correctness FAIL
 
 ### 结果
+- **CRASH**: `num_stages=0` 在 AMD Triton 3.2.0 上不允许
+- `AssertionError: Triton AMD backend pipeliner has been updated. num_stages == 0 is invalid`
+- AMD Triton 要求 `num_stages >= 1`
+
+### 分析
+- num_stages=0 在旧版 AMD Triton 表示 software pipelining，新版改为 num_stages=2 等效
+- 此发现记录到 knowledge/amd_cdna3_optimization.md 中
+
+### 结论与 Next Step
+REVERT（crash）。关键学到：**AMD Triton: num_stages must be >= 1, use 2 for default pipelining**。
+
+下一步 Exp-M4: 回到 num_stages=2，尝试 persistent kernel 模式（每 CU 处理多个 tile），
+用 `num_programs = min(grid_size, NUM_CUS)` 模式。
+
+---
+
+## Exp-M4: matmul persistent-kernel style with tile-loop
+
+### Phase 0 确认
+- 同 M1 ✅
+
+### 假设
+标准 Triton matmul 给每个 tile 一个 program（grid=M/BM × N/BN）。在 MI300X 304 CUs 上，
+2048² / 64² = 1024 tiles，每 CU 仅 ~3 tiles。Persistent 模式：固定 NUM_SMS 个 programs，
+每个 program 循环处理多个 tiles，减少 launch overhead 并提升 L2 cache 命中率。
+
+### 实验方案
+- 变量: persistent kernel (pid loops over tiles), NUM_SMS=304
+- 对照: M2 (grouped 1-tile-per-program, 73.9 TFLOPS)
+
+### 预期
+- 假设成立: TFLOPS > 85, speedup > 0.52x
+- 假设不成立: TFLOPS ≈ 73 或 correctness FAIL
+
+### 结果
 （待实验）
 
 ### 分析
