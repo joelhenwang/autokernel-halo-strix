@@ -166,12 +166,44 @@ REVERT（crash）。关键学到：**AMD Triton: num_stages must be >= 1, use 2 
 - 假设不成立: TFLOPS ≈ 73 或 correctness FAIL
 
 ### 结果
-（待实验）
+
+| 指标 | Baseline | M2 (对照) | M4 (persistent) | Delta |
+|------|----------|-----------|-----------------|-------|
+| TFLOPS | 72.80 | 73.89 | 67.20 | **-9%** |
+| vs PyTorch | 0.443x | 0.451x | 0.410x | **回退** |
 
 ### 分析
-（待实验）
+- 假设不成立：persistent kernel 在 2048² 上 **反而回退**
+- tile-loop 的 accumulator 重新初始化和 loop control 开销 > L2 cache 收益
+- 2048² 已经只有 1024 tiles (64×64)，每 CU ~3 tiles，launch overhead 本就不大
+- Persistent kernel 更适合 100K+ tiles 的超大 grid
 
 ### 结论与 Next Step
-（待实验）
+REVERT。Persistent kernel 不适合此 problem size。转向 M5：更广泛的 autotune + `tl.dot` 3-arg 累加形式。
+
+---
+
+## Phase B 完成总结
+
+### 最终结果
+
+| Kernel | Baseline (Phase 0) | Optimized (Phase B) | 提升 | 关键优化技术 |
+|--------|-------------------|--------------------|----- |-------------|
+| **matmul** | 0.443x (72.8 TFLOPS) | **0.532x** (87.2 TFLOPS) | +20% | autotune 128×128×32, num_warps=8, 3-arg `tl.dot(a,b,acc)` |
+| **softmax** | 1.16x | **2.259x** | +95% | multi-row (4 rows/program), adaptive num_warps |
+| **fused_mlp** | 0.92x | **1.019x** | +11% | grouped ordering, autotune, 3-arg `tl.dot` |
+| **rotary_embedding** | 0.82x (tol fail) | **1.09x** (partial) | +33% | multi-row, native dtype (去除 fp32 cast) |
+| **flash_attention** | 0.50x | **2.202x** | +340% | native dtype `tl.dot` 启用 MFMA, BLOCK_M=128 |
+
+### MI300X (gfx942) Triton 优化关键发现
+
+1. **Native dtype `tl.dot` 是最大杠杆**：避免 `.to(tl.float32)` cast，让 MFMA 直接接收 fp16 输入
+   - flash_attention: 0.50x → 2.20x（仅此一项改动）
+   - matmul: `tl.dot(a, b, acc)` 3-arg 形式 vs `acc += tl.dot(a, b)` 也有帮助
+2. **Multi-row processing 对 memory-bound kernels 效果显著**：softmax 1.16x → 2.26x
+3. **`num_stages=0` 在 AMD Triton 3.2.0 不允许**，必须 >= 1（use 2 for default pipelining）
+4. **`num_warps=8`（512 threads = 8 wavefronts of 64）** 通常优于 4 for compute-bound
+5. **Persistent kernel 在小 grid 上反而退化**（67 vs 73 TFLOPS）
+6. **fp16 精度**：Triton HIP 的 fp16 运算可能与 PyTorch 有 1 ULP 差异，需注意 tolerance
 
 ---

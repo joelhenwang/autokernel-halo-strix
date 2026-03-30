@@ -133,24 +133,36 @@ Phase B 优化循环前，已将 [AMD-AGI/GEAK](https://github.com/AMD-AGI/GEAK)
 
 见 [mi300_porting.md](mi300_porting.md) -- 包含每个 kernel 的完整实验设计、结果、分析和结论。
 
-## 7. Next Steps: Phase B 优化循环
+## 7. Phase B 优化结果（已完成）
 
-Phase 0（适配验证）已完成。下一步进入 Phase B 自主优化：
+Phase B 闭环优化在 MI308X (gfx942) 上完成，使用 local-push-remote-pull 工作流。
 
-| 优先级 | Kernel | 当前 vs PyTorch | 瓶颈 | 目标 | 策略 |
-|--------|--------|----------------|------|------|------|
-| 1 | matmul | 0.50x | compute | 0.80-0.95x | 增大 tile size, Split-K, MFMA-friendly layout |
-| 2 | flash_attention | 0.50x | compute | 0.70-0.85x | 优化 tl.dot 利用率, 调整 BLOCK_M/N |
-| 3 | fused_mlp | 0.92x | compute | 1.0-1.1x | 消除 sigmoid 额外开销, epilogue fusion |
-| 4 | rotary_embedding | 0.82x (tolerance) | memory | 1.0x + fix tol | 修复容忍度, 优化 vectorized access |
-| 5 | softmax | 1.16x | memory | 1.3-1.5x | 增大 BLOCK_SIZE, 减少 bank conflict |
+### 结果对比
 
-执行方式：
+| Kernel | Phase 0 Baseline | Phase B Optimized | 提升 | 关键优化 |
+|--------|-----------------|-------------------|------|----------|
+| **matmul** | 0.443x | **0.532x** | +20% | autotune 128×128×32, num_warps=8, 3-arg `tl.dot` |
+| **softmax** | 1.16x | **2.259x** | +95% | multi-row (4 rows/program), adaptive num_warps |
+| **fused_mlp** | 0.92x | **1.019x** | +11% | grouped ordering, autotune, 3-arg `tl.dot` |
+| **rotary_embedding** | 0.82x | **1.09x** | +33% | multi-row, native dtype (去除 fp32 cast) |
+| **flash_attention** | 0.50x | **2.202x** | +340% | native dtype `tl.dot` for MFMA, BLOCK_M=128 |
+
+### 关键发现
+
+1. **Native dtype `tl.dot`** 是 MI300X 最大的优化杠杆（flash_attn 0.50x → 2.20x）
+2. **Multi-row processing** 对 memory-bound kernels 效果显著（softmax +95%）
+3. **`num_stages=0`** 在 AMD Triton 3.2.0 不允许，必须 >= 1
+4. **Persistent kernel** 在小 grid 上反而退化
+5. fp16 精度：HIP 后端与 PyTorch 有 1 ULP 差异
+
+详细实验记录见 [mi300_optimization.md](mi300_optimization.md)
+
+### 执行方式（实际使用）
 ```bash
 # 在本地 Cursor 中：
-# 1. 读 program.md + knowledge/amd_cdna3_optimization.md + knowledge/workload_guidance.md
-# 2. cp kernels/<type>.py kernel.py
-# 3. 编辑 kernel.py（一次改一处）
-# 4. SCP kernel.py 到远端 → docker exec python bench.py --kernel <type>
+# 1. 编辑 kernel.py（一次改一处）
+# 2. git add + commit + push
+# 3. ssh remote && cd autokernel && git pull --ff-only
+# 4. docker exec autokernel_mi300 python3 bench.py --kernel <type> --quick
 # 5. 分析结果 → keep / revert → 下一轮
 ```
