@@ -116,7 +116,6 @@ _KNOWN_GPUS: Dict[str, Tuple[float, float, float]] = {
     "3080":       (119.5,  760.3,  5.0),
     # AMD Instinct GPUs (specs sourced from GEAK knowledge-base)
     "MI300X":     (1307.4, 5300.0, 256.0),
-    "MI308X":     (1307.4, 5300.0, 256.0),  # MI308XHF variant, same gfx942
     "MI325X":     (1307.4, 6000.0, 256.0),
     "MI350X":     (2300.0, 8000.0, 256.0),
     "MI355X":     (2300.0, 8000.0, 256.0),
@@ -160,7 +159,7 @@ def detect_gpu() -> GPUSpec:
             matched = specs
             break
 
-    # If name didn't match, fall back to gcnArchName-based specs (handles MI308XHF etc.)
+    # If name didn't match, fall back to gcnArchName-based specs
     if matched is None and gcn_arch:
         for arch_prefix, amd_specs in _KNOWN_AMD_GPUS.items():
             if gcn_arch.startswith(arch_prefix):

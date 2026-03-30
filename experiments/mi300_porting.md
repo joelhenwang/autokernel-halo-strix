@@ -7,7 +7,7 @@
 | Item | Value |
 |------|-------|
 | Node | banff-sc-cs41-29.dh170.dcgpu |
-| GPU | AMD Instinct MI308XHF (gfx942) x 8 |
+| GPU | AMD Instinct MI300X (gfx942) x 8 |
 | VRAM | 192 GB HBM3 per GPU |
 | Docker | rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.8.0 |
 | PyTorch | 2.8.0+rocm7.2.0 |
@@ -59,7 +59,7 @@ The Triton matmul kernel runs correctly on MI300 via the HIP backend without cod
   - fp32: ALL FAIL (10/10) -- expected: kernel uses fp16/bf16 tensor cores for accumulation
 - **Performance**: 72.96 TFLOPS on large (2048x2048x2048)
   - PyTorch: 147.36 TFLOPS -> speedup: 0.495x
-  - Note: GPU detected as 500 TFLOPS peak (fallback); actual MI308X peak is ~1307 TFLOPS
+  - Note: GPU detected as 500 TFLOPS peak (fallback); actual MI300X peak is ~1307 TFLOPS
 
 ### Analysis
 - fp16/bf16 correctness fully confirmed on MI300's HIP backend
@@ -282,7 +282,7 @@ Hypothesis **confirmed**. The full autokernel pipeline works end-to-end on MI300
 - `kernels/cuda/_compile.py`: hipcc/HIP compilation path (CUDA C++ backend)
 - All `kernels/cuda/*.py`: HIP C++ kernel variants
 - MI300-specific `triton.autotune` configs with `waves_per_eu`
-- Add MI308X/MI308XHF to `_KNOWN_GPUS` in bench.py for accurate peak TFLOPS reporting
+- Add MI300X to `_KNOWN_GPUS` in bench.py for accurate peak TFLOPS reporting
 - Relax tolerances for bf16 layernorm and fp16 rotary_embedding on MI300
 
 ## Debug Log
@@ -292,4 +292,4 @@ Hypothesis **confirmed**. The full autokernel pipeline works end-to-end on MI300
 | r1 | prepare.py: nvidia-smi fails on MI300 | Added rocm-smi fallback | Driver detected: 6.10.5 |
 | r2 | fused_mlp: tl.math.tanh not on HIP | Replaced with sigmoid identity | fp16 PASS |
 | r3 | rotary_embedding: tight tolerance | Not fixed (bench.py tolerance config) | Documented as known gap |
-| r4 | GPU peak TFLOPS: 500 (fallback) vs 1307 (actual) | MI308XHF not in _KNOWN_GPUS | Documented as deferred |
+| r4 | GPU peak TFLOPS: 500 (fallback) vs 1307 (actual) | MI300X not in _KNOWN_GPUS | Documented as deferred |

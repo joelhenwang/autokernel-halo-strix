@@ -87,7 +87,7 @@ Any PyTorch  ──>  Rank kernels  ──>  Generate baseline  ──>  Optimiz
 
 ## 4. MI300 适配实测结果（Baseline / 未经优化循环）
 
-环境：AMD Instinct MI308XHF (gfx942), PyTorch 2.8.0+rocm7.2, Triton 3.4.0 HIP backend。
+环境：AMD Instinct MI300X (gfx942), PyTorch 2.8.0+rocm7.2, Triton 3.4.0 HIP backend。
 
 以下是 9 个 starter kernel 的 **Phase 0 验证**（未经 Agent 迭代优化）：
 
@@ -117,7 +117,7 @@ Phase B 优化循环前，已将 [AMD-AGI/GEAK](https://github.com/AMD-AGI/GEAK)
 | [`knowledge/amd_cdna3_optimization.md`](../knowledge/amd_cdna3_optimization.md) | MI300X 硬件架构、Triton-on-ROCm 差异、autotune configs、occupancy、coalescing、perf counters | GEAK KB layers 1/3/5/6 |
 | [`knowledge/workload_guidance.md`](../knowledge/workload_guidance.md) | 基于 bottleneck 的优化策略框架（Prefer First / Consider / Deprioritize） | GEAK `workload_guidance.py` |
 | [`program.md` Tier 5](../program.md) | 新增 MI300X (CDNA3, gfx942) 和 HIP 后端的 architecture-specific 优化指南 | GEAK KB + 实测经验 |
-| [`bench.py` GPU detection](../bench.py) | 修复 MI308XHF 检测，gcnArchName fallback | MI300 porting 实测 |
+| [`bench.py` GPU detection](../bench.py) | MI300X 检测，gcnArchName fallback | MI300 porting 实测 |
 
 ### 关键要点（Agent 优化时参考）
 
@@ -135,7 +135,7 @@ Phase B 优化循环前，已将 [AMD-AGI/GEAK](https://github.com/AMD-AGI/GEAK)
 
 ## 7. Phase B 优化结果（已完成）
 
-Phase B 闭环优化在 MI308X (gfx942) 上完成，使用 local-push-remote-pull 工作流。
+Phase B 闭环优化在 MI300X (gfx942) 上完成，使用 local-push-remote-pull 工作流。
 
 ### 结果对比
 

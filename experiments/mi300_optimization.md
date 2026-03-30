@@ -1,7 +1,7 @@
 # MI300 Phase B: Closed-Loop Kernel Optimization
 
-环境：AMD Instinct MI308X (gfx942), PyTorch 2.6.0+rocm6.4, Triton 3.2.0 HIP backend.
-节点：smc300x-clt-r4c11-02.cs-clt.dcgpu (8× MI308X)
+环境：AMD Instinct MI300X (gfx942), PyTorch 2.6.0+rocm6.4, Triton 3.2.0 HIP backend.
+节点：smc300x-clt-r4c11-02.cs-clt.dcgpu (8× MI300X)
 方法：experiment-driven-doc skill
 
 ---

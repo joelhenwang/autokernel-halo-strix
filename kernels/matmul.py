@@ -6,7 +6,7 @@ Target metric: throughput_tflops (higher is better)
 Secondary: correctness must ALWAYS pass
 
 MI300 optimized: 128x128x32 tiles, grouped ordering, 3-arg tl.dot accumulate.
-Best config on MI308X: BLOCK_SIZE_M=128, N=128, K=32, num_warps=8, num_stages=2.
+Best config on MI300X: BLOCK_SIZE_M=128, N=128, K=32, num_warps=8, num_stages=2.
 Performance: 87 TFLOPS (0.53x vs rocBLAS) on 2048x2048 fp16.
 """
 

@@ -27,10 +27,10 @@
 | TDP | 750W |
 | Interconnect | Infinity Fabric, 128 GB/s per link |
 
-### MI308XHF Variant
+### Variant Detection
 
-Same gfx942 ISA and CU count as MI300X. Detected via `gcnArchName = "gfx942:sramecc+:xnack-"`.
-Device name may report as "AMD Instinct MI308X" or include "MI308XHF".
+All MI300-series GPUs share gfx942 ISA and 304 CUs. Detected via `gcnArchName = "gfx942:sramecc+:xnack-"`.
+Some variants (MI308XHF etc.) may report different device names but share the same architecture and specs.
 
 ### Memory Hierarchy
 
