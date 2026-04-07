@@ -23,7 +23,7 @@ Each experiment takes ~90 seconds. That's ~40 experiments/hour, ~320 overnight, 
 
 ## Quick Start
 
-**Requirements:** AMD Strix Halo GPU (gfx1151) with ROCm 7.2+, Python 3.10+, [uv](https://docs.astral.sh/uv/).
+**Requirements:** AMD Strix Halo GPU (gfx1151) with ROCm 7.12+, Python 3.10+, [uv](https://docs.astral.sh/uv/).
 
 ```bash
 # Install uv (if you don't have it)

@@ -5,7 +5,7 @@
 ### Full Pivot to AMD Strix Halo (gfx1151) + HIP C++
 
 **Breaking**: Removed CUDA C++ and Triton backends. Project now targets AMD Strix Halo
-(RDNA 3.5 APU) exclusively using HIP C++ on ROCm 7.2.1.
+(RDNA 3.5 APU) exclusively using HIP C++ on ROCm 7.12.
 
 - **New HIP C++ backend**: 9 kernel implementations in `kernels/hip/` with HIP compilation
   pipeline (`_compile.py`) using hipcc via `torch.utils.cpp_extension.load_inline()`
@@ -15,7 +15,7 @@
   using double-buffered LDS and register-level 4x4 tiling
 - **Rewrote flash_attention kernel**: Replaced WMMA-based Q@K^T with scalar tiled dot products
 - **Updated GPU detection**: Added gfx1151 to `bench.py` and `profile.py` GPU databases
-- **Updated PyTorch source**: Now uses ROCm 7.2 nightly wheels
+- **Updated PyTorch source**: Now uses PyTorch 2.10.0+rocm7.12 wheels
 - **Updated agent instructions**: `program.md` HIP C++ optimization playbook for RDNA 3.5
 - **Removed**: `kernels/cuda/`, all Triton kernels, NVIDIA GPU specs, Triton dependency,
   `knowledge/amd_cdna3_optimization.md`

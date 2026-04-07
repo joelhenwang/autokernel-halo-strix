@@ -7,7 +7,7 @@ print("CUDA_AVAILABLE:", torch.cuda.is_available())
 
 # ROCm / HIP version
 hip_version = getattr(torch.version, "hip", None)
-print("HIP_VERSION:", hip_version or "NOT FOUND (expected ROCm 7.2+)")
+print("HIP_VERSION:", hip_version or "NOT FOUND (expected ROCm 7.12+)")
 
 if torch.cuda.is_available():
     props = torch.cuda.get_device_properties(0)

@@ -38,10 +38,10 @@ hf-kernels = [
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-rocm72" },
+    { index = "pytorch-rocm712" },
 ]
 
 [[tool.uv.index]]
-name = "pytorch-rocm72"
-url = "https://download.pytorch.org/whl/nightly/rocm7.2"
+name = "pytorch-rocm712"
+url = "https://download.pytorch.org/whl/rocm7.12"
 explicit = true
