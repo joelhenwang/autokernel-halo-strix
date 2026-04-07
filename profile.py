@@ -98,33 +98,17 @@ def _fallback_detect_gpu() -> GPUSpec:
     cc = (props.major, props.minor)
 
     # Known GPUs: name_fragment -> (peak_fp16_tflops, peak_bandwidth_gb_s, l2_cache_mb)
+    # Focused on AMD Strix Halo (RDNA 3.5) target.
     _KNOWN_GPUS: Dict[str, Tuple[float, float, float]] = {
-        "H100 SXM":  (989.5, 3352.0, 50.0),
-        "H100 PCIe": (756.0, 2039.0, 50.0),
-        "H100":      (756.0, 2039.0, 50.0),
-        "A100-SXM":  (312.0, 2039.0, 40.0),
-        "A100-PCIE": (312.0, 1935.0, 40.0),
-        "A100":      (312.0, 2039.0, 40.0),
-        "L40S":      (362.05, 864.0, 48.0),
-        "L4":        (121.0, 300.0, 48.0),
-        "A10":       (125.0, 600.0, 6.0),
-        "4090":      (330.0, 1008.0, 72.0),
-        "4080":      (305.0, 716.8, 64.0),
-        "3090":      (142.0, 936.2, 6.0),
-        "3080":      (119.5, 760.3, 5.0),
-        # AMD Instinct GPUs
-        "MI300X":    (1307.4, 5300.0, 256.0),
-        "MI325X":    (1307.4, 6000.0, 256.0),
-        "MI350X":    (2300.0, 8000.0, 256.0),
-        "MI355X":    (2300.0, 8000.0, 256.0),
+        "Strix Halo":  (50.0, 120.0, 6.0),
+        "gfx1151":     (50.0, 120.0, 6.0),
     }
 
     # On ROCm, device name may be empty; try gcnArchName-based lookup
     gcn_arch = getattr(props, 'gcnArchName', '')
     if gcn_arch and not name:
         _AMD_ARCHS = {
-            "gfx942": ("AMD Instinct MI300X", 1307.4, 5300.0, 256.0),
-            "gfx950": ("AMD Instinct MI350X", 2300.0, 8000.0, 256.0),
+            "gfx1151": ("AMD Strix Halo", 50.0, 120.0, 6.0),
         }
         for arch_prefix, amd_specs in _AMD_ARCHS.items():
             if gcn_arch.startswith(arch_prefix):

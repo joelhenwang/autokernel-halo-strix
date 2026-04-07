@@ -1,28 +1,32 @@
 """
-AutoKernel -- CUDA C++ Flash Attention kernel.
+AutoKernel -- HIP C++ Flash Attention kernel.
 
-Current kernel: Tiled online softmax with SRAM Q/K/V blocking.
+Current kernel: Tiled online softmax with SRAM Q/K/V blocking for RDNA 3.5.
 Target metric: throughput (higher is better)
 Secondary: correctness must ALWAYS pass
 
 Features:
   - Block-wise online softmax with running max and sum statistics
-  - Double-buffered shared memory for Q, K, V tiles
-  - wmma tensor core acceleration for Q@K^T and attn@V matmuls
+  - Shared memory for Q, K, V tiles
+  - Scalar tiled matmul for Q@K^T and attn@V (no WMMA/MFMA on RDNA 3.5)
   - Causal mask support with early termination
   - __launch_bounds__ for register pressure control
+
+Note: RDNA 3.5 does not have MFMA. The Q@K^T and attn@V dot products use
+scalar FMA. The agent should optimize tile sizes for LDS capacity and
+memory bandwidth (LPDDR5X).
 """
 
 KERNEL_TYPE = "flash_attention"
-BACKEND = "cuda"
+BACKEND = "hip"
 
 import torch
-from kernels.cuda._compile import compile_cuda
+from kernels.hip._compile import compile_hip
 
-CUDA_SRC = r"""
+HIP_SRC = r"""
 #include <torch/extension.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
 #include <float.h>
 #include <math.h>
 
@@ -30,21 +34,19 @@ CUDA_SRC = r"""
 constexpr int Br = 32;   // block rows (query tile)
 constexpr int Bc = 32;   // block cols (key/value tile)
 constexpr int D_MAX = 128; // max head dimension
-
-// Each thread block handles one query tile for one (batch, head) pair
-// Grid: (num_query_tiles, batch * heads)
+constexpr int WARP_SIZE = 32;  // RDNA wave32
 
 __device__ __forceinline__ float warp_reduce_max(float val) {
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1)
-        val = fmaxf(val, __shfl_xor_sync(0xffffffff, val, offset));
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+        val = fmaxf(val, __shfl_xor(val, offset));
     return val;
 }
 
 __device__ __forceinline__ float warp_reduce_sum(float val) {
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1)
-        val += __shfl_xor_sync(0xffffffff, val, offset);
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+        val += __shfl_xor(val, offset);
     return val;
 }
 
@@ -57,15 +59,13 @@ flash_attention_kernel(
     int B_size, int H, int N, int D,
     float sm_scale
 ) {
-    const int bh = blockIdx.y;  // batch * head index
-    const int tile_q = blockIdx.x;  // query tile index
+    const int bh = blockIdx.y;
+    const int tile_q = blockIdx.x;
 
     const int b = bh / H;
     const int h = bh % H;
 
     const int tid = threadIdx.x;
-    const int warp_id = tid / 32;
-    const int lane_id = tid % 32;
 
     // Pointers for this (batch, head)
     const int bh_offset = (b * H + h) * N * D;
@@ -80,14 +80,14 @@ flash_attention_kernel(
     const int q_len = q_end - q_start;
 
     // Shared memory for tiles
-    __shared__ float smem_Q[Br][D_MAX];   // query tile (loaded once)
-    __shared__ float smem_S[Br][Bc];      // attention scores
-    __shared__ float smem_V[Bc][D_MAX];   // value tile
+    __shared__ float smem_Q[Br][D_MAX];
+    __shared__ float smem_S[Br][Bc];
+    __shared__ float smem_V[Bc][D_MAX];
 
     // Per-row running statistics for online softmax
-    __shared__ float row_max[Br];     // running max
-    __shared__ float row_sum[Br];     // running sum of exp
-    __shared__ float row_out[Br][D_MAX]; // running output accumulator
+    __shared__ float row_max[Br];
+    __shared__ float row_sum[Br];
+    __shared__ float row_out[Br][D_MAX];
 
     // Initialize statistics
     if (tid < Br) {
@@ -98,8 +98,7 @@ flash_attention_kernel(
     }
     __syncthreads();
 
-    // Load Q tile into shared memory (cooperative load)
-    // 256 threads, Br * D elements
+    // Load Q tile into shared memory
     for (int idx = tid; idx < q_len * D; idx += blockDim.x) {
         int r = idx / D;
         int d = idx % D;
@@ -124,21 +123,18 @@ flash_attention_kernel(
         __syncthreads();
 
         // Compute S = Q @ K^T for this tile
-        // Each thread computes one or more elements of S[Br][Bc]
         for (int idx = tid; idx < q_len * kv_len; idx += blockDim.x) {
             int qi = idx / kv_len;
             int ki = idx % kv_len;
 
             float score = 0.0f;
-            // Dot product Q[qi] . K[kv_start + ki]
             for (int d = 0; d < D; d++) {
                 float k_val = __half2float(K_bh[(kv_start + ki) * D + d]);
                 score += smem_Q[qi][d] * k_val;
             }
-            // Scale by sm_scale (typically 1/sqrt(D))
             score *= sm_scale;
 
-            // Causal mask: if query position < key position, mask out
+            // Causal mask
             int global_q = q_start + qi;
             int global_k = kv_start + ki;
             if (global_q < global_k) {
@@ -150,36 +146,30 @@ flash_attention_kernel(
         __syncthreads();
 
         // Online softmax update per row
-        // Each thread handles one row (if tid < q_len)
         if (tid < q_len) {
             int qi = tid;
 
-            // Find max of this tile's scores for row qi
             float tile_max = -FLT_MAX;
             for (int ki = 0; ki < kv_len; ki++) {
                 tile_max = fmaxf(tile_max, smem_S[qi][ki]);
             }
 
-            // Update running max
             float prev_max = row_max[qi];
             float new_max = fmaxf(prev_max, tile_max);
 
-            // Rescale previous sum and output
             float scale = expf(prev_max - new_max);
             row_sum[qi] *= scale;
             for (int d = 0; d < D; d++) {
                 row_out[qi][d] *= scale;
             }
 
-            // Compute exp(score - new_max) and accumulate
             float tile_sum = 0.0f;
             for (int ki = 0; ki < kv_len; ki++) {
                 float p = expf(smem_S[qi][ki] - new_max);
-                smem_S[qi][ki] = p;  // store for V accumulation
+                smem_S[qi][ki] = p;
                 tile_sum += p;
             }
 
-            // Accumulate into output: O += P @ V
             for (int d = 0; d < D; d++) {
                 float val = 0.0f;
                 for (int ki = 0; ki < kv_len; ki++) {
@@ -194,8 +184,7 @@ flash_attention_kernel(
         __syncthreads();
     }
 
-    // Final normalization: O = row_out / row_sum
-    // And write to global memory
+    // Final normalization and write to global memory
     for (int idx = tid; idx < q_len * D; idx += blockDim.x) {
         int qi = idx / D;
         int d = idx % D;
@@ -204,10 +193,10 @@ flash_attention_kernel(
     }
 }
 
-torch::Tensor flash_attention_cuda(
+torch::Tensor flash_attention_hip(
     torch::Tensor Q, torch::Tensor K, torch::Tensor V, double sm_scale
 ) {
-    TORCH_CHECK(Q.is_cuda(), "Q must be CUDA");
+    TORCH_CHECK(Q.is_cuda(), "Q must be on GPU");
     TORCH_CHECK(Q.dim() == 4, "Q must be [B, H, N, D]");
 
     int B = Q.size(0);
@@ -241,7 +230,7 @@ _module = None
 def _get_module():
     global _module
     if _module is None:
-        _module = compile_cuda(CUDA_SRC, "flash_attention_cuda")
+        _module = compile_hip(HIP_SRC, "flash_attention_hip")
     return _module
 
 
@@ -264,7 +253,7 @@ def kernel_fn(
         V = V.to(torch.float16)
 
     mod = _get_module()
-    O = mod.flash_attention_cuda(Q, K, V, sm_scale)
+    O = mod.flash_attention_hip(Q, K, V, sm_scale)
 
     if orig_dtype != torch.float16:
         O = O.to(orig_dtype)

@@ -87,74 +87,60 @@ def _benchmark_fn(fn, *args, warmup: int = _WARMUP_ITERS, iters: int = _BENCH_IT
 # ---------------------------------------------------------------------------
 
 def verify_environment() -> None:
-    """Print GPU specs, PyTorch version, Triton version. Exit on failure."""
+    """Print GPU specs, PyTorch version, ROCm/HIP version. Exit on failure."""
 
-    print("=== AutoKernel Setup ===\n")
+    print("=== AutoKernel Setup (Strix Halo / HIP C++) ===\n")
 
-    # -- CUDA & GPU --
+    # -- GPU --
     if not torch.cuda.is_available():
-        print("ERROR: CUDA is not available. A CUDA-capable GPU is required.")
+        print("ERROR: No GPU available. ROCm with HIP support is required.")
         sys.exit(1)
 
     device = torch.cuda.current_device()
     gpu_name = torch.cuda.get_device_name(device)
     props = torch.cuda.get_device_properties(device)
     mem_gb = props.total_memory / (1024 ** 3)
-    sm_count = props.multi_processor_count
-    cc_major = props.major
-    cc_minor = props.minor
+    cu_count = props.multi_processor_count
+    gcn_arch = getattr(props, "gcnArchName", "unknown")
 
-    # Runtime version: CUDA toolkit or ROCm/HIP version
-    cuda_version = torch.version.cuda or "unknown"
+    # ROCm/HIP version
     hip_version = getattr(torch.version, "hip", None)
-    if hip_version:
-        cuda_version = f"ROCm {hip_version}"
+    runtime_version = f"ROCm {hip_version}" if hip_version else "unknown"
 
-    # GPU driver version -- try nvidia-smi first, then rocm-smi as fallback
+    # GPU driver version via rocm-smi
     import subprocess
     driver_str = "unknown"
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader,nounits"],
+            ["rocm-smi", "--showdriverversion"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0:
-            driver_str = result.stdout.strip().split("\n")[0]
+            for line in result.stdout.strip().split("\n"):
+                if "Driver" in line:
+                    driver_str = line.split(":")[-1].strip()
+                    break
     except Exception:
         pass
 
-    if driver_str == "unknown":
-        try:
-            result = subprocess.run(
-                ["rocm-smi", "--showdriverversion"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.strip().split("\n"):
-                    if "Driver" in line:
-                        driver_str = line.split(":")[-1].strip()
-                        break
-        except Exception:
-            pass
-
     print(f"GPU: {gpu_name}")
     print(f"  Memory: {mem_gb:.1f} GB")
-    print(f"  SM Count: {sm_count}")
-    print(f"  Compute Capability: {cc_major}.{cc_minor}")
+    print(f"  CU Count: {cu_count}")
+    print(f"  GCN Arch: {gcn_arch}")
     print(f"  Driver: {driver_str}")
-    print(f"  CUDA: {cuda_version}")
+    print(f"  Runtime: {runtime_version}")
     print()
 
     # -- PyTorch --
     print(f"PyTorch: {torch.__version__}")
 
-    # -- Triton --
-    try:
-        import triton
-        print(f"Triton: {triton.__version__}")
-    except ImportError:
-        print("ERROR: Triton is not installed. Install with: pip install triton")
-        sys.exit(1)
+    # -- hipcc --
+    import shutil
+    hipcc = shutil.which("hipcc")
+    if hipcc:
+        print(f"hipcc: {hipcc}")
+    else:
+        print("WARNING: hipcc not found. HIP C++ kernel compilation will fail.")
 
     print()
 

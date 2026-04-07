@@ -1,35 +1,36 @@
 """
-AutoKernel -- CUDA C++ Reduce (sum along last dim) kernel.
+AutoKernel -- HIP C++ Reduce (sum along last dim) kernel.
 
-Current kernel: Hierarchical reduction with warp shuffle + shared memory + atomic.
+Current kernel: Hierarchical reduction with warp shuffle + shared memory.
 Target metric: throughput (higher is better)
 Secondary: correctness must ALWAYS pass
 
 Features:
-  - __shfl_down_sync cascade (5 steps) for intra-warp reduction
-  - Shared memory for inter-warp reduction within a block
+  - __shfl_down cascade for intra-wavefront reduction (wave32 on RDNA 3.5)
+  - Shared memory for inter-wavefront reduction within a block
   - Vectorized loads for memory bandwidth
   - One row per block for simplicity and correctness
 """
 
 KERNEL_TYPE = "reduce"
-BACKEND = "cuda"
+BACKEND = "hip"
 
 import torch
-from kernels.cuda._compile import compile_cuda
+from kernels.hip._compile import compile_hip
 
-CUDA_SRC = r"""
+HIP_SRC = r"""
 #include <torch/extension.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
 
 constexpr int BLOCK_SIZE = 256;
+constexpr int WARP_SIZE = 32;  // RDNA wave32 mode
 
-// Warp-level sum reduction
+// Wavefront-level sum reduction (wave32)
 __device__ __forceinline__ float warp_reduce_sum(float val) {
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1)
-        val += __shfl_down_sync(0xffffffff, val, offset);
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+        val += __shfl_down(val, offset);
     return val;
 }
 
@@ -43,9 +44,9 @@ __global__ void reduce_sum_kernel(
     if (row >= M) return;
 
     const int tid = threadIdx.x;
-    const int warp_id = tid / 32;
-    const int lane_id = tid % 32;
-    const int num_warps = BLOCK_SIZE / 32;
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    const int num_warps = BLOCK_SIZE / WARP_SIZE;
 
     const half* row_ptr = input + row * N;
 
@@ -55,18 +56,18 @@ __global__ void reduce_sum_kernel(
         local_sum += __half2float(row_ptr[i]);
     }
 
-    // Phase 2: warp-level reduction
+    // Phase 2: wavefront-level reduction
     local_sum = warp_reduce_sum(local_sum);
 
     // Phase 3: block-level reduction via shared memory
-    __shared__ float smem[32];  // one per warp
+    __shared__ float smem[WARP_SIZE];  // one per wavefront
 
     if (lane_id == 0) {
         smem[warp_id] = local_sum;
     }
     __syncthreads();
 
-    // Final reduction by first warp
+    // Final reduction by first wavefront
     if (warp_id == 0) {
         float val = (lane_id < num_warps) ? smem[lane_id] : 0.0f;
         val = warp_reduce_sum(val);
@@ -76,8 +77,8 @@ __global__ void reduce_sum_kernel(
     }
 }
 
-torch::Tensor reduce_sum_cuda(torch::Tensor input) {
-    TORCH_CHECK(input.is_cuda(), "input must be CUDA");
+torch::Tensor reduce_sum_hip(torch::Tensor input) {
+    TORCH_CHECK(input.is_cuda(), "input must be on GPU");
     TORCH_CHECK(input.dim() == 2, "input must be [M, N]");
 
     int M = input.size(0);
@@ -104,7 +105,7 @@ _module = None
 def _get_module():
     global _module
     if _module is None:
-        _module = compile_cuda(CUDA_SRC, "reduce_sum_cuda")
+        _module = compile_hip(HIP_SRC, "reduce_sum_hip")
     return _module
 
 
@@ -132,7 +133,7 @@ def kernel_fn(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
             x = x.reshape(-1, x.shape[-1])
 
         mod = _get_module()
-        out = mod.reduce_sum_cuda(x)
+        out = mod.reduce_sum_hip(x)
 
         if orig_dtype != torch.float16:
             out = out.to(orig_dtype)

@@ -1,5 +1,5 @@
 """
-AutoKernel -- CUDA C++ Fused MLP (SwiGLU) kernel.
+AutoKernel -- HIP C++ Fused MLP (SwiGLU) kernel.
 
 Current kernel: Fused gate_proj + up_proj + SiLU activation + elementwise mul.
 Target metric: throughput (higher is better)
@@ -7,22 +7,22 @@ Secondary: correctness must ALWAYS pass
 
 Features:
   - Fuses two matrix multiplications (gate and up projections) with SiLU activation
-  - Shared memory tiling for both projection weight matrices
+  - Tiled accumulation for better register reuse
   - Avoids writing intermediate results to global memory
   - __fdividef for fast SiLU computation
   - Block-level tiling for large hidden dimensions
 """
 
 KERNEL_TYPE = "fused_mlp"
-BACKEND = "cuda"
+BACKEND = "hip"
 
 import torch
-from kernels.cuda._compile import compile_cuda
+from kernels.hip._compile import compile_hip
 
-CUDA_SRC = r"""
+HIP_SRC = r"""
 #include <torch/extension.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
 
 constexpr int BLOCK_SIZE = 256;
 constexpr int TILE_K = 32;
@@ -31,10 +31,6 @@ constexpr int TILE_K = 32;
 __device__ __forceinline__ float silu(float x) {
     return x / (1.0f + __expf(-x));
 }
-
-// Kernel: compute output = SiLU(x @ gate_W^T) * (x @ up_W^T) for one row
-// Then output = result @ down_W^T
-// But since bench.py expects the full SwiGLU output, we do it in two stages.
 
 // Stage 1: Fused gate+up+silu+mul
 // For each row of x, compute: hidden[i] = SiLU(dot(x, gate_W[i])) * dot(x, up_W[i])
@@ -45,7 +41,6 @@ __global__ void fused_gate_up_kernel(
     half* __restrict__ hidden,         // [M, N]
     int M, int K, int N
 ) {
-    // Each block handles a tile of the output
     const int row = blockIdx.x;
     const int col_start = blockIdx.y * BLOCK_SIZE;
 
@@ -56,7 +51,6 @@ __global__ void fused_gate_up_kernel(
 
     if (col >= N) return;
 
-    // Compute dot products for gate and up projections
     const half* x_row = x + row * K;
     const half* gate_row = gate_w + col * K;
     const half* up_row = up_w + col * K;
@@ -64,7 +58,6 @@ __global__ void fused_gate_up_kernel(
     float gate_val = 0.0f;
     float up_val = 0.0f;
 
-    // Tiled accumulation
     for (int k = 0; k < K; k += TILE_K) {
         int k_end = min(k + TILE_K, K);
         #pragma unroll 8
@@ -75,7 +68,6 @@ __global__ void fused_gate_up_kernel(
         }
     }
 
-    // SiLU(gate) * up
     float result = silu(gate_val) * up_val;
     hidden[row * N + col] = __float2half(result);
 }
@@ -83,7 +75,7 @@ __global__ void fused_gate_up_kernel(
 // Stage 2: down projection (standard matmul hidden @ down_W^T)
 __global__ void down_proj_kernel(
     const half* __restrict__ hidden,   // [M, N]
-    const half* __restrict__ down_w,   // [K, N] (output dim = K = input dim)
+    const half* __restrict__ down_w,   // [K, N]
     half* __restrict__ output,         // [M, K]
     int M, int N, int K
 ) {
@@ -112,19 +104,18 @@ __global__ void down_proj_kernel(
     output[row * K + col] = __float2half(acc);
 }
 
-torch::Tensor fused_mlp_cuda(
+torch::Tensor fused_mlp_hip(
     torch::Tensor x,
     torch::Tensor gate_w,
     torch::Tensor up_w,
     torch::Tensor down_w
 ) {
-    TORCH_CHECK(x.is_cuda(), "x must be CUDA");
+    TORCH_CHECK(x.is_cuda(), "x must be on GPU");
 
-    int M = x.size(0);    // batch
-    int K = x.size(1);    // dim
-    int N = gate_w.size(0); // hidden
+    int M = x.size(0);
+    int K = x.size(1);
+    int N = gate_w.size(0);
 
-    // Stage 1: fused gate + up + silu + mul -> hidden [M, N]
     auto hidden = torch::empty({M, N}, x.options());
 
     {
@@ -139,7 +130,6 @@ torch::Tensor fused_mlp_cuda(
         );
     }
 
-    // Stage 2: down projection -> output [M, K]
     auto output = torch::empty({M, K}, x.options());
 
     {
@@ -163,7 +153,7 @@ _module = None
 def _get_module():
     global _module
     if _module is None:
-        _module = compile_cuda(CUDA_SRC, "fused_mlp_cuda")
+        _module = compile_hip(HIP_SRC, "fused_mlp_hip")
     return _module
 
 
@@ -185,7 +175,7 @@ def kernel_fn(
         w_down = w_down.to(torch.float16)
 
     mod = _get_module()
-    out = mod.fused_mlp_cuda(x, w_gate, w_up, w_down)
+    out = mod.fused_mlp_hip(x, w_gate, w_up, w_down)
 
     if orig_dtype != torch.float16:
         out = out.to(orig_dtype)

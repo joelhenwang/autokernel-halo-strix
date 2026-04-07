@@ -1,5 +1,5 @@
 """
-AutoKernel -- CUDA C++ Cross Entropy Loss kernel.
+AutoKernel -- HIP C++ Cross Entropy Loss kernel.
 
 Current kernel: Fused online log-sum-exp + NLL in a single pass.
 Target metric: throughput (higher is better)
@@ -7,72 +7,70 @@ Secondary: correctness must ALWAYS pass
 
 Features:
   - Online log-sum-exp avoids materializing full softmax
-  - Warp-level max and sum reductions via __shfl_down_sync
+  - Wavefront-level max and sum reductions via __shfl_down
   - Block-level cooperative reduction via shared memory
   - Fast __logf / __expf intrinsics
   - Grid-stride loop for arbitrary batch sizes
 """
 
 KERNEL_TYPE = "cross_entropy"
-BACKEND = "cuda"
+BACKEND = "hip"
 
 import torch
-from kernels.cuda._compile import compile_cuda
+from kernels.hip._compile import compile_hip
 
-CUDA_SRC = r"""
+HIP_SRC = r"""
 #include <torch/extension.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
 #include <float.h>
 
 constexpr int BLOCK_SIZE = 256;
+constexpr int WARP_SIZE = 32;  // RDNA wave32
 
-// Warp-level max reduction
+// Wavefront-level max reduction
 __device__ __forceinline__ float warp_reduce_max(float val) {
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1)
-        val = fmaxf(val, __shfl_down_sync(0xffffffff, val, offset));
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+        val = fmaxf(val, __shfl_down(val, offset));
     return val;
 }
 
-// Warp-level sum reduction
+// Wavefront-level sum reduction
 __device__ __forceinline__ float warp_reduce_sum(float val) {
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1)
-        val += __shfl_down_sync(0xffffffff, val, offset);
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1)
+        val += __shfl_down(val, offset);
     return val;
 }
 
 // Each block handles one sample in the batch
-// Computes: loss[b] = -logits[b, target[b]] + log(sum(exp(logits[b, :] - max)))
 __global__ void cross_entropy_kernel(
-    const half* __restrict__ logits,   // [batch, vocab]
+    const half* __restrict__ logits,     // [batch, vocab]
     const int64_t* __restrict__ targets, // [batch]
-    float* __restrict__ losses,        // [batch]
+    float* __restrict__ losses,          // [batch]
     int batch, int vocab
 ) {
     const int b = blockIdx.x;
     if (b >= batch) return;
 
     const int tid = threadIdx.x;
-    const int warp_id = tid / 32;
-    const int lane_id = tid % 32;
-    const int num_warps = BLOCK_SIZE / 32;
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    const int num_warps = BLOCK_SIZE / WARP_SIZE;
 
     const half* row = logits + b * vocab;
     const int target = targets[b];
 
-    // Phase 1: Find row max using grid-stride within block
+    // Phase 1: Find row max
     float local_max = -FLT_MAX;
     for (int v = tid; v < vocab; v += BLOCK_SIZE) {
         local_max = fmaxf(local_max, __half2float(row[v]));
     }
 
-    // Warp-level max
     local_max = warp_reduce_max(local_max);
 
-    // Block-level max via shared memory
-    __shared__ float smem_max[32];  // one per warp
+    __shared__ float smem_max[32];
     if (lane_id == 0) smem_max[warp_id] = local_max;
     __syncthreads();
 
@@ -90,10 +88,8 @@ __global__ void cross_entropy_kernel(
         local_sum += __expf(__half2float(row[v]) - row_max);
     }
 
-    // Warp-level sum
     local_sum = warp_reduce_sum(local_sum);
 
-    // Block-level sum
     __shared__ float smem_sum[32];
     if (lane_id == 0) smem_sum[warp_id] = local_sum;
     __syncthreads();
@@ -113,9 +109,9 @@ __global__ void cross_entropy_kernel(
     }
 }
 
-torch::Tensor cross_entropy_cuda(torch::Tensor logits, torch::Tensor targets) {
-    TORCH_CHECK(logits.is_cuda(), "logits must be CUDA");
-    TORCH_CHECK(targets.is_cuda(), "targets must be CUDA");
+torch::Tensor cross_entropy_hip(torch::Tensor logits, torch::Tensor targets) {
+    TORCH_CHECK(logits.is_cuda(), "logits must be on GPU");
+    TORCH_CHECK(targets.is_cuda(), "targets must be on GPU");
     TORCH_CHECK(logits.dim() == 2, "logits must be [batch, vocab]");
 
     int batch = logits.size(0);
@@ -133,7 +129,6 @@ torch::Tensor cross_entropy_cuda(torch::Tensor logits, torch::Tensor targets) {
         batch, vocab
     );
 
-    // Return mean loss (scalar)
     return losses.mean();
 }
 """
@@ -144,7 +139,7 @@ _module = None
 def _get_module():
     global _module
     if _module is None:
-        _module = compile_cuda(CUDA_SRC, "cross_entropy_cuda")
+        _module = compile_hip(HIP_SRC, "cross_entropy_hip")
     return _module
 
 
@@ -156,7 +151,6 @@ def kernel_fn(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         logits = logits.to(torch.float16)
 
     mod = _get_module()
-    loss = mod.cross_entropy_cuda(logits, targets)
+    loss = mod.cross_entropy_hip(logits, targets)
 
-    # Loss is always returned as float32 (scalar loss, matches F.cross_entropy)
     return loss.to(torch.float32)

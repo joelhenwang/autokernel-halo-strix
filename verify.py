@@ -10,7 +10,7 @@ Usage:
 Checks:
   1. Loads the original model
   2. Runs inference with original PyTorch ops -> captures reference output
-  3. Replaces bottleneck ops with optimized Triton kernels
+  3. Replaces bottleneck ops with optimized HIP C++ kernels
   4. Runs inference with optimized kernels -> captures optimized output
   5. Compares outputs (tolerance check)
   6. Benchmarks both paths -> reports end-to-end speedup
@@ -509,7 +509,7 @@ class _RMSNormWrapper(nn.Module):
 
 class OptimizedModelContext:
     """
-    Context manager that patches a model's submodules to use optimized Triton kernels.
+    Context manager that patches a model's submodules to use optimized HIP C++ kernels.
 
     Usage:
         with OptimizedModelContext(model, replacements) as patched_model:

@@ -517,30 +517,16 @@ Once block sizes are tuned, memory is usually the bottleneck.
 - Cluster-level shared memory.
 
 **A100 (Ampere, SM80):**
-- Async global-to-shared memory copies (`cp.async`).
-- TF32 tensor cores (19.5 TFLOPS).
-- Fine-grained structured sparsity (2:4).
-
-**L40S / L4 / RTX (Ada Lovelace / Ampere consumer):**
-- Smaller shared memory, fewer SMs. Use smaller block sizes, fewer stages.
-- L40S: 142 SMs, good FP16 throughput.
-- L4: very memory-bandwidth limited.
-- RTX 4090: 128 SMs but consumer-grade memory bandwidth.
-
-**MI300X (CDNA3, gfx942):** *(source: [GEAK](https://github.com/AMD-AGI/GEAK) knowledge-base)*
-- 304 CUs, wavefront size = 64 (not 32). All warp-level reasoning must use 64-wide.
-- HBM3: 5.3 TB/s peak bandwidth, 192 GB capacity. Memory-bound kernels should target >70% of this.
-- MFMA (Matrix Fused Multiply-Add) instructions: 1307 TFLOPS FP16/BF16. Use `tl.dot` which maps to MFMA.
-- LDS: 64 KB per CU, shared memory in Triton maps to LDS. Avoid >64 KB per block.
-- BLOCK_SIZE = 256 is often optimal for CDNA (vs 128 for NVIDIA). Try 128/256 in autotune configs.
-- `num_warps`: on AMD each "warp" in Triton is a wavefront of 64 threads. 4 warps = 256 threads.
-- `waves_per_eu`: controls occupancy hint. Add to `triton.Config(kwargs, num_warps=N, waves_per_eu=M)`.
-  Typical values: 0 (auto), 2-4 for compute-bound, 4-8 for memory-bound.
-- `tl.math.tanh` is NOT available on HIP backend. Use sigmoid identity: `2*tl.sigmoid(2*x) - 1`.
-- No `cp.async` or TMA equivalent; Triton compiler handles async prefetch internally.
-- Prefer BF16 over FP16 for training workloads (same throughput, better dynamic range).
-- Profile with `rocprof --hip-trace` or `rocprofv3`. Key counters: `SQ_INSTS_MFMA_MOPS_FP16`,
-  `TCC_HIT/TCC_REQ` (L2 hit rate), `SQ_WAVE_CYCLES` (occupancy), `TCP_PENDING_STALL_CYCLES` (mem stall).
+**AMD Strix Halo (RDNA 3.5, gfx1151):**
+- ~40 CUs, wavefront size = 32 (wave32 mode). All wavefront-level reasoning uses 32-wide.
+- LPDDR5X: ~120 GB/s unified bandwidth. Nearly ALL kernels are memory-bound.
+- No MFMA. Scalar tiled GEMM with LDS reuse for matrix operations.
+- LDS: 64 KB per CU. Use smaller tiles than CDNA. Stay under ~32 KB per double-buffered tile pair.
+- Block sizes: 128-256 threads (4-8 wavefronts) is the sweet spot.
+- `__shfl_down(val, offset)` and `__shfl_xor(val, offset)` -- no mask argument (unlike CUDA).
+- Profile with `rocprof --stats` or `rocprofv3`. Key counters: `TCC_HIT/TCC_REQ` (L2 hit rate),
+  `SQ_WAVE_CYCLES` (occupancy), `TCP_PENDING_STALL_CYCLES` (mem stall).
+- See `knowledge/amd_rdna35_strix_halo.md` for full hardware reference.
 
 **Typical gains**: 5-15% from architecture-specific tuning.
 
@@ -595,160 +581,133 @@ When optimizing multiple kernels in sequence, you gain cross-kernel insights:
 
 ---
 
-## CUDA C++ Optimization Playbook
+## HIP C++ Optimization Playbook (RDNA 3.5 / Strix Halo)
 
-When using the CUDA C++ backend (`--backend cuda`), the agent edits raw CUDA C++ source
-embedded as a Python string in `kernel.py`. The `CUDA_SRC` variable contains the kernel code,
-compiled at runtime via `torch.utils.cpp_extension.load_inline()`.
+The agent edits raw HIP C++ source embedded as a Python string in `kernel.py`. The `HIP_SRC`
+variable contains the kernel code, compiled at runtime via `torch.utils.cpp_extension.load_inline()`
+with hipcc on ROCm.
 
-**The kernel contract is the same**: `kernel.py` exports `KERNEL_TYPE`, `BACKEND = "cuda"`,
-and `kernel_fn()` with the same signature. `bench.py` runs identically on either backend.
+**The kernel contract**: `kernel.py` exports `KERNEL_TYPE`, `BACKEND = "hip"`,
+and `kernel_fn()` with the same signature. `bench.py` runs identically.
 
-### CUDA Tier 1: Thread/Block Configuration
+**Target hardware**: AMD Strix Halo (gfx1151, RDNA 3.5 APU, ~40 CUs, ~120 GB/s LPDDR5X).
+See `knowledge/amd_rdna35_strix_halo.md` for full hardware reference.
 
-The most impactful change. Thread count and block dimensions directly control occupancy,
-register pressure, and shared memory usage.
+**Key constraint**: Nearly ALL kernels are memory-bound on Strix Halo due to ~120 GB/s
+bandwidth (vs 5300 GB/s on MI300X). Optimization priority: minimize global memory traffic.
+
+### HIP Tier 1: Thread/Block Configuration
+
+The most impactful change. Thread count and block dimensions directly control occupancy.
 
 **What to try:**
+- RDNA 3.5 uses **wave32** (32 threads per wavefront). Block sizes should be multiples of 32.
 - Sweep `blockDim.x` through 128, 256, 512. More threads = better latency hiding but higher register pressure.
 - Use `dim3` for 2D/3D thread blocks when the kernel has spatial structure (e.g., matmul tiles).
-- Set `__launch_bounds__(maxThreadsPerBlock, minBlocksPerMultiprocessor)` to control register allocation.
-- Calculate occupancy: `cudaOccupancyMaxActiveBlocksPerMultiprocessor`.
+- Set `__launch_bounds__(maxThreadsPerBlock)` to control register allocation.
 
 **Typical gains**: 10-50% from finding the right thread/block config.
 
-### CUDA Tier 2: Shared Memory Tiling
+### HIP Tier 2: Shared Memory (LDS) Tiling
 
 **Tiling strategy:**
-- Load tiles of input from global memory into `__shared__` memory.
-- Process the tile using fast shared memory reads.
+- Load tiles of input from global memory into `__shared__` memory (maps to LDS, 64 KB per CU).
+- Process the tile using fast LDS reads.
 - Bank-conflict-free layout: add padding (e.g., `__shared__ float tile[32][33]` instead of `[32][32]`).
-- Double buffering: use two shared memory buffers, load next tile while computing on current.
+- Double buffering: use two LDS buffers, load next tile while computing on current.
 
 **Vectorized loads:**
 - Use `float4` for 128-bit loads (4x throughput vs scalar `float`).
-- Use `__ldg()` for read-only data through the texture cache.
 - Align memory accesses to 128 bytes for maximum coalescing.
+- `half2` vectorized loads for FP16 data.
 
-**Typical gains**: 20-40% from shared memory tiling over naive global memory access.
+**Typical gains**: 20-40% from LDS tiling over naive global memory access.
 
-### CUDA Tier 3: Tensor Cores
+### HIP Tier 3: Compute Optimization
 
-**wmma API (Warp Matrix Multiply Accumulate):**
-```cpp
-#include <mma.h>
-using namespace nvcuda;
-wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
-wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::row_major> b_frag;
-wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
-wmma::fill_fragment(c_frag, 0.0f);
-wmma::load_matrix_sync(a_frag, shared_A, ldA);
-wmma::load_matrix_sync(b_frag, shared_B, ldB);
-wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
-wmma::store_matrix_sync(output, c_frag, ldC, wmma::mem_row_major);
-```
+RDNA 3.5 does NOT have MFMA matrix cores. Use scalar FMA operations.
 
-- Tile sizes: 16x16x16 (fp16), 8x8x4 (tf32), 8x8x32 (int8).
-- Each warp processes one wmma tile. Assign multiple tiles per warp for ILP.
-- Keep accumulator in fp32 for numerical stability, convert to fp16 at epilogue.
+**What to try:**
+- Register-level tiling: each thread accumulates a 4x4 or 8x8 output tile in registers.
+- Keep accumulator in float32, convert to fp16 only at epilogue.
+- `#pragma unroll` for inner loops.
+- Minimize register pressure to maximize wavefront occupancy.
 
-**Typical gains**: 2-4x over scalar code for matmul-like operations.
+**Typical gains**: 10-30% from compute optimization.
 
-### CUDA Tier 4: Advanced Techniques
+### HIP Tier 4: Advanced Techniques
 
 **Persistent kernels:**
-- Launch exactly `SM_COUNT` thread blocks. Each loops over multiple tiles.
+- Launch exactly `CU_COUNT` thread blocks. Each loops over multiple tiles.
 - Eliminates kernel launch overhead and improves L2 reuse.
-- Use `atomicAdd` or cooperative groups for global synchronization.
+- Use `atomicAdd` for global synchronization when needed.
 
-**Software pipelining / cp.async (Ampere+):**
-```cpp
-// Asynchronous global -> shared memory copy
-asm volatile("cp.async.cg.shared.global [%0], [%1], %2;" :: "r"(smem_addr), "l"(gmem_addr), "n"(16));
-asm volatile("cp.async.commit_group;");
-asm volatile("cp.async.wait_group 0;");
-```
-
-**Cooperative groups:**
-- `cooperative_groups::this_grid()` for grid-level synchronization.
-- `cooperative_groups::tiled_partition<32>(block)` for warp-level primitives.
+**Occupancy tuning:**
+- VGPRs per SIMD: 1536. Each wavefront uses (registers_per_thread × 32) VGPRs.
+- Max concurrent wavefronts = 1536 / VGPRs_per_wavefront (per SIMD, 2 SIMDs per CU).
+- Target 4-8 wavefronts per SIMD for good latency hiding.
+- `__launch_bounds__(256)` helps compiler control register allocation.
 
 **Typical gains**: 10-20% from advanced techniques.
 
-### CUDA Tier 5: Architecture-Specific
+### HIP Tier 5: RDNA 3.5 Architecture-Specific
 
-**Hopper (SM90, H100):**
-- TMA (Tensor Memory Accelerator): `cp.async.bulk` for hardware-accelerated bulk copies.
-- Warp group MMA (WGMMA): next-gen tensor core with cluster-level shared memory.
-- Thread Block Clusters: cooperative thread blocks sharing distributed shared memory.
-
-**Ampere (SM80, A100):**
-- `cp.async`: async global-to-shared memory copies (non-blocking).
-- TF32 tensor cores: 19.5 TFLOPS with tf32 precision.
-- Fine-grained structured sparsity (2:4 pattern).
-
-**Ada Lovelace (SM89, RTX 4090/L40S):**
-- FP8 tensor cores for inference.
-- Smaller shared memory per SM -- use smaller tiles.
-- High FP16 throughput but consumer-grade memory bandwidth.
-
-**AMD CDNA3 (gfx942, MI300X) — HIP backend:** *(source: [GEAK](https://github.com/AMD-AGI/GEAK) knowledge-base)*
-- Use `hipcc` with `-march=gfx942 -O3`. Compile flags: `--offload-arch=gfx942`.
-- Wavefront = 64 threads (vs CUDA warp = 32). All `__shfl*` → `__shfl*` in HIP but width=64.
-- MFMA intrinsics replace NVIDIA's WMMA/MMA. Use rocBLAS or rocWMMA for matrix ops.
-- LDS: 64 KB per CU. Use `__launch_bounds__(256, 4)` for occupancy (256 threads, min 4 blocks/CU).
-- VGPRs: 65536 per CU. Target 20-32 registers/thread for good occupancy (75-100%).
-- `__restrict__` and `__builtin_nontemporal_load/store` for memory hint control.
-- No `cp.async`; use `__builtin_amdgcn_global_load_lds()` for async LDS fills (advanced).
-- Memory coalescing: same principle, 128-byte transactions, wavefront of 64 threads.
-- Profile: `rocprof --stats`, `rocprofv3`. Key counters: `SQ_INSTS_MFMA_MOPS_*`, `TCC_*`, `SQ_WAVE_CYCLES`.
+**AMD Strix Halo (gfx1151, RDNA 3.5 APU):**
+- Compile: `hipcc -O3 -ffast-math -std=c++17 --offload-arch=gfx1151`
+- Wavefront = 32 threads (wave32 mode). All `__shfl_*` use 32-wide, no mask needed.
+- No MFMA instructions. Scalar tiled GEMM with LDS for matrix multiply.
+- LDS: 64 KB per CU. Use `__launch_bounds__(256)` for occupancy.
+- Memory: LPDDR5X unified (shared with CPU), ~120 GB/s peak.
+- Nearly everything is memory-bound. Fusion and LDS reuse are critical.
+- `__restrict__` on all pointer args to enable compiler optimization.
+- Profile: `rocprof --stats`, `rocprofv3`.
 
 **Typical gains**: 5-15% from arch-specific tuning.
 
-### CUDA Tier 6: Kernel-Specific Tricks
+### HIP Tier 6: Kernel-Specific Tricks
 
 **Matrix multiplication:**
-- Swizzled shared memory layout to avoid bank conflicts across warps.
-- Register-level tiling: each thread accumulates a 4x4 or 8x8 output tile.
-- Epilogue fusion: add bias, apply activation, quantize -- all in registers before writing.
+- Tiled GEMM with double-buffered LDS. Tile sizes: 64x64x32 or smaller.
+- Register-level tiling: each thread accumulates a 4x4 output tile.
+- Epilogue fusion: add bias, apply activation -- all in registers before writing.
 
 **Softmax:**
-- Warp-level `__shfl_xor_sync` tree reduction (5 steps for 32 threads).
+- Wavefront-level `__shfl_xor` tree reduction (5 steps for 32 threads).
 - Multi-row processing: each thread block handles multiple rows for better occupancy.
 - `__expf()` and `__fdividef()` fast math intrinsics.
 
 **LayerNorm / RMSNorm:**
 - Welford's online algorithm for single-pass mean+variance.
-- Warp shuffle cascade (`__shfl_down_sync`) for partial statistics.
+- Wavefront shuffle cascade (`__shfl_down`) for partial statistics.
 - `rsqrtf()` for fast inverse square root.
 - Vectorized `float4`/`half2` loads.
 
 **Flash Attention:**
-- Double-buffered shared memory for Q/K/V tiles.
+- Double-buffered LDS for Q/K/V tiles.
 - Online softmax with running max and sum rescaling.
 - Causal mask with early tile termination (skip tiles where all positions are masked).
-- wmma for both Q@K^T and attn@V matmuls.
+- Scalar dot products for Q@K^T and attn@V (no matrix cores).
 
 **Cross Entropy:**
 - Fused online log-sum-exp: single pass for max, exp-sum, and target lookup.
-- Warp-level max + sum reductions avoid shared memory overhead.
+- Wavefront-level max + sum reductions avoid LDS overhead.
 - `__logf()` / `__expf()` fast intrinsics.
 
 **Rotary Embeddings:**
 - `__sincosf()` for fused sin/cos computation.
-- Constant memory for precomputed frequency table.
 - Vectorized `half2` read-modify-write.
 
-### CUDA Anti-Patterns
+### HIP Anti-Patterns
 
-- **Warp divergence in inner loops**: All threads in a warp must take the same branch.
-- **Uncoalesced global memory access**: Threads in a warp must access consecutive addresses.
-- **Shared memory bank conflicts**: 32 banks, 4 bytes each. Pad or swizzle to avoid.
+- **Wavefront divergence in inner loops**: All threads in a wavefront must take the same branch.
+- **Uncoalesced global memory access**: Threads in a wavefront must access consecutive addresses.
+- **LDS bank conflicts**: 32 banks, 4 bytes each. Pad or swizzle to avoid.
 - **Register spilling**: Too many local variables cause spills to slow local memory. Use `__launch_bounds__`.
 - **Excessive `__syncthreads()`**: Each sync stalls the entire block. Minimize sync points.
-- **Global atomics in hot paths**: Use warp-level reduction first, then one atomic per warp.
+- **Global atomics in hot paths**: Use wavefront-level reduction first, then one atomic per wavefront.
 - **Forgetting `__restrict__`**: Without it, the compiler assumes pointers may alias, blocking optimizations.
 - **Using `printf` in production kernels**: Serializes execution.
+- **Using CUDA sync masks**: HIP shuffles (`__shfl_down`, `__shfl_xor`) do NOT take a mask argument.
 
 ---
 
@@ -805,36 +764,24 @@ workspace/
 
 ## Supported Kernel Types
 
-Two backends are available: **Triton** (default) and **CUDA C++** (`--backend cuda`).
+Backend: **HIP C++** targeting AMD Strix Halo (gfx1151, RDNA 3.5).
 
 ```
-kernels/                    Triton starters (Python + @triton.jit)
-  matmul.py                   -- tiled matrix multiplication
-  softmax.py                  -- row-parallel online softmax
-  layernorm.py                -- layer normalization
-  rmsnorm.py                  -- RMS normalization
-  flash_attention.py          -- flash attention (block-wise online softmax)
-  fused_mlp.py                -- fused SwiGLU MLP
-  cross_entropy.py            -- fused cross entropy loss
-  rotary_embedding.py         -- rotary position embeddings
-  reduce.py                   -- parallel reduction (sum)
-
-kernels/cuda/               CUDA C++ starters (tensor core accelerated)
-  _compile.py                 -- shared compilation utility (load_inline + caching)
-  matmul.py                   -- wmma tensor core GEMM, double-buffered shared memory
-  softmax.py                  -- warp shuffle reduction, __expf fast math
+kernels/hip/                HIP C++ starters (compiled via hipcc on ROCm)
+  _compile.py                 -- compilation utility (load_inline + caching, hipcc)
+  matmul.py                   -- tiled scalar GEMM, double-buffered LDS
+  softmax.py                  -- wavefront shuffle reduction, __expf fast math
   layernorm.py                -- Welford's online algorithm, vectorized float4 loads
-  rmsnorm.py                  -- single-pass RMS, warp shuffle cascade
-  flash_attention.py          -- tiled online softmax, causal mask, SRAM blocking
-  fused_mlp.py                -- fused gate+up+silu, shared memory tiling
-  cross_entropy.py            -- online log-sum-exp + NLL, warp reductions
+  rmsnorm.py                  -- single-pass RMS, wavefront shuffle cascade
+  flash_attention.py          -- tiled online softmax, causal mask, LDS blocking
+  fused_mlp.py                -- fused gate+up+silu, tiled accumulation
+  cross_entropy.py            -- online log-sum-exp + NLL, wavefront reductions
   rotary_embedding.py         -- __sincosf intrinsic, vectorized half2
-  reduce.py                   -- hierarchical warp shuffle + shared memory
+  reduce.py                   -- hierarchical wavefront shuffle + LDS
 ```
 
-Both backends export the same `KERNEL_TYPE` and `kernel_fn()` interface. `bench.py` runs
-identically regardless of backend. Choose Triton for fast iteration, CUDA C++ for maximum
-performance (direct tensor core access, PTX intrinsics, bank-conflict-free layouts).
+All kernels export `KERNEL_TYPE`, `BACKEND = "hip"`, and `kernel_fn()`. `bench.py` runs
+identically. The `HIP_SRC` variable contains the raw HIP C++ source that the agent modifies.
 
 ---
 

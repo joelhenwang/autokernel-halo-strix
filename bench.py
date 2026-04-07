@@ -100,33 +100,19 @@ class GPUSpec:
 
 
 # Known GPU database: name_fragment -> (peak_fp16_tflops, peak_bandwidth_gb_s, l2_cache_mb)
+# Focused on AMD Strix Halo (RDNA 3.5) target.
+# Strix Halo specs are estimates -- update with real measurements from hardware.
 _KNOWN_GPUS: Dict[str, Tuple[float, float, float]] = {
-    "H100 SXM":   (989.5,  3352.0, 50.0),
-    "H100 PCIe":  (756.0,  2039.0, 50.0),
-    "H100":       (756.0,  2039.0, 50.0),   # fallback for H100 variants
-    "A100-SXM":   (312.0,  2039.0, 40.0),
-    "A100-PCIE":  (312.0,  1935.0, 40.0),
-    "A100":       (312.0,  2039.0, 40.0),   # fallback
-    "L40S":       (362.05, 864.0,  48.0),
-    "L4":         (121.0,  300.0,  48.0),
-    "A10":        (125.0,  600.0,  6.0),
-    "4090":       (330.0,  1008.0, 72.0),
-    "4080":       (305.0,  716.8,  64.0),
-    "3090":       (142.0,  936.2,  6.0),
-    "3080":       (119.5,  760.3,  5.0),
-    # AMD Instinct GPUs (specs sourced from GEAK knowledge-base)
-    "MI300X":     (1307.4, 5300.0, 256.0),
-    "MI325X":     (1307.4, 6000.0, 256.0),
-    "MI350X":     (2300.0, 8000.0, 256.0),
-    "MI355X":     (2300.0, 8000.0, 256.0),
+    # AMD Strix Halo (RDNA 3.5 APU, gfx1151, LPDDR5X unified memory)
+    "Strix Halo":  (50.0, 120.0, 6.0),
+    "gfx1151":     (50.0, 120.0, 6.0),  # fallback if name contains arch
 }
 
 # AMD GPU database keyed by gcnArchName prefix for ROCm detection.
 # ROCm may report an empty device name; gcnArchName is always available.
 _KNOWN_AMD_GPUS: Dict[str, Tuple[str, float, float, float]] = {
     # gcnArchName prefix -> (display_name, peak_fp16_tflops, peak_bw_gb_s, l2_mb)
-    "gfx942": ("AMD Instinct MI300X", 1307.4, 5300.0, 256.0),
-    "gfx950": ("AMD Instinct MI350X", 2300.0, 8000.0, 256.0),
+    "gfx1151": ("AMD Strix Halo", 50.0, 120.0, 6.0),
 }
 
 

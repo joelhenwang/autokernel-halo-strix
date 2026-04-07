@@ -1,35 +1,31 @@
 """
-AutoKernel -- CUDA C++ Layer Normalization kernel.
+AutoKernel -- HIP C++ Layer Normalization kernel.
 
-Current kernel: LayerNorm with Welford's online algorithm and warp shuffle reductions.
+Current kernel: LayerNorm with Welford's online algorithm and wavefront shuffle reductions.
 Target metric: throughput (higher is better)
 Secondary: correctness must ALWAYS pass
 
 Features:
   - Welford's online algorithm for numerically stable single-pass mean/variance
-  - Warp shuffle (__shfl_down_sync) reductions for partial statistics merging
-  - Block-level cooperative reduction via shared memory across warps
+  - Wavefront shuffle (__shfl_down) reductions for partial statistics merging
+  - Block-level cooperative reduction via shared memory across wavefronts
   - Vectorized float4 global memory loads for maximum bandwidth
   - Fused scale+bias epilogue with rsqrtf fast inverse square root
   - One block per row for full row-parallel processing
-
-The agent can change anything in this file:
-  - Block sizes, warp counts, vectorization width
-  - Reduction strategy, shared memory layout
-  - Precision handling, epilogue fusion
-  - Any CUDA intrinsic or PTX instruction
 """
 
 KERNEL_TYPE = "layernorm"
-BACKEND = "cuda"
+BACKEND = "hip"
 
 import torch
-from kernels.cuda._compile import compile_cuda
+from kernels.hip._compile import compile_hip
 
-CUDA_SRC = r"""
+HIP_SRC = r"""
 #include <torch/extension.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
+
+constexpr int WARP_SIZE = 32;  // RDNA wave32
 
 // -----------------------------------------------------------------------
 // Welford's online algorithm helpers
@@ -41,7 +37,6 @@ struct WelfordState {
     float count;
 };
 
-// Merge two Welford partial aggregates
 __device__ __forceinline__ WelfordState welford_merge(
     WelfordState a, WelfordState b
 ) {
@@ -62,7 +57,6 @@ __device__ __forceinline__ WelfordState welford_merge(
     return out;
 }
 
-// Update Welford state with a single new observation
 __device__ __forceinline__ WelfordState welford_update(
     WelfordState state, float val
 ) {
@@ -75,16 +69,16 @@ __device__ __forceinline__ WelfordState welford_update(
 }
 
 // -----------------------------------------------------------------------
-// Warp-level Welford reduction via __shfl_down_sync
+// Wavefront-level Welford reduction via __shfl_down
 // -----------------------------------------------------------------------
 
 __device__ __forceinline__ WelfordState welford_warp_reduce(WelfordState state) {
     #pragma unroll
-    for (int offset = 16; offset >= 1; offset >>= 1) {
+    for (int offset = WARP_SIZE / 2; offset >= 1; offset >>= 1) {
         WelfordState other;
-        other.mean  = __shfl_down_sync(0xffffffff, state.mean,  offset);
-        other.m2    = __shfl_down_sync(0xffffffff, state.m2,    offset);
-        other.count = __shfl_down_sync(0xffffffff, state.count, offset);
+        other.mean  = __shfl_down(state.mean,  offset);
+        other.m2    = __shfl_down(state.m2,    offset);
+        other.count = __shfl_down(state.count, offset);
         state = welford_merge(state, other);
     }
     return state;
@@ -94,7 +88,6 @@ __device__ __forceinline__ WelfordState welford_warp_reduce(WelfordState state) 
 // Block-level Welford reduction via shared memory
 // -----------------------------------------------------------------------
 
-// Maximum warps per block (1024 threads / 32 = 32 warps max)
 constexpr int MAX_WARPS = 32;
 
 __device__ WelfordState welford_block_reduce(
@@ -106,10 +99,8 @@ __device__ WelfordState welford_block_reduce(
     int lane_id,
     int num_warps
 ) {
-    // First reduce within each warp
     state = welford_warp_reduce(state);
 
-    // Lane 0 of each warp writes its partial result to shared memory
     if (lane_id == 0) {
         smem_mean[warp_id]  = state.mean;
         smem_m2[warp_id]    = state.m2;
@@ -117,7 +108,6 @@ __device__ WelfordState welford_block_reduce(
     }
     __syncthreads();
 
-    // First warp reads all partial results and reduces them
     if (warp_id == 0) {
         if (lane_id < num_warps) {
             state.mean  = smem_mean[lane_id];
@@ -136,10 +126,6 @@ __device__ WelfordState welford_block_reduce(
 
 // -----------------------------------------------------------------------
 // Main LayerNorm kernel
-//   - One block per row
-//   - Vectorized float4 loads where possible
-//   - Welford's algorithm for single-pass mean + variance
-//   - Fused scale + bias epilogue
 // -----------------------------------------------------------------------
 
 __global__ void __launch_bounds__(1024)
@@ -148,15 +134,14 @@ layernorm_kernel(
     const half* __restrict__ W,
     const half* __restrict__ B,
     half* __restrict__ Y,
-    int N          // number of columns (hidden dim)
+    int N
 ) {
-    // Each block handles one row
     const int row = blockIdx.x;
     const int tid = threadIdx.x;
     const int blockSize = blockDim.x;
-    const int warp_id = tid / 32;
-    const int lane_id = tid % 32;
-    const int num_warps = blockSize / 32;
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    const int num_warps = blockSize / WARP_SIZE;
 
     const half* row_in = X + row * N;
     half* row_out = Y + row * N;
@@ -168,18 +153,14 @@ layernorm_kernel(
     local_state.m2    = 0.0f;
     local_state.count = 0.0f;
 
-    // Vectorized float4 path: process 8 halfs (= 4 half2 = 1 float4) at a time
-    // float4 is 16 bytes = 8 half elements
     const int vec_size = 8;  // halfs per float4 load
     int n_vec = N / vec_size;
     int n_tail = N - n_vec * vec_size;
 
-    // Cast input row pointer to float4* for vectorized access
     const float4* row_in_vec = reinterpret_cast<const float4*>(row_in);
 
     for (int i = tid; i < n_vec; i += blockSize) {
         float4 v = row_in_vec[i];
-        // Reinterpret as 8 half values
         const half* hp = reinterpret_cast<const half*>(&v);
         #pragma unroll
         for (int j = 0; j < 8; j++) {
@@ -187,7 +168,6 @@ layernorm_kernel(
         }
     }
 
-    // Handle tail elements (non-vectorized)
     int tail_start = n_vec * vec_size;
     for (int i = tail_start + tid; i < N; i += blockSize) {
         local_state = welford_update(local_state, __half2float(row_in[i]));
@@ -205,7 +185,6 @@ layernorm_kernel(
         warp_id, lane_id, num_warps
     );
 
-    // Broadcast final mean and inv_std from lane 0 of warp 0
     __shared__ float s_mean;
     __shared__ float s_inv_std;
 
@@ -222,7 +201,6 @@ layernorm_kernel(
 
     // ---- Phase 3: Normalize with fused scale + bias (vectorized writes) ----
 
-    // Vectorized path for weight and bias
     const float4* W_vec = reinterpret_cast<const float4*>(W);
     const float4* B_vec = reinterpret_cast<const float4*>(B);
     float4* row_out_vec = reinterpret_cast<float4*>(row_out);
@@ -251,7 +229,6 @@ layernorm_kernel(
         row_out_vec[i] = out_vec;
     }
 
-    // Handle tail elements
     for (int i = tail_start + tid; i < N; i += blockSize) {
         float x_val = __half2float(row_in[i]);
         float w_val = __half2float(W[i]);
@@ -265,14 +242,14 @@ layernorm_kernel(
 // C++ launcher
 // -----------------------------------------------------------------------
 
-torch::Tensor layernorm_cuda(
+torch::Tensor layernorm_hip(
     torch::Tensor x,
     torch::Tensor weight,
     torch::Tensor bias
 ) {
-    TORCH_CHECK(x.is_cuda(), "x must be a CUDA tensor");
-    TORCH_CHECK(weight.is_cuda(), "weight must be a CUDA tensor");
-    TORCH_CHECK(bias.is_cuda(), "bias must be a CUDA tensor");
+    TORCH_CHECK(x.is_cuda(), "x must be a GPU tensor");
+    TORCH_CHECK(weight.is_cuda(), "weight must be a GPU tensor");
+    TORCH_CHECK(bias.is_cuda(), "bias must be a GPU tensor");
     TORCH_CHECK(x.dtype() == torch::kFloat16, "x must be float16");
     TORCH_CHECK(weight.dtype() == torch::kFloat16, "weight must be float16");
     TORCH_CHECK(bias.dtype() == torch::kFloat16, "bias must be float16");
@@ -286,8 +263,6 @@ torch::Tensor layernorm_cuda(
 
     auto y = torch::empty_like(x);
 
-    // Choose thread count: use enough threads to saturate vectorized loads
-    // Each thread handles ceil(dim / blockSize) elements
     int threads = 256;
     if (dim >= 2048) threads = 512;
     if (dim >= 8192) threads = 1024;
@@ -313,7 +288,7 @@ _module = None
 def _get_module():
     global _module
     if _module is None:
-        _module = compile_cuda(CUDA_SRC, "layernorm_cuda")
+        _module = compile_hip(HIP_SRC, "layernorm_hip")
     return _module
 
 
@@ -321,7 +296,6 @@ def kernel_fn(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torc
     """Entry point called by bench.py. Must match reference.layernorm_ref signature."""
     assert x.is_cuda
 
-    # Flatten to 2D for row-parallel processing
     orig_shape = x.shape
     if x.ndim == 1:
         x = x.unsqueeze(0)
@@ -332,7 +306,6 @@ def kernel_fn(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torc
     assert weight.shape[0] == n_cols
     assert bias.shape[0] == n_cols
 
-    # Handle non-fp16 inputs by casting to fp16 for the CUDA kernel
     orig_dtype = x.dtype
     if x.dtype != torch.float16:
         x = x.to(torch.float16)
@@ -342,9 +315,8 @@ def kernel_fn(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torc
         bias = bias.to(torch.float16)
 
     mod = _get_module()
-    y = mod.layernorm_cuda(x, weight, bias)
+    y = mod.layernorm_hip(x, weight, bias)
 
-    # Cast back to original dtype if needed
     if orig_dtype != torch.float16:
         y = y.to(orig_dtype)
 

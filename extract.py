@@ -7,7 +7,7 @@ Usage:
     uv run extract.py --top 5                  # extract only top-5 kernels
     uv run extract.py --kernel-type matmul     # extract only matmul kernels
     uv run extract.py --report path/to/report.json
-    uv run extract.py --backend cuda           # use CUDA C++ starter kernels instead of Triton
+    uv run extract.py --backend hip            # use HIP C++ starter kernels (default)
 """
 
 from __future__ import annotations
@@ -243,16 +243,12 @@ def get_default_shape(op_type: str) -> Dict[str, int]:
 # Kernel file generation
 # ---------------------------------------------------------------------------
 
-def read_starter_kernel(op_type: str, backend: str = "triton") -> Optional[str]:
+def read_starter_kernel(op_type: str, backend: str = "hip") -> Optional[str]:
     """Read the starter kernel file. Returns None if not found.
 
-    For backend='triton': reads from kernels/{op_type}.py
-    For backend='cuda':   reads from kernels/cuda/{op_type}.py
+    For backend='hip': reads from kernels/hip/{op_type}.py
     """
-    if backend == "cuda":
-        path = os.path.join(KERNELS_DIR, "cuda", f"{op_type}.py")
-    else:
-        path = os.path.join(KERNELS_DIR, f"{op_type}.py")
+    path = os.path.join(KERNELS_DIR, "hip", f"{op_type}.py")
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
@@ -295,7 +291,7 @@ def generate_kernel_file(
     model_name: str,
     gpu_time_ms: float,
     starter_code: str,
-    backend: str = "triton",
+    backend: str = "hip",
 ) -> str:
     """Generate the complete kernel file content for extraction."""
 
@@ -335,8 +331,7 @@ def generate_kernel_file(
 
     # KERNEL_TYPE and BACKEND
     lines.append(f'KERNEL_TYPE = "{op_type}"')
-    if backend == "cuda":
-        lines.append(f'BACKEND = "cuda"')
+    lines.append(f'BACKEND = "hip"')
     lines.append("")
 
     # Model-specific shapes
@@ -373,8 +368,8 @@ def generate_kernel_file(
     # Separator
     lines.append("")
     lines.append(f"# {'=' * 70}")
-    backend_label = "CUDA C++" if backend == "cuda" else "Triton"
-    backend_dir = f"kernels/cuda/{op_type}.py" if backend == "cuda" else f"kernels/{op_type}.py"
+    backend_label = "HIP C++"
+    backend_dir = f"kernels/hip/{op_type}.py"
     lines.append(f"# {backend_label} kernel code (from {backend_dir})")
     lines.append(f"# {'=' * 70}")
     lines.append("")
@@ -463,11 +458,11 @@ def extract_kernels(
     report_path: str,
     top_n: Optional[int] = None,
     kernel_type_filter: Optional[str] = None,
-    backend: str = "triton",
+    backend: str = "hip",
 ) -> None:
     """Main extraction pipeline."""
 
-    backend_label = "CUDA C++" if backend == "cuda" else "Triton"
+    backend_label = "HIP C++"
     print(f"=== AutoKernel Kernel Extractor ({backend_label}) ===")
     print()
 
@@ -531,7 +526,7 @@ def extract_kernels(
         # Read starter kernel
         starter_code = read_starter_kernel(op_type, backend=backend)
         if starter_code is None:
-            starter_dir = "kernels/cuda" if backend == "cuda" else "kernels"
+            starter_dir = "kernels/hip"
             print(f"  WARNING: No starter kernel found at {starter_dir}/{op_type}.py -- skipping.")
             skipped += 1
             continue
@@ -565,8 +560,7 @@ def extract_kernels(
         print(f"  [{position}/{total}] {op_type} (rank {rank}, {pct_total}%) "
               f"-> {output_relpath}")
         print(f"        Model shape: {shape_display}")
-        starter_dir = "kernels/cuda" if backend == "cuda" else "kernels"
-        print(f"        Based on: {starter_dir}/{op_type}.py")
+        print(f"        Based on: kernels/hip/{op_type}.py")
         print()
 
         extracted.append({
@@ -629,9 +623,9 @@ def main() -> None:
     parser.add_argument(
         "--backend",
         type=str,
-        choices=["triton", "cuda"],
-        default="triton",
-        help="Backend for starter kernels: 'triton' (default) or 'cuda' (native CUDA C++)",
+        choices=["hip"],
+        default="hip",
+        help="Backend for starter kernels: 'hip' (HIP C++ for AMD GPUs)",
     )
 
     args = parser.parse_args()

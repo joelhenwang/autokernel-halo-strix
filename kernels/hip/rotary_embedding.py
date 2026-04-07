@@ -1,5 +1,5 @@
 """
-AutoKernel -- CUDA C++ Rotary Embedding (RoPE) kernel.
+AutoKernel -- HIP C++ Rotary Embedding (RoPE) kernel.
 
 Current kernel: Interleaved sin/cos with precomputed frequency table.
 Target metric: throughput (higher is better)
@@ -13,28 +13,22 @@ Features:
 """
 
 KERNEL_TYPE = "rotary_embedding"
-BACKEND = "cuda"
+BACKEND = "hip"
 
 import torch
-from kernels.cuda._compile import compile_cuda
+from kernels.hip._compile import compile_hip
 
-CUDA_SRC = r"""
+HIP_SRC = r"""
 #include <torch/extension.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
 #include <math.h>
 
 constexpr int BLOCK_SIZE = 256;
 constexpr float BASE_FREQ = 10000.0f;
 
-// Apply rotary embedding to x in-place
+// Apply rotary embedding to x
 // x shape: [B, H, N, D] where D is head_dim (must be even)
-// For position pos and dimension pair (2i, 2i+1):
-//   freq = 1 / (base ^ (2i / D))
-//   theta = pos * freq
-//   x_rot[2i]   = x[2i] * cos(theta) - x[2i+1] * sin(theta)
-//   x_rot[2i+1] = x[2i] * sin(theta) + x[2i+1] * cos(theta)
-
 __global__ void rotary_embedding_kernel(
     const half* __restrict__ x,
     half* __restrict__ output,
@@ -46,7 +40,6 @@ __global__ void rotary_embedding_kernel(
     const int half_D = D / 2;
 
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < total; idx += gridDim.x * blockDim.x) {
-        // Decode flat index -> (b, h, n, d_pair)
         int d_pair = idx % half_D;
         int remainder = idx / half_D;
         int n = remainder % N;
@@ -54,17 +47,14 @@ __global__ void rotary_embedding_kernel(
         int h = remainder % H;
         int b = remainder / H;
 
-        // Read the pair (x0, x1)
         int base_idx = ((b * H + h) * N + n) * D + d_pair * 2;
         float x0 = __half2float(x[base_idx]);
         float x1 = __half2float(x[base_idx + 1]);
 
-        // Read cos/sin from cache
         int cache_idx = n * half_D + d_pair;
         float cos_val = __half2float(cos_cache[cache_idx]);
         float sin_val = __half2float(sin_cache[cache_idx]);
 
-        // Apply rotation
         float out0 = x0 * cos_val - x1 * sin_val;
         float out1 = x0 * sin_val + x1 * cos_val;
 
@@ -97,8 +87,8 @@ __global__ void precompute_freqs_kernel(
     }
 }
 
-torch::Tensor rotary_embedding_cuda(torch::Tensor x, torch::Tensor cos_cache, torch::Tensor sin_cache) {
-    TORCH_CHECK(x.is_cuda(), "x must be CUDA");
+torch::Tensor rotary_embedding_hip(torch::Tensor x, torch::Tensor cos_cache, torch::Tensor sin_cache) {
+    TORCH_CHECK(x.is_cuda(), "x must be on GPU");
     TORCH_CHECK(x.dim() == 4, "x must be [B, H, N, D]");
 
     int B = x.size(0);
@@ -124,7 +114,7 @@ torch::Tensor rotary_embedding_cuda(torch::Tensor x, torch::Tensor cos_cache, to
     return output;
 }
 
-std::vector<torch::Tensor> precompute_freqs_cuda(int N, int D, torch::Device device) {
+std::vector<torch::Tensor> precompute_freqs_hip(int N, int D, torch::Device device) {
     auto options = torch::TensorOptions().dtype(torch::kFloat16).device(device);
     auto cos_cache = torch::empty({N, D / 2}, options);
     auto sin_cache = torch::empty({N, D / 2}, options);
@@ -150,7 +140,7 @@ _freq_cache = {}  # (N, D) -> (cos_cache, sin_cache)
 def _get_module():
     global _module
     if _module is None:
-        _module = compile_cuda(CUDA_SRC, "rotary_embedding_cuda")
+        _module = compile_hip(HIP_SRC, "rotary_embedding_hip")
     return _module
 
 
@@ -158,7 +148,6 @@ def _get_freqs(N: int, D: int, device: torch.device):
     """Get or compute cached cos/sin frequency tables."""
     key = (N, D, str(device))
     if key not in _freq_cache:
-        # Compute on GPU using our kernel
         half_D = D // 2
         positions = torch.arange(N, device=device, dtype=torch.float32)
         dim_indices = torch.arange(half_D, device=device, dtype=torch.float32)
@@ -181,7 +170,7 @@ def kernel_fn(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Te
         sin = sin.to(torch.float16)
 
     mod = _get_module()
-    out = mod.rotary_embedding_cuda(x, cos, sin)
+    out = mod.rotary_embedding_hip(x, cos, sin)
 
     if orig_dtype != torch.float16:
         out = out.to(orig_dtype)

@@ -1,44 +1,37 @@
 """
-AutoKernel -- CUDA C++ RMSNorm kernel.
+AutoKernel -- HIP C++ RMSNorm kernel.
 
-Current kernel: Fused RMSNorm with warp-shuffle reduction and vectorized loads.
+Current kernel: Fused RMSNorm with wavefront-shuffle reduction and vectorized loads.
 Target metric: throughput (higher is better)
 Secondary: correctness must ALWAYS pass
 
 Features:
   - Single-pass RMS computation: rms = sqrt(mean(x^2) + eps)
-  - Warp shuffle cascade (__shfl_down_sync) for fast intra-warp sum reduction
-  - Block-level reduction via shared memory across warps
+  - Wavefront shuffle cascade (__shfl_down) for fast intra-wavefront sum reduction
+  - Block-level reduction via shared memory across wavefronts
   - rsqrtf() for fast inverse square root
   - Vectorized half2 loads for maximum memory bandwidth
   - Fused normalize + scale in one output pass
-
-The agent can change anything in this file:
-  - Block sizes, thread counts, vectorization width
-  - Reduction strategy, shared memory layout
-  - Any CUDA intrinsic or PTX instruction
 """
 
 KERNEL_TYPE = "rmsnorm"
-BACKEND = "cuda"
+BACKEND = "hip"
 
 import torch
-from kernels.cuda._compile import compile_cuda
+from kernels.hip._compile import compile_hip
 
-CUDA_SRC = r"""
+HIP_SRC = r"""
 #include <torch/extension.h>
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
-
-// One block per row. Each thread handles multiple elements along N.
-// Reduction: warp shuffle + shared memory across warps.
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
 
 constexpr float EPS = 1e-6f;
+constexpr int WARP_SIZE = 32;  // RDNA wave32
 
 __device__ __forceinline__ float warp_reduce_sum(float val) {
     #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        val += __shfl_down_sync(0xffffffff, val, offset);
+    for (int offset = WARP_SIZE / 2; offset > 0; offset >>= 1) {
+        val += __shfl_down(val, offset);
     }
     return val;
 }
@@ -49,15 +42,14 @@ __global__ void rmsnorm_kernel(
     half* __restrict__ OUT,
     int M, int N
 ) {
-    // One block per row
     const int row = blockIdx.x;
     if (row >= M) return;
 
     const int tid = threadIdx.x;
     const int blockSize = blockDim.x;
-    const int warp_id = tid / 32;
-    const int lane_id = tid % 32;
-    const int num_warps = blockSize / 32;
+    const int warp_id = tid / WARP_SIZE;
+    const int lane_id = tid % WARP_SIZE;
+    const int num_warps = blockSize / WARP_SIZE;
 
     const half* x_row = X + row * N;
     half* out_row = OUT + row * N;
@@ -65,7 +57,6 @@ __global__ void rmsnorm_kernel(
     // Phase 1: Compute sum of squares using vectorized loads
     float local_sum_sq = 0.0f;
 
-    // Vectorized path: use half2 loads when possible
     int idx = tid * 2;
     for (; idx + 1 < N; idx += blockSize * 2) {
         half2 val = *reinterpret_cast<const half2*>(x_row + idx);
@@ -73,31 +64,28 @@ __global__ void rmsnorm_kernel(
         float hi = __half2float(val.y);
         local_sum_sq += lo * lo + hi * hi;
     }
-    // Handle remainder (odd N or leftover element)
     if (idx < N) {
         float val = __half2float(x_row[idx]);
         local_sum_sq += val * val;
     }
 
-    // Warp-level reduction
+    // Wavefront-level reduction
     local_sum_sq = warp_reduce_sum(local_sum_sq);
 
     // Block-level reduction via shared memory
-    __shared__ float shared_sums[32];  // max 32 warps per block (1024 threads)
+    __shared__ float shared_sums[32];
 
     if (lane_id == 0) {
         shared_sums[warp_id] = local_sum_sq;
     }
     __syncthreads();
 
-    // First warp reduces across all warps
     float block_sum = 0.0f;
     if (warp_id == 0) {
         block_sum = (lane_id < num_warps) ? shared_sums[lane_id] : 0.0f;
         block_sum = warp_reduce_sum(block_sum);
     }
 
-    // Broadcast the final rms_inv to all threads via shared memory
     __shared__ float s_rms_inv;
     if (tid == 0) {
         float mean_sq = block_sum / static_cast<float>(N);
@@ -121,7 +109,6 @@ __global__ void rmsnorm_kernel(
         result.y = __float2half(x1);
         *reinterpret_cast<half2*>(out_row + idx) = result;
     }
-    // Handle remainder
     if (idx < N) {
         float xv = __half2float(x_row[idx]);
         float wv = __half2float(W[idx]);
@@ -129,9 +116,9 @@ __global__ void rmsnorm_kernel(
     }
 }
 
-torch::Tensor rmsnorm_cuda(torch::Tensor x, torch::Tensor weight) {
-    TORCH_CHECK(x.is_cuda(), "x must be a CUDA tensor");
-    TORCH_CHECK(weight.is_cuda(), "weight must be a CUDA tensor");
+torch::Tensor rmsnorm_hip(torch::Tensor x, torch::Tensor weight) {
+    TORCH_CHECK(x.is_cuda(), "x must be a GPU tensor");
+    TORCH_CHECK(weight.is_cuda(), "weight must be a GPU tensor");
     TORCH_CHECK(x.dtype() == torch::kFloat16, "x must be float16");
     TORCH_CHECK(weight.dtype() == torch::kFloat16, "weight must be float16");
 
@@ -140,8 +127,6 @@ torch::Tensor rmsnorm_cuda(torch::Tensor x, torch::Tensor weight) {
 
     auto out = torch::empty_like(x);
 
-    // Choose block size: enough threads to cover N with vectorized loads
-    // Each thread handles 2 elements, so we need N/2 threads minimum, up to 1024
     int threads = min(1024, max(32, ((N + 1) / 2 + 31) / 32 * 32));
 
     dim3 grid(M);
@@ -164,7 +149,7 @@ _module = None
 def _get_module():
     global _module
     if _module is None:
-        _module = compile_cuda(CUDA_SRC, "rmsnorm_cuda")
+        _module = compile_hip(HIP_SRC, "rmsnorm_hip")
     return _module
 
 
@@ -172,7 +157,6 @@ def kernel_fn(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     """Entry point called by bench.py. Must match reference.rmsnorm_ref signature."""
     assert x.is_cuda and weight.is_cuda
 
-    # Handle non-fp16 inputs by casting
     orig_dtype = x.dtype
     if x.dtype != torch.float16:
         x = x.to(torch.float16)
@@ -180,9 +164,8 @@ def kernel_fn(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
         weight = weight.to(torch.float16)
 
     mod = _get_module()
-    out = mod.rmsnorm_cuda(x, weight)
+    out = mod.rmsnorm_hip(x, weight)
 
-    # Cast back if needed
     if orig_dtype != torch.float16:
         out = out.to(orig_dtype)
 
