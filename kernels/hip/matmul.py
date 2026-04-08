@@ -219,6 +219,10 @@ def kernel_fn(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     """Entry point called by bench.py. Must match reference.matmul_ref signature."""
     assert A.is_cuda and B.is_cuda
 
+    # FP32 path: fall back to PyTorch (our HIP kernel is FP16-only)
+    if A.dtype == torch.float32:
+        return torch.mm(A, B)
+
     orig_dtype = A.dtype
     if A.dtype != torch.float16:
         A = A.to(torch.float16)

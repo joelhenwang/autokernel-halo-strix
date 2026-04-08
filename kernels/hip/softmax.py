@@ -234,6 +234,10 @@ def kernel_fn(x: torch.Tensor) -> torch.Tensor:
     orig_shape = x.shape
     orig_dtype = x.dtype
 
+    # FP32 path: fall back to PyTorch (our HIP kernel is FP16-only)
+    if orig_dtype == torch.float32:
+        return torch.softmax(x, dim=-1)
+
     x = x.contiguous()
 
     if x.ndim == 1:

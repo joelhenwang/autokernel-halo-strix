@@ -120,6 +120,10 @@ def kernel_fn(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
 
     orig_dtype = x.dtype
 
+    # FP32 path: fall back to PyTorch (our HIP kernel is FP16-only)
+    if orig_dtype == torch.float32:
+        return x.sum(dim=dim)
+
     # For the common case of reducing the last dimension on a 2D tensor
     if dim == x.ndim - 1:
         if x.dtype != torch.float16:

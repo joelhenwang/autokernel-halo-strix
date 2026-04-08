@@ -157,6 +157,11 @@ def kernel_fn(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     """Entry point called by bench.py. Must match reference.rmsnorm_ref signature."""
     assert x.is_cuda and weight.is_cuda
 
+    # FP32 path: fall back to PyTorch (our HIP kernel is FP16-only)
+    if x.dtype == torch.float32:
+        rms = (x.pow(2).mean(-1, keepdim=True) + 1e-6).rsqrt()
+        return x * rms * weight
+
     orig_dtype = x.dtype
     if x.dtype != torch.float16:
         x = x.to(torch.float16)

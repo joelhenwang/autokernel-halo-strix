@@ -244,6 +244,10 @@ def kernel_fn(
     if sm_scale is None:
         sm_scale = Q.shape[-1] ** -0.5
 
+    # FP32 path: fall back to PyTorch SDPA (our HIP kernel is FP16-only)
+    if Q.dtype == torch.float32:
+        return torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=causal)
+
     orig_dtype = Q.dtype
     if Q.dtype != torch.float16:
         Q = Q.to(torch.float16)

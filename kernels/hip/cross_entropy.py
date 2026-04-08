@@ -147,6 +147,10 @@ def kernel_fn(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """Entry point called by bench.py. Must match reference.cross_entropy_ref signature."""
     assert logits.is_cuda and targets.is_cuda
 
+    # FP32 path: fall back to PyTorch (our HIP kernel is FP16-only)
+    if logits.dtype == torch.float32:
+        return torch.nn.functional.cross_entropy(logits, targets)
+
     if logits.dtype != torch.float16:
         logits = logits.to(torch.float16)
 
