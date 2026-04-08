@@ -27,6 +27,7 @@ import os
 import sys
 import time
 import traceback
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -507,6 +508,71 @@ class _RMSNormWrapper(nn.Module):
         return out
 
 
+class _SiluGateMulWrapper(nn.Module):
+    """Wraps SwiGLU FeedForward modules (with w1/w2/w3) to use silu_gate_mul kernel."""
+
+    def __init__(self, original: nn.Module, kernel_fn: Callable):
+        super().__init__()
+        self.w1 = original.w1   # gate projection
+        self.w2 = original.w2   # down projection
+        self.w3 = original.w3   # up projection
+        self.kernel_fn = kernel_fn
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        gate = self.w1(x)
+        up = self.w3(x)
+        activated = self.kernel_fn(gate, up)  # silu(gate) * up
+        return self.w2(activated)
+
+
+class _RotaryAttentionWrapper(nn.Module):
+    """Wraps LLaMA-style Attention modules to use rotary_embedding kernel."""
+
+    def __init__(self, original: nn.Module, kernel_fn: Callable,
+                 freqs_cis_complex: Optional[torch.Tensor] = None):
+        super().__init__()
+        self.kernel_fn = kernel_fn
+        # Copy attributes from original Attention
+        for attr in ("n_heads", "n_kv_heads", "head_dim", "n_rep", "wq", "wk", "wv", "wo"):
+            if hasattr(original, attr):
+                setattr(self, attr, getattr(original, attr))
+        # Store precomputed cos/sin from original complex freqs_cis
+        # (model.to(dtype=float16) casts complex64 buffers to real, losing imag)
+        if freqs_cis_complex is not None and freqs_cis_complex.is_complex():
+            self.register_buffer("_cos", freqs_cis_complex.real.clone(), persistent=False)
+            self.register_buffer("_sin", freqs_cis_complex.imag.clone(), persistent=False)
+        else:
+            self._cos = None
+            self._sin = None
+
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        B, T, _ = x.shape
+        q = self.wq(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)
+        k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
+        v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
+
+        # Extract cos/sin — use precomputed if freqs_cis was cast to real by model.to(dtype)
+        if freqs_cis.is_complex():
+            cos = freqs_cis[:T].real.to(x.dtype)
+            sin = freqs_cis[:T].imag.to(x.dtype)
+        elif self._cos is not None:
+            cos = self._cos[:T].to(x.dtype)
+            sin = self._sin[:T].to(x.dtype)
+        else:
+            raise RuntimeError("freqs_cis is not complex and no precomputed cos/sin available")
+
+        q = self.kernel_fn(q.contiguous(), cos, sin)
+        k = self.kernel_fn(k.contiguous(), cos, sin)
+
+        # GQA key/value repeat
+        if self.n_rep > 1:
+            k = k.repeat_interleave(self.n_rep, dim=1)
+            v = v.repeat_interleave(self.n_rep, dim=1)
+
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
+
+
 class OptimizedModelContext:
     """
     Context manager that patches a model's submodules to use optimized HIP C++ kernels.
@@ -566,9 +632,17 @@ class OptimizedModelContext:
             count = self._replace_layernorm_modules(repl)
         elif repl.kernel_type == "rmsnorm":
             count = self._replace_rmsnorm_modules(repl)
+        elif repl.kernel_type == "silu_gate_mul":
+            count = self._replace_swiglu_modules(repl)
+        elif repl.kernel_type == "rotary_embedding":
+            count = self._replace_rotary_in_attention(repl)
+        elif repl.kernel_type == "fused_residual_add_rmsnorm":
+            print(f"  NOTE: fused_residual_add_rmsnorm cannot be applied via module swap "
+                  f"(kernel returns normalized only, not pre-norm hidden for next residual). "
+                  f"Use standalone 'rmsnorm' instead.")
         else:
             print(f"  NOTE: No replacement strategy for kernel type '{repl.kernel_type}'. "
-                  f"Skipping. (Supported: matmul, layernorm, rmsnorm)")
+                  f"Skipping. (Supported: matmul, layernorm, rmsnorm, silu_gate_mul, rotary_embedding)")
 
         return count
 
@@ -628,6 +702,69 @@ class OptimizedModelContext:
             if is_rmsnorm:
                 self._original_modules[name] = module
                 wrapper = _RMSNormWrapper(module, repl.module_fn)
+                parts = name.split(".")
+                parent = self.model
+                for p in parts[:-1]:
+                    parent = getattr(parent, p)
+                setattr(parent, parts[-1], wrapper)
+                count += 1
+        return count
+
+    def _replace_swiglu_modules(self, repl: KernelReplacement) -> int:
+        """Replace SwiGLU FeedForward modules (w1/w2/w3 pattern) with silu_gate_mul kernel."""
+        count = 0
+        for name, module in list(self.model.named_modules()):
+            has_swiglu = (
+                hasattr(module, "w1") and hasattr(module, "w2") and hasattr(module, "w3")
+                and isinstance(getattr(module, "w1", None), nn.Linear)
+            )
+            if has_swiglu:
+                self._original_modules[name] = module
+                wrapper = _SiluGateMulWrapper(module, repl.module_fn)
+                parts = name.split(".")
+                parent = self.model
+                for p in parts[:-1]:
+                    parent = getattr(parent, p)
+                setattr(parent, parts[-1], wrapper)
+                count += 1
+        return count
+
+    def _replace_rotary_in_attention(self, repl: KernelReplacement) -> int:
+        """Replace LLaMA-style Attention modules to use rotary_embedding kernel."""
+        # Find complex freqs_cis. model.to(dtype=float16) casts complex64 → real fp16.
+        freqs_cis_complex = None
+        for bname, buf in self.model.named_buffers():
+            if "freqs_cis" in bname:
+                if buf.is_complex():
+                    freqs_cis_complex = buf
+                else:
+                    # Buffer was cast to real — recompute from scratch
+                    head_dim = None
+                    for _, m in self.model.named_modules():
+                        if hasattr(m, "head_dim"):
+                            head_dim = m.head_dim
+                            break
+                    if head_dim:
+                        max_len = buf.shape[0]
+                        theta = 10000.0
+                        freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
+                        t = torch.arange(max_len, dtype=torch.float32)
+                        freqs_outer = torch.outer(t, freqs)
+                        freqs_cis_complex = torch.polar(
+                            torch.ones_like(freqs_outer), freqs_outer
+                        ).to(buf.device)
+                break
+
+        count = 0
+        for name, module in list(self.model.named_modules()):
+            has_attn = (
+                hasattr(module, "wq") and hasattr(module, "wk")
+                and hasattr(module, "wv") and hasattr(module, "wo")
+                and isinstance(getattr(module, "wq", None), nn.Linear)
+            )
+            if has_attn:
+                self._original_modules[name] = module
+                wrapper = _RotaryAttentionWrapper(module, repl.module_fn, freqs_cis_complex)
                 parts = name.split(".")
                 parent = self.model
                 for p in parts[:-1]:
@@ -971,6 +1108,198 @@ def _output_shape_str(output: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Incremental Verification
+# ---------------------------------------------------------------------------
+
+def incremental_verification(
+    model: nn.Module,
+    model_input: Any,
+    ref_tensor: torch.Tensor,
+    ref_latency: float,
+    replacements: List[KernelReplacement],
+    dtype: torch.dtype,
+    warmup: int,
+    timed: int,
+    custom_atol: Optional[float] = None,
+    custom_rtol: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Apply kernels one by one, measuring cumulative correctness and latency."""
+    log: List[Dict[str, Any]] = []
+    active: List[KernelReplacement] = []
+
+    print(f"\n{'='*60}")
+    print(f"  Incremental Verification ({len(replacements)} kernels)")
+    print(f"  Baseline latency: {ref_latency:.2f} ms")
+    print(f"{'='*60}\n")
+
+    for repl in replacements:
+        active.append(repl)
+        step = len(log) + 1
+        print(f"--- Step {step}: + {repl.kernel_type} ({len(active)} kernels active) ---")
+
+        entry: Dict[str, Any] = {
+            "step": step,
+            "kernel_added": repl.kernel_type,
+            "kernels_active": [r.kernel_type for r in active],
+        }
+
+        ctx = OptimizedModelContext(model, list(active))
+        try:
+            with ctx as patched_model:
+                if ctx.applied_summary:
+                    for line in ctx.applied_summary:
+                        print(f"  {line}")
+                opt_output, opt_latency = benchmark_model(
+                    patched_model, model_input, warmup, timed
+                )
+
+            opt_tensor = extract_tensor(opt_output)
+            comp = compare_outputs(ref_tensor, opt_tensor, dtype, custom_atol, custom_rtol)
+
+            entry["correctness"] = comp["correctness"]
+            entry["max_abs_error"] = comp.get("max_abs_error", 0.0)
+            entry["latency_ms"] = round(opt_latency, 3)
+            entry["speedup_vs_baseline"] = round(ref_latency / opt_latency, 4)
+
+            status = "PASS" if comp["correctness"] == "PASS" else "FAIL"
+            print(f"  correctness: {status} (max_err={comp.get('max_abs_error', 0):.2e})")
+            print(f"  latency: {opt_latency:.2f} ms (speedup: {ref_latency / opt_latency:.3f}x)")
+
+            if comp["correctness"] != "PASS":
+                active.pop()
+                entry["note"] = "removed (failed correctness)"
+                print(f"  -> Removed {repl.kernel_type} from active set")
+
+        except Exception as e:
+            active.pop()
+            entry["correctness"] = "ERROR"
+            entry["error"] = str(e)
+            print(f"  ERROR: {e}")
+            traceback.print_exc()
+            print(f"  -> Removed {repl.kernel_type} from active set")
+
+        log.append(entry)
+        print()
+
+    # Print summary table
+    print(f"{'='*60}")
+    print(f"  Incremental Verification Summary")
+    print(f"{'='*60}")
+    print(f"{'Step':<6}{'Kernel':<25}{'Status':<8}{'Latency':>10}{'Speedup':>10}")
+    print(f"{'-'*60}")
+    print(f"{'base':<6}{'(PyTorch)':<25}{'':<8}{ref_latency:>9.2f}{'1.000x':>10}")
+    for e in log:
+        status = e.get("correctness", "?")[:4]
+        lat = f"{e.get('latency_ms', 0):>9.2f}" if "latency_ms" in e else "     N/A"
+        spd = f"{e.get('speedup_vs_baseline', 0):.3f}x" if "speedup_vs_baseline" in e else "N/A"
+        note = " *removed" if "note" in e else ""
+        print(f"{e['step']:<6}{e['kernel_added']:<25}{status:<8}{lat}{spd:>10}{note}")
+    print()
+
+    return log
+
+
+def append_to_incremental_log(
+    log: List[Dict[str, Any]],
+    model_name: str,
+    input_shape: str,
+    dtype_str: str,
+    gpu_name: str,
+    baseline_latency: float,
+) -> str:
+    """Append an incremental verification run to the JSON log. Returns log path."""
+    log_path = os.path.join(WORKSPACE_DIR, "incremental_log.json")
+
+    if os.path.exists(log_path):
+        with open(log_path) as f:
+            data = json.load(f)
+    else:
+        data = {"model": model_name, "runs": []}
+
+    data["runs"].append({
+        "run_id": datetime.now(timezone.utc).isoformat(),
+        "model": model_name,
+        "input_shape": input_shape,
+        "dtype": dtype_str,
+        "gpu": gpu_name,
+        "baseline_latency_ms": baseline_latency,
+        "steps": log,
+    })
+
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "w") as f:
+        json.dump(data, f, indent=2)
+
+    return log_path
+
+
+def generate_progress_chart(log_path: Optional[str] = None) -> Optional[str]:
+    """Generate a progress chart from the incremental verification log."""
+    if log_path is None:
+        log_path = os.path.join(WORKSPACE_DIR, "incremental_log.json")
+
+    if not os.path.exists(log_path):
+        print(f"No incremental log found at {log_path}")
+        return None
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib not available — skipping chart generation")
+        return None
+
+    with open(log_path) as f:
+        data = json.load(f)
+
+    if not data.get("runs"):
+        print("No runs in log")
+        return None
+
+    # Use the latest run
+    run = data["runs"][-1]
+    baseline = run["baseline_latency_ms"]
+    steps = run["steps"]
+
+    labels = ["PyTorch\n(baseline)"]
+    latencies = [baseline]
+    speedups = [1.0]
+    colors = ["#888888"]
+
+    for s in steps:
+        labels.append(s["kernel_added"])
+        lat = s.get("latency_ms", baseline)
+        latencies.append(lat)
+        speedups.append(s.get("speedup_vs_baseline", 1.0))
+        colors.append("#4CAF50" if s.get("correctness") == "PASS" else "#F44336")
+
+    fig, ax1 = plt.subplots(figsize=(10, 5))
+
+    x = range(len(labels))
+    bars = ax1.bar(x, latencies, color=colors, alpha=0.8, width=0.6)
+    ax1.set_ylabel("Latency (ms)", fontsize=11)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels, rotation=30, ha="right", fontsize=9)
+
+    ax2 = ax1.twinx()
+    ax2.plot(x, speedups, "ko-", linewidth=2, markersize=6, label="Cumulative speedup")
+    ax2.set_ylabel("Speedup vs PyTorch", fontsize=11)
+    ax2.axhline(y=1.0, color="gray", linestyle="--", alpha=0.5)
+    ax2.legend(loc="upper left")
+
+    model_name = run.get("model", "Model")
+    ax1.set_title(f"AutoKernel Incremental Verification — {model_name}", fontsize=13)
+
+    plt.tight_layout()
+    chart_path = os.path.join(WORKSPACE_DIR, "verification_progress.png")
+    fig.savefig(chart_path, dpi=150)
+    plt.close(fig)
+    print(f"Chart saved: {chart_path}")
+    return chart_path
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1038,6 +1367,18 @@ def main() -> None:
         "--workspace", type=str, default=None,
         help="Override workspace directory (default: ./workspace)"
     )
+    parser.add_argument(
+        "--incremental", action="store_true",
+        help="Apply kernels one-by-one, measuring cumulative correctness and latency"
+    )
+    parser.add_argument(
+        "--kernel-order", type=str, default="rmsnorm,silu_gate_mul,rotary_embedding",
+        help="Comma-separated kernel application order for --incremental"
+    )
+    parser.add_argument(
+        "--chart", action="store_true",
+        help="Generate progress chart from historical incremental log"
+    )
 
     args = parser.parse_args()
 
@@ -1048,6 +1389,11 @@ def main() -> None:
 
     WARMUP_RUNS = args.warmup
     TIMED_RUNS = args.timed
+
+    # Chart-only mode: generate chart from existing log and exit
+    if args.chart:
+        generate_progress_chart()
+        return
 
     dtype = _parse_dtype(args.dtype)
     gpu_name = _get_gpu_name()
@@ -1137,9 +1483,37 @@ def main() -> None:
     print()
 
     # -----------------------------------------------------------------------
-    # Step 5: Optimized run
+    # Step 5: Incremental or full optimized run
     # -----------------------------------------------------------------------
-    print("Step 5: Optimized run (with Triton kernel replacements)...")
+    if args.incremental:
+        # Sort replacements by --kernel-order
+        order = [k.strip() for k in args.kernel_order.split(",")]
+        ordered: List[KernelReplacement] = []
+        for ktype in order:
+            for r in replacements:
+                if r.kernel_type == ktype:
+                    ordered.append(r)
+                    break
+        # Add any remaining not in the order
+        seen_types = {r.kernel_type for r in ordered}
+        for r in replacements:
+            if r.kernel_type not in seen_types:
+                ordered.append(r)
+
+        log = incremental_verification(
+            model, model_input, ref_tensor, ref_latency, ordered, dtype,
+            WARMUP_RUNS, TIMED_RUNS, args.atol, args.rtol,
+        )
+
+        model_name = args.class_name
+        log_path = append_to_incremental_log(
+            log, model_name, args.input_shape, args.dtype, gpu_name, ref_latency
+        )
+        print(f"Log saved: {log_path}")
+        chart = generate_progress_chart(log_path)
+        return
+
+    print("Step 5: Optimized run (with HIP kernel replacements)...")
     ctx = OptimizedModelContext(model, replacements)
     try:
         with ctx as patched_model:
