@@ -29,10 +29,9 @@ HIP_SRC = r"""
 #include <hip/hip_fp16.h>
 
 // Tile dimensions -- tuned for RDNA 3.5 (20 CUs, 64KB LDS per CU)
-// 64x64 output tile, K=16 for smaller LDS footprint = more occupancy
 constexpr int BLOCK_M = 64;
 constexpr int BLOCK_N = 64;
-constexpr int BLOCK_K = 16;
+constexpr int BLOCK_K = 32;
 
 // Thread block: 16x16 = 256 threads
 // Each thread computes a 4x4 tile of the output
@@ -76,14 +75,14 @@ matmul_kernel(
 
     const int k_tiles = (K + BLOCK_K - 1) / BLOCK_K;
 
-    // Each thread loads: 64*16/256 = 4 elements for A, 4 for B
+    // Each thread loads: 64*32/256 = 8 elements for A, 8 for B
     for (int kt = 0; kt < k_tiles; kt++) {
         int k_base = kt * BLOCK_K;
 
-        // Cooperative tile load: A
+        // Cooperative tile load: A (64*32 = 2048 halfs, 256 threads, 8 per thread)
         #pragma unroll
-        for (int i = 0; i < 4; i++) {
-            int idx = tid * 4 + i;
+        for (int i = 0; i < 8; i++) {
+            int idx = tid * 8 + i;
             int row = idx / BLOCK_K;
             int col = idx % BLOCK_K;
             int g_row = block_row + row;
@@ -91,10 +90,10 @@ matmul_kernel(
             smem_A[row][col] = (g_row < M && g_col < K) ? A[g_row * K + g_col] : __float2half(0.0f);
         }
 
-        // Cooperative tile load: B
+        // Cooperative tile load: B (32*64 = 2048 halfs, 8 per thread)
         #pragma unroll
-        for (int i = 0; i < 4; i++) {
-            int idx = tid * 4 + i;
+        for (int i = 0; i < 8; i++) {
+            int idx = tid * 8 + i;
             int row = idx / BLOCK_N;
             int col = idx % BLOCK_N;
             int g_row = k_base + row;
