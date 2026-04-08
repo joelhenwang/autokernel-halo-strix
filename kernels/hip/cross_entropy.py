@@ -25,7 +25,7 @@ HIP_SRC = r"""
 #include <hip/hip_fp16.h>
 #include <float.h>
 
-constexpr int BLOCK_SIZE = 256;
+constexpr int BLOCK_SIZE = 512;
 constexpr int WARP_SIZE = 32;  // RDNA wave32
 
 // Wavefront-level max reduction
@@ -62,47 +62,66 @@ __global__ void cross_entropy_kernel(
     const half* row = logits + b * vocab;
     const int target = targets[b];
 
-    // Phase 1: Find row max
+    // Fused online max + exp-sum in single pass (saves one full read of logits)
     float local_max = -FLT_MAX;
-    for (int v = tid; v < vocab; v += BLOCK_SIZE) {
-        local_max = fmaxf(local_max, __half2float(row[v]));
+    float local_sum = 0.0f;
+
+    // Vectorized half2 loads
+    const int n_pairs = vocab / 2;
+    const half2* row_v = reinterpret_cast<const half2*>(row);
+
+    for (int i = tid; i < n_pairs; i += BLOCK_SIZE) {
+        half2 v = row_v[i];
+        float lo = __half2float(v.x);
+        float hi = __half2float(v.y);
+        float m = fmaxf(lo, hi);
+        if (m > local_max) {
+            local_sum *= __expf(local_max - m);
+            local_max = m;
+        }
+        local_sum += __expf(lo - local_max) + __expf(hi - local_max);
+    }
+    // Odd element
+    if ((vocab & 1) && tid == 0) {
+        float val = __half2float(row[vocab - 1]);
+        if (val > local_max) {
+            local_sum *= __expf(local_max - val);
+            local_max = val;
+        }
+        local_sum += __expf(val - local_max);
     }
 
-    local_max = warp_reduce_max(local_max);
+    // Warp reduce max
+    float warp_max = warp_reduce_max(local_max);
+    local_sum *= __expf(local_max - warp_max);
+    float warp_sum = warp_reduce_sum(local_sum);
 
+    // Block reduce via shared memory
     __shared__ float smem_max[32];
-    if (lane_id == 0) smem_max[warp_id] = local_max;
+    __shared__ float smem_sum[32];
+
+    if (lane_id == 0) {
+        smem_max[warp_id] = warp_max;
+        smem_sum[warp_id] = warp_sum;
+    }
     __syncthreads();
 
     if (warp_id == 0) {
-        float val = (lane_id < num_warps) ? smem_max[lane_id] : -FLT_MAX;
-        val = warp_reduce_max(val);
-        if (lane_id == 0) smem_max[0] = val;
+        float m = (lane_id < num_warps) ? smem_max[lane_id] : -FLT_MAX;
+        float s = (lane_id < num_warps) ? smem_sum[lane_id] : 0.0f;
+        float block_max = warp_reduce_max(m);
+        s *= __expf(m - block_max);
+        float block_sum = warp_reduce_sum(s);
+        if (lane_id == 0) {
+            smem_max[0] = block_max;
+            smem_sum[0] = block_sum;
+        }
     }
     __syncthreads();
     float row_max = smem_max[0];
-
-    // Phase 2: Compute sum of exp(logits - max)
-    float local_sum = 0.0f;
-    for (int v = tid; v < vocab; v += BLOCK_SIZE) {
-        local_sum += __expf(__half2float(row[v]) - row_max);
-    }
-
-    local_sum = warp_reduce_sum(local_sum);
-
-    __shared__ float smem_sum[32];
-    if (lane_id == 0) smem_sum[warp_id] = local_sum;
-    __syncthreads();
-
-    if (warp_id == 0) {
-        float val = (lane_id < num_warps) ? smem_sum[lane_id] : 0.0f;
-        val = warp_reduce_sum(val);
-        if (lane_id == 0) smem_sum[0] = val;
-    }
-    __syncthreads();
     float row_sum = smem_sum[0];
 
-    // Phase 3: Compute loss = -logits[target] + max + log(sum)
+    // Compute loss = -logits[target] + max + log(sum)
     if (tid == 0) {
         float target_logit = __half2float(row[target]);
         losses[b] = -target_logit + row_max + __logf(row_sum);
