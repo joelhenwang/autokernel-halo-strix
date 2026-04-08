@@ -176,6 +176,104 @@ softmax_kernel_fp16(
 }
 
 // =========================================================================
+// Block-wide softmax for wide rows (n_cols >= 1024)
+// All 256 threads cooperate on one row via shared memory reductions
+// =========================================================================
+
+__global__ void __launch_bounds__(THREADS_PER_BLOCK)
+softmax_block_fp16(
+    const half* __restrict__ input,
+    half*       __restrict__ output,
+    int n_rows,
+    int n_cols
+) {
+    const int row = blockIdx.x;
+    if (row >= n_rows) return;
+
+    const int tid = threadIdx.x;
+    const int warp_id = tid / WARP_SIZE;
+    const int lane = tid % WARP_SIZE;
+
+    const half* row_in  = input  + (long long)row * n_cols;
+    half*       row_out = output + (long long)row * n_cols;
+
+    // Pass 1: online softmax across all threads
+    float thread_max = -FLT_MAX;
+    float thread_sum = 0.0f;
+
+    // Vectorized half2 loads
+    const int n_pairs = n_cols / 2;
+    const half2* row_in_v = reinterpret_cast<const half2*>(row_in);
+
+    for (int i = tid; i < n_pairs; i += THREADS_PER_BLOCK) {
+        half2 v = row_in_v[i];
+        float lo = __half2float(v.x);
+        float hi = __half2float(v.y);
+        float local_max = fmaxf(lo, hi);
+        if (local_max > thread_max) {
+            thread_sum *= __expf(thread_max - local_max);
+            thread_max = local_max;
+        }
+        thread_sum += __expf(lo - thread_max) + __expf(hi - thread_max);
+    }
+    // Odd tail
+    if ((n_cols & 1) && tid == 0) {
+        float val = __half2float(row_in[n_cols - 1]);
+        if (val > thread_max) {
+            thread_sum *= __expf(thread_max - val);
+            thread_max = val;
+        }
+        thread_sum += __expf(val - thread_max);
+    }
+
+    // Warp-level reduce max
+    float warp_max = warp_reduce_max(thread_max);
+    thread_sum *= __expf(thread_max - warp_max);
+    float warp_sum = warp_reduce_sum(thread_sum);
+
+    // Block-level reduce via shared memory
+    __shared__ float smem_max[WARPS_PER_BLOCK];
+    __shared__ float smem_sum[WARPS_PER_BLOCK];
+
+    if (lane == 0) {
+        smem_max[warp_id] = warp_max;
+        smem_sum[warp_id] = warp_sum;
+    }
+    __syncthreads();
+
+    float row_max, row_sum;
+    if (warp_id == 0) {
+        float m = (lane < WARPS_PER_BLOCK) ? smem_max[lane] : -FLT_MAX;
+        float s = (lane < WARPS_PER_BLOCK) ? smem_sum[lane] : 0.0f;
+        float block_max = warp_reduce_max(m);
+        s *= __expf(m - block_max);
+        float block_sum = warp_reduce_sum(s);
+        if (lane == 0) {
+            smem_max[0] = block_max;
+            smem_sum[0] = block_sum;
+        }
+    }
+    __syncthreads();
+    row_max = smem_max[0];
+    row_sum = smem_sum[0];
+
+    float inv_sum = __fdividef(1.0f, row_sum);
+
+    // Pass 2: write output
+    half2* row_out_v = reinterpret_cast<half2*>(row_out);
+    for (int i = tid; i < n_pairs; i += THREADS_PER_BLOCK) {
+        half2 v = row_in_v[i];
+        float lo = __expf(__half2float(v.x) - row_max) * inv_sum;
+        float hi = __expf(__half2float(v.y) - row_max) * inv_sum;
+        row_out_v[i] = __halves2half2(__float2half(lo), __float2half(hi));
+    }
+    if ((n_cols & 1) && tid == 0) {
+        float val = __expf(__half2float(row_in[n_cols - 1]) - row_max) * inv_sum;
+        row_out[n_cols - 1] = __float2half(val);
+    }
+}
+
+// =========================================================================
 // C++ launcher
 // =========================================================================
 
@@ -191,19 +289,32 @@ torch::Tensor softmax_hip(torch::Tensor input) {
 
     auto output = torch::empty_like(input);
 
-    const int total_warps_needed = n_rows;
-    const int blocks = (total_warps_needed + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
-    const int grid = min(blocks, 65535);
-
     if (input.dtype() == torch::kFloat16) {
-        softmax_kernel_fp16<<<grid, THREADS_PER_BLOCK>>>(
-            reinterpret_cast<const half*>(input.data_ptr<at::Half>()),
-            reinterpret_cast<half*>(output.data_ptr<at::Half>()),
-            n_rows, n_cols
-        );
+        if (n_cols >= 1024) {
+            // Wide rows: one block per row, all threads cooperate
+            int grid = min(n_rows, 65535);
+            softmax_block_fp16<<<grid, THREADS_PER_BLOCK>>>(
+                reinterpret_cast<const half*>(input.data_ptr<at::Half>()),
+                reinterpret_cast<half*>(output.data_ptr<at::Half>()),
+                n_rows, n_cols
+            );
+        } else {
+            // Narrow rows: one warp per row (original path)
+            const int total_warps_needed = n_rows;
+            const int blocks = (total_warps_needed + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
+            const int grid = min(blocks, 65535);
+            softmax_kernel_fp16<<<grid, THREADS_PER_BLOCK>>>(
+                reinterpret_cast<const half*>(input.data_ptr<at::Half>()),
+                reinterpret_cast<half*>(output.data_ptr<at::Half>()),
+                n_rows, n_cols
+            );
+        }
     } else if (input.dtype() == torch::kBFloat16) {
         auto input_f32  = input.to(torch::kFloat32);
         auto output_f32 = torch::empty_like(input_f32);
+        const int total_warps_needed = n_rows;
+        const int blocks = (total_warps_needed + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
+        const int grid = min(blocks, 65535);
         softmax_kernel<<<grid, THREADS_PER_BLOCK>>>(
             input_f32.data_ptr<float>(),
             output_f32.data_ptr<float>(),
@@ -211,6 +322,9 @@ torch::Tensor softmax_hip(torch::Tensor input) {
         );
         output = output_f32.to(torch::kBFloat16);
     } else {
+        const int total_warps_needed = n_rows;
+        const int blocks = (total_warps_needed + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
+        const int grid = min(blocks, 65535);
         softmax_kernel<<<grid, THREADS_PER_BLOCK>>>(
             input.data_ptr<float>(),
             output.data_ptr<float>(),
