@@ -179,7 +179,24 @@ def load_model(args) -> nn.Module:
     else:
         raise ValueError("Must specify either --model (file path) or --module (Python module)")
 
+    # Save complex buffers before dtype cast — model.to(dtype=float16) discards
+    # imaginary parts of complex64 buffers (e.g. freqs_cis in LLaMA).
+    _complex_buffers = {}
+    for name, buf in model.named_buffers():
+        if buf.is_complex():
+            _complex_buffers[name] = buf.clone()
+
     model = model.to(dtype=dtype)
+
+    # Restore complex buffers that were destroyed by dtype cast
+    if _complex_buffers:
+        for name, original_buf in _complex_buffers.items():
+            parts = name.split(".")
+            parent = model
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            # Re-register as buffer on the correct device
+            parent.register_buffer(parts[-1], original_buf, persistent=False)
 
     if torch.cuda.is_available():
         try:
@@ -552,12 +569,14 @@ class _RotaryAttentionWrapper(nn.Module):
         v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim).transpose(1, 2)
 
         # Extract cos/sin — use precomputed if freqs_cis was cast to real by model.to(dtype)
+        # Keep as fp32 to avoid precision loss — kernel_fn_fp32 needs fp32 cos/sin,
+        # kernel_fn (fp16 native) will cast internally if needed.
         if freqs_cis.is_complex():
-            cos = freqs_cis[:T].real.to(x.dtype)
-            sin = freqs_cis[:T].imag.to(x.dtype)
+            cos = freqs_cis[:T].real
+            sin = freqs_cis[:T].imag
         elif self._cos is not None:
-            cos = self._cos[:T].to(x.dtype)
-            sin = self._sin[:T].to(x.dtype)
+            cos = self._cos[:T]
+            sin = self._sin[:T]
         else:
             raise RuntimeError("freqs_cis is not complex and no precomputed cos/sin available")
 
@@ -573,6 +592,220 @@ class _RotaryAttentionWrapper(nn.Module):
         return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
 
 
+class _FusedQKVAttentionWrapper(nn.Module):
+    """Wraps LLaMA Attention to fuse wq/wk/wv into a single matmul.
+
+    rocBLAS achieves higher TFLOPS utilization on the larger concatenated GEMM
+    ([M,K]@[K, Nq+Nk+Nv]) vs three separate calls.  Optionally integrates
+    the rotary_embedding kernel so the standalone _RotaryAttentionWrapper is
+    not needed.
+    """
+
+    def __init__(
+        self,
+        original: nn.Module,
+        rotary_kernel_fn: Optional[Callable] = None,
+        freqs_cis_complex: Optional[torch.Tensor] = None,
+    ):
+        super().__init__()
+        # Build fused QKV weight: concatenate wq, wk, wv along output dim
+        q_out = original.wq.out_features
+        k_out = original.wk.out_features
+        v_out = original.wv.out_features
+        in_feat = original.wq.in_features
+
+        self.w_qkv = nn.Linear(in_feat, q_out + k_out + v_out, bias=False)
+        self.w_qkv.weight.data = torch.cat([
+            original.wq.weight.data,
+            original.wk.weight.data,
+            original.wv.weight.data,
+        ], dim=0)
+
+        self.wo = original.wo
+        self.n_heads = original.n_heads
+        self.n_kv_heads = original.n_kv_heads
+        self.head_dim = original.head_dim
+        self.n_rep = original.n_rep
+        self.q_size = q_out
+        self.k_size = k_out
+
+        # Optional rotary kernel integration
+        self.rotary_kernel_fn = rotary_kernel_fn
+        if freqs_cis_complex is not None and freqs_cis_complex.is_complex():
+            self.register_buffer("_cos", freqs_cis_complex.real.clone(), persistent=False)
+            self.register_buffer("_sin", freqs_cis_complex.imag.clone(), persistent=False)
+        else:
+            self._cos = None
+            self._sin = None
+
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        B, T, _ = x.shape
+
+        # Single fused matmul for Q, K, V
+        qkv = self.w_qkv(x)  # [B, T, q_size + k_size + v_size]
+
+        q = qkv[..., :self.q_size].view(B, T, self.n_heads, self.head_dim)
+        k = qkv[..., self.q_size:self.q_size + self.k_size].view(
+            B, T, self.n_kv_heads, self.head_dim
+        )
+        v = qkv[..., self.q_size + self.k_size:].view(
+            B, T, self.n_kv_heads, self.head_dim
+        )
+
+        # Apply RoPE
+        if self.rotary_kernel_fn is not None:
+            # Use HIP kernel (operates on [B, H, T, D])
+            q = q.transpose(1, 2).contiguous()
+            k = k.transpose(1, 2).contiguous()
+            v = v.transpose(1, 2)
+            if freqs_cis.is_complex():
+                cos = freqs_cis[:T].real
+                sin = freqs_cis[:T].imag
+            elif self._cos is not None:
+                cos = self._cos[:T]
+                sin = self._sin[:T]
+            else:
+                raise RuntimeError("freqs_cis is not complex and no precomputed cos/sin")
+            q = self.rotary_kernel_fn(q, cos, sin)
+            k = self.rotary_kernel_fn(k, cos, sin)
+        else:
+            # Use model's apply_rotary_emb (complex multiplication in fp32)
+            from models.llama_7b import apply_rotary_emb
+            q, k = apply_rotary_emb(q, k, freqs_cis)
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+
+        # GQA repeat
+        if self.n_rep > 1:
+            k = k.repeat_interleave(self.n_rep, dim=1)
+            v = v.repeat_interleave(self.n_rep, dim=1)
+
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
+
+
+class _FusedResidualRMSNormBlockWrapper(nn.Module):
+    """Wraps TransformerBlock to fuse residual_add + ffn_norm using dual-output kernel.
+
+    Replaces the pattern:
+        x_new = x + attention(attention_norm(x), freqs_cis)
+        x_out = x_new + feed_forward(ffn_norm(x_new))
+    With:
+        attn_out = attention(attention_norm(x), freqs_cis)
+        hidden, normed = kernel_fn_dual(attn_out, x, ffn_norm.weight)  # fused
+        x_out = hidden + feed_forward(normed)
+    """
+
+    def __init__(self, original_block: nn.Module, kernel_fn_dual: Callable):
+        super().__init__()
+        self.attention = original_block.attention
+        self.attention_norm = original_block.attention_norm
+        self.feed_forward = original_block.feed_forward
+        self.ffn_norm_weight = original_block.ffn_norm.weight
+        self.kernel_fn_dual = kernel_fn_dual
+
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        attn_out = self.attention(self.attention_norm(x), freqs_cis)
+        # Fuse: hidden = attn_out + x, normed = rmsnorm(hidden, ffn_norm.weight)
+        hidden, normed = self.kernel_fn_dual(
+            attn_out.view(-1, attn_out.shape[-1]),
+            x.view(-1, x.shape[-1]),
+            self.ffn_norm_weight,
+        )
+        hidden = hidden.view(attn_out.shape)
+        normed = normed.view(attn_out.shape)
+        ffn_out = self.feed_forward(normed)
+        return hidden + ffn_out
+
+
+def _patch_llama_for_compile(model: nn.Module) -> nn.Module:
+    """Patch LlamaModel forward methods to use registered custom ops.
+
+    Monkey-patches CLASS-level forward methods so torch.compile's tracer sees
+    custom op calls as opaque nodes.  Inductor fuses all PyTorch ops between them.
+    """
+    import kernels.hip._torch_ops  # noqa: F401 — triggers op registration
+    from models.llama_7b import RMSNorm, FeedForward, Attention, TransformerBlock
+
+    # 1. RMSNorm → autokernel::rmsnorm
+    def _rmsnorm_forward(self, x):
+        if x.dtype == torch.float16:
+            return torch.ops.autokernel.rmsnorm(
+                x.view(-1, x.shape[-1]), self.weight
+            ).view(x.shape)
+        norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return x * norm * self.weight
+
+    RMSNorm.forward = _rmsnorm_forward
+
+    # 2. FeedForward → autokernel::silu_gate_mul
+    def _ffn_forward(self, x):
+        gate = self.w1(x)
+        up = self.w3(x)
+        if gate.dtype == torch.float16:
+            activated = torch.ops.autokernel.silu_gate_mul(
+                gate.contiguous(), up.contiguous()
+            )
+        else:
+            activated = F.silu(gate) * up
+        return self.w2(activated)
+
+    FeedForward.forward = _ffn_forward
+
+    # 3. Attention → autokernel::rotary_emb_fp32
+    def _attn_forward(self, x, freqs_cis):
+        B, T, _ = x.shape
+        q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
+        k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
+        v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
+
+        if x.dtype == torch.float16 and freqs_cis.is_complex():
+            cos = freqs_cis[:T].real   # fp32
+            sin = freqs_cis[:T].imag   # fp32
+            q = torch.ops.autokernel.rotary_emb_fp32(
+                q.transpose(1, 2).contiguous(), cos, sin
+            )
+            k = torch.ops.autokernel.rotary_emb_fp32(
+                k.transpose(1, 2).contiguous(), cos, sin
+            )
+            v = v.transpose(1, 2)
+        else:
+            from models.llama_7b import apply_rotary_emb
+            q, k = apply_rotary_emb(q, k, freqs_cis)
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+
+        if self.n_rep > 1:
+            k = k.repeat_interleave(self.n_rep, dim=1)
+            v = v.repeat_interleave(self.n_rep, dim=1)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
+
+    Attention.forward = _attn_forward
+
+    # 4. TransformerBlock → autokernel::fused_res_rmsnorm
+    def _block_forward(self, x, freqs_cis):
+        attn_out = self.attention(self.attention_norm(x), freqs_cis)
+        if attn_out.dtype == torch.float16:
+            hidden, normed = torch.ops.autokernel.fused_res_rmsnorm(
+                attn_out.view(-1, attn_out.shape[-1]),
+                x.view(-1, x.shape[-1]),
+                self.ffn_norm.weight,
+            )
+            hidden = hidden.view(attn_out.shape)
+            normed = normed.view(attn_out.shape)
+        else:
+            hidden = x + attn_out
+            normed = self.ffn_norm(hidden)
+        return hidden + self.feed_forward(normed)
+
+    TransformerBlock.forward = _block_forward
+
+    return model
+
+
 class OptimizedModelContext:
     """
     Context manager that patches a model's submodules to use optimized HIP C++ kernels.
@@ -582,20 +815,42 @@ class OptimizedModelContext:
             output = patched_model(input)
     """
 
-    def __init__(self, model: nn.Module, replacements: List[KernelReplacement]):
+    def __init__(self, model: nn.Module, replacements: List[KernelReplacement],
+                 fused_qkv: bool = False,
+                 all_replacements: Optional[List[KernelReplacement]] = None):
         self.model = model
         self.replacements = replacements
+        self.fused_qkv = fused_qkv
+        # all_replacements: full list of discovered kernels (for finding rotary in fused QKV)
+        self._all_replacements = all_replacements or replacements
         self._original_modules: Dict[str, nn.Module] = {}
         self._applied: List[str] = []
 
     def __enter__(self) -> nn.Module:
+        # Apply fused QKV first (before kernel replacements) so that
+        # downstream wrappers (block fusion, silu_gate_mul) see the fused attention.
+        if self.fused_qkv:
+            count = self._replace_fused_qkv_attention()
+            if count > 0:
+                self._applied.append(f"  fused_qkv: {count} attention modules fused")
+
         for repl in self.replacements:
             try:
                 kernel_mod = load_kernel_module(repl.optimized_path)
-                if not hasattr(kernel_mod, "kernel_fn"):
-                    print(f"  WARNING: {repl.optimized_path} has no kernel_fn, skipping")
-                    continue
-                repl.module_fn = kernel_mod.kernel_fn
+                # Special dispatch: some kernel types need non-standard entry points
+                if repl.kernel_type == "fused_residual_add_rmsnorm":
+                    if hasattr(kernel_mod, "kernel_fn_dual"):
+                        repl.module_fn = kernel_mod.kernel_fn_dual
+                    else:
+                        print(f"  WARNING: {repl.optimized_path} has no kernel_fn_dual, skipping")
+                        continue
+                elif repl.kernel_type == "rotary_embedding" and hasattr(kernel_mod, "kernel_fn_fp32"):
+                    repl.module_fn = kernel_mod.kernel_fn_fp32
+                else:
+                    if not hasattr(kernel_mod, "kernel_fn"):
+                        print(f"  WARNING: {repl.optimized_path} has no kernel_fn, skipping")
+                        continue
+                    repl.module_fn = kernel_mod.kernel_fn
             except Exception as e:
                 print(f"  WARNING: Failed to load {repl.optimized_path}: {e}")
                 continue
@@ -635,14 +890,16 @@ class OptimizedModelContext:
         elif repl.kernel_type == "silu_gate_mul":
             count = self._replace_swiglu_modules(repl)
         elif repl.kernel_type == "rotary_embedding":
+            if self.fused_qkv:
+                # Rotary is already integrated into the fused QKV wrapper
+                return 0
             count = self._replace_rotary_in_attention(repl)
         elif repl.kernel_type == "fused_residual_add_rmsnorm":
-            print(f"  NOTE: fused_residual_add_rmsnorm cannot be applied via module swap "
-                  f"(kernel returns normalized only, not pre-norm hidden for next residual). "
-                  f"Use standalone 'rmsnorm' instead.")
+            count = self._replace_fused_residual_rmsnorm_blocks(repl)
         else:
             print(f"  NOTE: No replacement strategy for kernel type '{repl.kernel_type}'. "
-                  f"Skipping. (Supported: matmul, layernorm, rmsnorm, silu_gate_mul, rotary_embedding)")
+                  f"Skipping. (Supported: matmul, layernorm, rmsnorm, silu_gate_mul, "
+                  f"rotary_embedding, fused_residual_add_rmsnorm)")
 
         return count
 
@@ -765,6 +1022,77 @@ class OptimizedModelContext:
             if has_attn:
                 self._original_modules[name] = module
                 wrapper = _RotaryAttentionWrapper(module, repl.module_fn, freqs_cis_complex)
+                parts = name.split(".")
+                parent = self.model
+                for p in parts[:-1]:
+                    parent = getattr(parent, p)
+                setattr(parent, parts[-1], wrapper)
+                count += 1
+        return count
+
+    def _replace_fused_residual_rmsnorm_blocks(self, repl: KernelReplacement) -> int:
+        """Replace TransformerBlock modules to fuse residual_add + ffn_norm."""
+        count = 0
+        for name, module in list(self.model.named_modules()):
+            has_block = (
+                hasattr(module, "attention") and hasattr(module, "attention_norm")
+                and hasattr(module, "feed_forward") and hasattr(module, "ffn_norm")
+                and hasattr(getattr(module, "ffn_norm", None), "weight")
+            )
+            if has_block:
+                self._original_modules[name] = module
+                wrapper = _FusedResidualRMSNormBlockWrapper(module, repl.module_fn)
+                parts = name.split(".")
+                parent = self.model
+                for p in parts[:-1]:
+                    parent = getattr(parent, p)
+                setattr(parent, parts[-1], wrapper)
+                count += 1
+        return count
+
+    def _replace_fused_qkv_attention(self) -> int:
+        """Replace Attention modules with fused QKV projection wrapper."""
+        # Find rotary kernel — search ALL discovered replacements (not just active subset)
+        rotary_fn = None
+        for repl in self._all_replacements:
+            if repl.kernel_type == "rotary_embedding" and repl.module_fn is not None:
+                rotary_fn = repl.module_fn
+                break
+        # If rotary kernel not yet loaded, try to load it now
+        if rotary_fn is None:
+            for repl in self._all_replacements:
+                if repl.kernel_type == "rotary_embedding":
+                    try:
+                        kernel_mod = load_kernel_module(repl.optimized_path)
+                        if hasattr(kernel_mod, "kernel_fn_fp32"):
+                            rotary_fn = kernel_mod.kernel_fn_fp32
+                            repl.module_fn = rotary_fn
+                        elif hasattr(kernel_mod, "kernel_fn"):
+                            rotary_fn = kernel_mod.kernel_fn
+                            repl.module_fn = rotary_fn
+                    except Exception:
+                        pass
+                    break
+
+        # Find complex freqs_cis
+        freqs_cis_complex = None
+        for bname, buf in self.model.named_buffers():
+            if "freqs_cis" in bname and buf.is_complex():
+                freqs_cis_complex = buf
+                break
+
+        count = 0
+        for name, module in list(self.model.named_modules()):
+            has_attn = (
+                hasattr(module, "wq") and hasattr(module, "wk")
+                and hasattr(module, "wv") and hasattr(module, "wo")
+                and isinstance(getattr(module, "wq", None), nn.Linear)
+            )
+            if has_attn:
+                self._original_modules[name] = module
+                wrapper = _FusedQKVAttentionWrapper(
+                    module, rotary_fn, freqs_cis_complex
+                )
                 parts = name.split(".")
                 parent = self.model
                 for p in parts[:-1]:
@@ -1122,6 +1450,8 @@ def incremental_verification(
     timed: int,
     custom_atol: Optional[float] = None,
     custom_rtol: Optional[float] = None,
+    fused_qkv: bool = False,
+    all_replacements: Optional[List[KernelReplacement]] = None,
 ) -> List[Dict[str, Any]]:
     """Apply kernels one by one, measuring cumulative correctness and latency."""
     log: List[Dict[str, Any]] = []
@@ -1143,7 +1473,8 @@ def incremental_verification(
             "kernels_active": [r.kernel_type for r in active],
         }
 
-        ctx = OptimizedModelContext(model, list(active))
+        ctx = OptimizedModelContext(model, list(active), fused_qkv=fused_qkv,
+                                    all_replacements=all_replacements or replacements)
         try:
             with ctx as patched_model:
                 if ctx.applied_summary:
@@ -1300,6 +1631,171 @@ def generate_progress_chart(log_path: Optional[str] = None) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Decode Benchmark (autoregressive generation with KV-cache)
+# ---------------------------------------------------------------------------
+
+def decode_benchmark(
+    model: nn.Module,
+    input_ids: torch.Tensor,
+    n_decode_tokens: int = 32,
+    warmup: int = 3,
+    timed: int = 10,
+) -> Dict[str, Any]:
+    """Benchmark autoregressive token generation with KV-cache.
+
+    Implements a simple KV-cache loop: prefill the input sequence, then decode
+    one token at a time.  Returns timing statistics.
+    """
+    from models.llama_7b import apply_rotary_emb
+
+    B, T = input_ids.shape
+    device = input_ids.device
+
+    # Access model internals (works for LlamaModel / LlamaModel7B)
+    layers = model.layers
+    tok_emb = model.tok_embeddings
+    norm = model.norm
+    output_proj = model.output
+    freqs_cis = model.freqs_cis
+
+    def _prefill():
+        """Run prefill and return KV-cache + logits."""
+        h = tok_emb(input_ids)
+        kv_cache = []
+        for layer in layers:
+            # --- Attention with KV capture ---
+            attn = layer.attention
+            normed = layer.attention_norm(h)
+            B_, T_, _ = normed.shape
+            q = attn.wq(normed).view(B_, T_, attn.n_heads, attn.head_dim)
+            k = attn.wk(normed).view(B_, T_, attn.n_kv_heads, attn.head_dim)
+            v = attn.wv(normed).view(B_, T_, attn.n_kv_heads, attn.head_dim)
+            q, k = apply_rotary_emb(q, k, freqs_cis[:T_])
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+            if attn.n_rep > 1:
+                k_exp = k.repeat_interleave(attn.n_rep, dim=1)
+                v_exp = v.repeat_interleave(attn.n_rep, dim=1)
+            else:
+                k_exp, v_exp = k, v
+            y = F.scaled_dot_product_attention(q, k_exp, v_exp, is_causal=True)
+            h = h + attn.wo(y.transpose(1, 2).contiguous().view(B_, T_, -1))
+            kv_cache.append((k, v))  # store un-repeated KV
+
+            # --- FFN ---
+            h = h + layer.feed_forward(layer.ffn_norm(h))
+
+        logits = output_proj(norm(h))
+        return kv_cache, logits
+
+    def _decode_step(kv_cache, token_id, pos):
+        """Decode one token, update KV-cache in place, return logits."""
+        h = tok_emb(token_id)  # [1, 1, dim]
+        for i, layer in enumerate(layers):
+            attn = layer.attention
+            normed = layer.attention_norm(h)
+            q = attn.wq(normed).view(1, 1, attn.n_heads, attn.head_dim)
+            k_new = attn.wk(normed).view(1, 1, attn.n_kv_heads, attn.head_dim)
+            v_new = attn.wv(normed).view(1, 1, attn.n_kv_heads, attn.head_dim)
+            q, k_new = apply_rotary_emb(q, k_new, freqs_cis[pos:pos + 1])
+            q = q.transpose(1, 2)
+            k_new = k_new.transpose(1, 2)
+            v_new = v_new.transpose(1, 2)
+
+            # Append to cache
+            k_old, v_old = kv_cache[i]
+            k_cat = torch.cat([k_old, k_new], dim=2)
+            v_cat = torch.cat([v_old, v_new], dim=2)
+            kv_cache[i] = (k_cat, v_cat)
+
+            # Attention with full cache
+            if attn.n_rep > 1:
+                k_exp = k_cat.repeat_interleave(attn.n_rep, dim=1)
+                v_exp = v_cat.repeat_interleave(attn.n_rep, dim=1)
+            else:
+                k_exp, v_exp = k_cat, v_cat
+            y = F.scaled_dot_product_attention(q, k_exp, v_exp, is_causal=False)
+            h = h + attn.wo(y.transpose(1, 2).contiguous().view(1, 1, -1))
+
+            h = h + layer.feed_forward(layer.ffn_norm(h))
+
+        return output_proj(norm(h))
+
+    def _full_generation():
+        """Prefill + N decode steps.  Returns per-step decode times."""
+        kv_cache, logits = _prefill()
+        next_tok = logits[:, -1:].argmax(dim=-1)  # greedy
+        pos = T
+
+        decode_times = []
+        for _ in range(n_decode_tokens):
+            start_ev = torch.cuda.Event(enable_timing=True)
+            end_ev = torch.cuda.Event(enable_timing=True)
+            start_ev.record()
+            logits = _decode_step(kv_cache, next_tok, pos)
+            end_ev.record()
+            torch.cuda.synchronize()
+            decode_times.append(start_ev.elapsed_time(end_ev))
+            next_tok = logits[:, -1:].argmax(dim=-1)
+            pos += 1
+        return decode_times
+
+    # Warmup
+    print(f"  Decode benchmark: prefill {T} tokens, decode {n_decode_tokens} tokens")
+    print(f"  Warmup: {warmup} runs...", end="", flush=True)
+    with torch.no_grad():
+        for _ in range(warmup):
+            _full_generation()
+    print(" done")
+
+    # Timed runs
+    print(f"  Timed: {timed} runs...", end="", flush=True)
+    all_decode_times = []
+    with torch.no_grad():
+        for _ in range(timed):
+            dt = _full_generation()
+            all_decode_times.append(dt)
+    print(" done")
+
+    # Aggregate: median per-token latency
+    import numpy as np
+    all_times = np.array(all_decode_times)  # [timed, n_decode_tokens]
+    median_per_token = np.median(all_times, axis=0)  # [n_decode_tokens]
+    avg_decode_ms = float(np.median(median_per_token))
+    tokens_per_sec = 1000.0 / avg_decode_ms if avg_decode_ms > 0 else 0.0
+
+    # Also time prefill separately
+    prefill_times = []
+    with torch.no_grad():
+        for _ in range(timed):
+            s = torch.cuda.Event(enable_timing=True)
+            e = torch.cuda.Event(enable_timing=True)
+            s.record()
+            _prefill()
+            e.record()
+            torch.cuda.synchronize()
+            prefill_times.append(s.elapsed_time(e))
+    prefill_times.sort()
+    prefill_ms = prefill_times[len(prefill_times) // 2]
+
+    result = {
+        "prefill_tokens": T,
+        "decode_tokens": n_decode_tokens,
+        "prefill_ms": round(prefill_ms, 2),
+        "avg_decode_ms_per_token": round(avg_decode_ms, 3),
+        "tokens_per_sec": round(tokens_per_sec, 1),
+        "decode_latencies_ms": [round(float(x), 3) for x in median_per_token],
+    }
+
+    print(f"\n  Prefill ({T} tokens): {prefill_ms:.1f} ms")
+    print(f"  Decode ({n_decode_tokens} tokens): {avg_decode_ms:.2f} ms/token")
+    print(f"  Throughput: {tokens_per_sec:.1f} tokens/sec")
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1372,8 +1868,33 @@ def main() -> None:
         help="Apply kernels one-by-one, measuring cumulative correctness and latency"
     )
     parser.add_argument(
-        "--kernel-order", type=str, default="rmsnorm,silu_gate_mul,rotary_embedding",
+        "--kernel-order", type=str, default="fused_residual_add_rmsnorm,rmsnorm,silu_gate_mul,rotary_embedding",
         help="Comma-separated kernel application order for --incremental"
+    )
+    parser.add_argument(
+        "--fused-qkv", action="store_true",
+        help="Fuse wq/wk/wv into single matmul (rocBLAS utilization optimization)"
+    )
+    parser.add_argument(
+        "--torch-compile", action="store_true",
+        help="Apply torch.compile(backend='inductor') before benchmarking"
+    )
+    parser.add_argument(
+        "--compile-with-kernels", action="store_true",
+        help="Register HIP kernels as custom ops + torch.compile (combines Inductor fusion with our kernels)"
+    )
+    parser.add_argument(
+        "--compile-mode", type=str, default="default",
+        choices=["default", "reduce-overhead", "max-autotune"],
+        help="torch.compile mode when using --torch-compile or --compile-with-kernels"
+    )
+    parser.add_argument(
+        "--decode-benchmark", action="store_true",
+        help="Benchmark autoregressive decode (prefill + N token generation with KV-cache)"
+    )
+    parser.add_argument(
+        "--decode-tokens", type=int, default=32,
+        help="Number of tokens to generate in decode benchmark (default: 32)"
     )
     parser.add_argument(
         "--chart", action="store_true",
@@ -1459,6 +1980,73 @@ def main() -> None:
     print()
 
     # -----------------------------------------------------------------------
+    # Step 3.5: Decode benchmark mode (early exit)
+    # -----------------------------------------------------------------------
+    if getattr(args, "decode_benchmark", False):
+        print("=" * 60)
+        print("  Decode Benchmark (autoregressive generation with KV-cache)")
+        print("=" * 60)
+        n_tokens = getattr(args, "decode_tokens", 32)
+        try:
+            model.eval()
+            # Extract input_ids tensor
+            if isinstance(model_input, dict):
+                _ids = model_input.get("input_ids", next(iter(model_input.values())))
+            else:
+                _ids = model_input
+            result = decode_benchmark(
+                model, _ids, n_decode_tokens=n_tokens,
+                warmup=3, timed=5,
+            )
+            # Save result
+            result_path = os.path.join(WORKSPACE_DIR, "decode_benchmark.json")
+            os.makedirs(WORKSPACE_DIR, exist_ok=True)
+            with open(result_path, "w") as f:
+                json.dump(result, f, indent=2)
+            print(f"\n  Results saved: {result_path}")
+        except Exception as e:
+            print(f"\nERROR: Decode benchmark failed: {e}")
+            traceback.print_exc()
+            sys.exit(1)
+        return
+
+    # -----------------------------------------------------------------------
+    # Step 3.5b: Optional torch.compile
+    # -----------------------------------------------------------------------
+    if getattr(args, "torch_compile", False):
+        print("Step 3.5: Applying torch.compile(backend='inductor')...")
+        try:
+            # Fix: project's profile.py shadows stdlib profile module used by cProfile.
+            # Remove project root from sys.path during torch.compile import/call.
+            import sys as _sys
+            _cwd = os.getcwd()
+            _cwd_was_in_path = _cwd in _sys.path
+            if _cwd_was_in_path:
+                while _cwd in _sys.path:
+                    _sys.path.remove(_cwd)
+            # Also clear cached project profile module if it shadows stdlib
+            if "profile" in _sys.modules:
+                _pm = _sys.modules["profile"]
+                if hasattr(_pm, "__file__") and _pm.__file__ and _cwd in str(_pm.__file__):
+                    del _sys.modules["profile"]
+                    if "cProfile" in _sys.modules:
+                        del _sys.modules["cProfile"]
+
+            model = torch.compile(model, backend="inductor")
+            # Trigger compilation with a warmup forward
+            with torch.no_grad():
+                _ = model(model_input) if isinstance(model_input, torch.Tensor) else model(**model_input)
+            torch.cuda.synchronize()
+            print("  torch.compile: OK (graph compiled)")
+        except Exception as e:
+            print(f"  WARNING: torch.compile failed: {e}")
+            print("  Continuing without compilation...")
+        finally:
+            if _cwd_was_in_path and _cwd not in _sys.path:
+                _sys.path.insert(0, _cwd)
+        print()
+
+    # -----------------------------------------------------------------------
     # Step 4: Reference run
     # -----------------------------------------------------------------------
     print("Step 4: Reference run (original PyTorch ops)...")
@@ -1483,7 +2071,71 @@ def main() -> None:
     print()
 
     # -----------------------------------------------------------------------
-    # Step 5: Incremental or full optimized run
+    # Step 5: compile-with-kernels mode (early exit)
+    # -----------------------------------------------------------------------
+    if getattr(args, "compile_with_kernels", False):
+        print("Step 5: Applying custom ops + torch.compile...")
+        try:
+            # Patch model forward methods BEFORE removing CWD from sys.path
+            # (kernels.hip._torch_ops needs to be importable)
+            model = _patch_llama_for_compile(model)
+
+            # Now fix profile.py conflict for torch.compile
+            _cwd = os.getcwd()
+            _cwd_in = _cwd in sys.path
+            if _cwd_in:
+                while _cwd in sys.path:
+                    sys.path.remove(_cwd)
+            if "profile" in sys.modules:
+                _pm = sys.modules["profile"]
+                if hasattr(_pm, "__file__") and _pm.__file__ and _cwd in str(_pm.__file__):
+                    del sys.modules["profile"]
+                    if "cProfile" in sys.modules:
+                        del sys.modules["cProfile"]
+            compile_mode = getattr(args, "compile_mode", "default")
+            if compile_mode == "default":
+                compiled_model = torch.compile(model, backend="inductor")
+            else:
+                compiled_model = torch.compile(model, backend="inductor", mode=compile_mode)
+
+            # Warmup (triggers graph compilation)
+            print(f"  Compiling graph (mode={compile_mode})...", end="", flush=True)
+            with torch.no_grad():
+                _ = compiled_model(model_input) if isinstance(model_input, torch.Tensor) else compiled_model(**model_input)
+            torch.cuda.synchronize()
+            print(" done")
+
+            # Benchmark compiled model
+            print(f"  Benchmarking compiled model...", end="", flush=True)
+            compiled_output, compiled_latency = benchmark_model(
+                compiled_model, model_input, WARMUP_RUNS, TIMED_RUNS
+            )
+            print(f" {compiled_latency:.1f} ms")
+
+            # Compare
+            compiled_tensor = extract_tensor(compiled_output)
+            comp = compare_outputs(ref_tensor, compiled_tensor, dtype,
+                                   getattr(args, "atol", None), getattr(args, "rtol", None))
+            status = comp["correctness"]
+            max_err = comp.get("max_abs_error", 0)
+            speedup = ref_latency / compiled_latency
+
+            print(f"\n  === compile-with-kernels Results ===")
+            print(f"  Reference latency:  {ref_latency:.1f} ms")
+            print(f"  Compiled latency:   {compiled_latency:.1f} ms")
+            print(f"  Speedup:            {speedup:.3f}x")
+            print(f"  Correctness:        {status} (max_err={max_err:.2e})")
+
+        except Exception as e:
+            print(f"\n  ERROR: compile-with-kernels failed: {e}")
+            traceback.print_exc()
+        finally:
+            if _cwd_in and _cwd not in sys.path:
+                sys.path.insert(0, _cwd)
+        return
+
+    # -----------------------------------------------------------------------
+    # Step 5b: Incremental or full optimized run
     # -----------------------------------------------------------------------
     if args.incremental:
         # Sort replacements by --kernel-order
@@ -1503,6 +2155,8 @@ def main() -> None:
         log = incremental_verification(
             model, model_input, ref_tensor, ref_latency, ordered, dtype,
             WARMUP_RUNS, TIMED_RUNS, args.atol, args.rtol,
+            fused_qkv=getattr(args, "fused_qkv", False),
+            all_replacements=ordered,
         )
 
         model_name = args.class_name
@@ -1514,7 +2168,8 @@ def main() -> None:
         return
 
     print("Step 5: Optimized run (with HIP kernel replacements)...")
-    ctx = OptimizedModelContext(model, replacements)
+    ctx = OptimizedModelContext(model, replacements,
+                                fused_qkv=getattr(args, "fused_qkv", False))
     try:
         with ctx as patched_model:
             if ctx.applied_summary:
