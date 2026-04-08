@@ -66,24 +66,9 @@ __global__ void cross_entropy_kernel(
     float local_max = -FLT_MAX;
     float local_sum = 0.0f;
 
-    // Vectorized half2 loads
-    const int n_pairs = vocab / 2;
-    const half2* row_v = reinterpret_cast<const half2*>(row);
-
-    for (int i = tid; i < n_pairs; i += BLOCK_SIZE) {
-        half2 v = row_v[i];
-        float lo = __half2float(v.x);
-        float hi = __half2float(v.y);
-        float m = fmaxf(lo, hi);
-        if (m > local_max) {
-            local_sum *= __expf(local_max - m);
-            local_max = m;
-        }
-        local_sum += __expf(lo - local_max) + __expf(hi - local_max);
-    }
-    // Odd element
-    if ((vocab & 1) && tid == 0) {
-        float val = __half2float(row[vocab - 1]);
+    // Scalar loads with online softmax (half2 causes precision issues with max tracking)
+    for (int v = tid; v < vocab; v += BLOCK_SIZE) {
+        float val = __half2float(row[v]);
         if (val > local_max) {
             local_sum *= __expf(local_max - val);
             local_max = val;
