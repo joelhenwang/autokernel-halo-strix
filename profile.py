@@ -100,15 +100,16 @@ def _fallback_detect_gpu() -> GPUSpec:
     # Known GPUs: name_fragment -> (peak_fp16_tflops, peak_bandwidth_gb_s, l2_cache_mb)
     # Focused on AMD Strix Halo (RDNA 3.5) target.
     _KNOWN_GPUS: Dict[str, Tuple[float, float, float]] = {
-        "Strix Halo":  (50.0, 120.0, 6.0),
-        "gfx1151":     (50.0, 120.0, 6.0),
+        "Strix Halo":       (50.0, 120.0, 6.0),
+        "gfx1151":          (50.0, 120.0, 6.0),
+        "Radeon 8060S":     (50.0, 120.0, 6.0),  # Strix Halo iGPU (20 CUs)
     }
 
     # On ROCm, device name may be empty; try gcnArchName-based lookup
     gcn_arch = getattr(props, 'gcnArchName', '')
     if gcn_arch and not name:
         _AMD_ARCHS = {
-            "gfx1151": ("AMD Strix Halo", 50.0, 120.0, 6.0),
+            "gfx1151": ("AMD Strix Halo (Radeon 8060S)", 50.0, 120.0, 6.0),
         }
         for arch_prefix, amd_specs in _AMD_ARCHS.items():
             if gcn_arch.startswith(arch_prefix):

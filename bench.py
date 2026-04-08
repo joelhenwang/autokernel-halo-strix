@@ -104,15 +104,16 @@ class GPUSpec:
 # Strix Halo specs are estimates -- update with real measurements from hardware.
 _KNOWN_GPUS: Dict[str, Tuple[float, float, float]] = {
     # AMD Strix Halo (RDNA 3.5 APU, gfx1151, LPDDR5X unified memory)
-    "Strix Halo":  (50.0, 120.0, 6.0),
-    "gfx1151":     (50.0, 120.0, 6.0),  # fallback if name contains arch
+    "Strix Halo":       (50.0, 120.0, 6.0),
+    "gfx1151":          (50.0, 120.0, 6.0),  # fallback if name contains arch
+    "Radeon 8060S":     (50.0, 120.0, 6.0),  # Strix Halo iGPU (20 CUs)
 }
 
 # AMD GPU database keyed by gcnArchName prefix for ROCm detection.
 # ROCm may report an empty device name; gcnArchName is always available.
 _KNOWN_AMD_GPUS: Dict[str, Tuple[str, float, float, float]] = {
     # gcnArchName prefix -> (display_name, peak_fp16_tflops, peak_bw_gb_s, l2_mb)
-    "gfx1151": ("AMD Strix Halo", 50.0, 120.0, 6.0),
+    "gfx1151": ("AMD Strix Halo (Radeon 8060S)", 50.0, 120.0, 6.0),
 }
 
 
