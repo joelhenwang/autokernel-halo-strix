@@ -68,6 +68,15 @@ def rotary_embedding_ref(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) 
     rx2 = x1 * sin + x2 * cos
     return torch.stack([rx1, rx2], dim=-1).flatten(-2)
 
+# Fused Residual Add + RMSNorm
+def fused_residual_add_rmsnorm_ref(x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """RMSNorm(x + residual, weight). Fuses residual add with RMS normalization."""
+    hidden = x + residual
+    # Compute RMS in fp32 to avoid fp16 overflow when squaring large values
+    hidden_f = hidden.float()
+    rms = torch.sqrt(torch.mean(hidden_f ** 2, dim=-1, keepdim=True) + eps)
+    return ((hidden_f / rms) * weight.float()).to(x.dtype)
+
 # Parallel Reductions
 def reduce_sum_ref(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
     """Sum reduction."""
@@ -76,3 +85,85 @@ def reduce_sum_ref(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
 def reduce_max_ref(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
     """Max reduction."""
     return x.max(dim=dim).values
+
+# SiLU Activation
+def silu_ref(x: torch.Tensor) -> torch.Tensor:
+    """SiLU (Swish) activation: x * sigmoid(x)."""
+    return F.silu(x)
+
+# GELU Activation
+def gelu_ref(x: torch.Tensor) -> torch.Tensor:
+    """GELU activation: x * 0.5 * (1 + erf(x / sqrt(2)))."""
+    return F.gelu(x)
+
+# Fused Residual Add + LayerNorm
+# Fused Bias Add + SiLU Activation
+def fused_bias_silu_ref(x: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+    """Fused bias add + SiLU: SiLU(x + bias)."""
+    return F.silu(x + bias)
+
+# Fused Bias Add + GELU Activation
+def fused_bias_gelu_ref(x: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+    """Fused bias add + GELU: GELU(x + bias)."""
+    return F.gelu(x + bias)
+
+# Fused SiLU-Gate-Multiply (SwiGLU activation)
+def silu_gate_mul_ref(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+    """SwiGLU: SiLU(gate) * up. Fuses activation with elementwise multiply."""
+    return F.silu(gate) * up
+
+# MoE Top-K Gating
+def moe_gating_ref(router_logits: torch.Tensor, k: int = 2) -> torch.Tensor:
+    """MoE gating: softmax over expert scores, return top-k routing weights (sparse).
+    Output shape matches input: non-top-k positions are zeroed."""
+    probs = F.softmax(router_logits, dim=-1)
+    topk_vals, topk_idx = torch.topk(probs, k, dim=-1)
+    # Normalize top-k weights to sum to 1
+    topk_vals = topk_vals / topk_vals.sum(dim=-1, keepdim=True)
+    out = torch.zeros_like(probs)
+    out.scatter_(-1, topk_idx, topk_vals)
+    return out
+
+# Parallel Prefix Sum (Cumulative Sum)
+def prefix_scan_ref(x: torch.Tensor) -> torch.Tensor:
+    """Inclusive prefix sum along last dimension."""
+    return torch.cumsum(x, dim=-1)
+
+# Top-K Sampling
+def top_k_sampling_ref(logits: torch.Tensor, k: int = 50, temperature: float = 1.0) -> torch.Tensor:
+    """Top-k sampling: scale by temperature, zero out non-top-k, return filtered logits (not sampled indices)."""
+    scaled = logits / temperature
+    topk_vals, topk_idx = torch.topk(scaled, k, dim=-1)
+    # Zero out everything except top-k
+    out = torch.full_like(scaled, float('-inf'))
+    out.scatter_(-1, topk_idx, topk_vals)
+    # Apply softmax over the filtered logits
+    return F.softmax(out, dim=-1)
+
+# Int4 Dequantization
+def dequantize_int4_ref(x_packed: torch.Tensor, scale: torch.Tensor, zero_point: torch.Tensor) -> torch.Tensor:
+    """Per-channel int4 dequantization. x_packed is uint8 with 2 int4 values per byte.
+    Low nibble first, high nibble second. Values are unsigned 0-15, zero_point shifts them."""
+    lo = (x_packed & 0x0F).to(torch.float32) - zero_point.float()
+    hi = ((x_packed >> 4) & 0x0F).to(torch.float32) - zero_point.float()
+    # Interleave: even cols from lo, odd cols from hi
+    M = x_packed.size(0)
+    N_packed = x_packed.size(1)
+    N_out = N_packed * 2
+    out = torch.empty(M, N_out, device=x_packed.device, dtype=torch.float32)
+    out[:, 0::2] = lo * scale.float()
+    out[:, 1::2] = hi * scale.float()
+    return out.half()
+
+# Int8 Dequantization
+def dequantize_int8_ref(x_int8: torch.Tensor, scale: torch.Tensor, zero_point: torch.Tensor) -> torch.Tensor:
+    """Per-channel int8 dequantization: ((int8 - zero_point) * scale) -> fp16."""
+    return ((x_int8.float() - zero_point.float()) * scale.float()).half()
+
+def fused_residual_add_layernorm_ref(x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps: float = 1e-5) -> torch.Tensor:
+    """LayerNorm(x + residual, weight, bias). Fuses residual add with layer normalization."""
+    hidden = x + residual
+    hidden_f = hidden.float()
+    mean = hidden_f.mean(dim=-1, keepdim=True)
+    var = ((hidden_f - mean) ** 2).mean(dim=-1, keepdim=True)
+    return (((hidden_f - mean) / torch.sqrt(var + eps)) * weight.float() + bias.float()).to(x.dtype)

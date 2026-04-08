@@ -48,18 +48,21 @@ __global__ void rotary_embedding_kernel(
         int b = remainder / H;
 
         int base_idx = ((b * H + h) * N + n) * D + d_pair * 2;
-        float x0 = __half2float(x[base_idx]);
-        float x1 = __half2float(x[base_idx + 1]);
+        half x0h = x[base_idx];
+        half x1h = x[base_idx + 1];
 
         int cache_idx = n * half_D + d_pair;
-        float cos_val = __half2float(cos_cache[cache_idx]);
-        float sin_val = __half2float(sin_cache[cache_idx]);
+        half cos_h = cos_cache[cache_idx];
+        half sin_h = sin_cache[cache_idx];
 
-        float out0 = x0 * cos_val - x1 * sin_val;
-        float out1 = x0 * sin_val + x1 * cos_val;
+        // Use native fp16 arithmetic to match PyTorch's per-op rounding
+        half x0_cos = __hmul(x0h, cos_h);
+        half x1_sin = __hmul(x1h, sin_h);
+        half x0_sin = __hmul(x0h, sin_h);
+        half x1_cos = __hmul(x1h, cos_h);
 
-        output[base_idx]     = __float2half(out0);
-        output[base_idx + 1] = __float2half(out1);
+        output[base_idx]     = __hsub(x0_cos, x1_sin);
+        output[base_idx + 1] = __hadd(x0_sin, x1_cos);
     }
 }
 
@@ -140,7 +143,10 @@ _freq_cache = {}  # (N, D) -> (cos_cache, sin_cache)
 def _get_module():
     global _module
     if _module is None:
-        _module = compile_hip(HIP_SRC, "rotary_embedding_hip")
+        _module = compile_hip(
+            HIP_SRC, "rotary_embedding_hip",
+            extra_hip_cflags=["-fno-fast-math", "-ffp-contract=off"],
+        )
     return _module
 
 

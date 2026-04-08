@@ -267,6 +267,15 @@ def gen_reduce_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 4
     return {"x": x}
 
 
+def gen_fused_residual_add_rmsnorm_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    x = torch.randn(M, N, device=device, dtype=dtype)
+    residual = torch.randn(M, N, device=device, dtype=dtype)
+    weight = torch.randn(N, device=device, dtype=dtype)
+    return {"x": x, "residual": residual, "weight": weight}
+
+
 # =========================================================================
 # 3. REFERENCE WRAPPERS
 # =========================================================================
@@ -307,6 +316,124 @@ def _ref_rmsnorm(inputs: dict) -> torch.Tensor:
 def _ref_reduce(inputs: dict) -> torch.Tensor:
     import reference
     return reference.reduce_sum_ref(inputs["x"], dim=-1)
+
+def _ref_fused_residual_add_rmsnorm(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.fused_residual_add_rmsnorm_ref(inputs["x"], inputs["residual"], inputs["weight"])
+
+def gen_silu_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    x = torch.randn(M, N, device=device, dtype=dtype)
+    return {"x": x}
+
+def _ref_silu(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.silu_ref(inputs["x"])
+
+def gen_gelu_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    x = torch.randn(M, N, device=device, dtype=dtype)
+    return {"x": x}
+
+def _ref_gelu(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.gelu_ref(inputs["x"])
+
+def gen_fused_residual_add_layernorm_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    x = torch.randn(M, N, device=device, dtype=dtype)
+    residual = torch.randn(M, N, device=device, dtype=dtype)
+    weight = torch.randn(N, device=device, dtype=dtype).abs() + 0.1
+    bias = torch.randn(N, device=device, dtype=dtype) * 0.01
+    return {"x": x, "residual": residual, "weight": weight, "bias": bias}
+
+def _ref_fused_residual_add_layernorm(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.fused_residual_add_layernorm_ref(inputs["x"], inputs["residual"], inputs["weight"], inputs["bias"])
+
+def gen_dequantize_int4_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M = size["M"]
+    N_out = size["N"]  # output columns (must be even)
+    N_packed = N_out // 2
+    # Pack two int4 values per byte: lo nibble + hi nibble
+    lo = torch.randint(0, 15, (M, N_packed), device=device, dtype=torch.uint8)
+    hi = torch.randint(0, 15, (M, N_packed), device=device, dtype=torch.uint8)
+    x_packed = lo | (hi << 4)
+    scale = torch.randn(N_packed, device=device, dtype=torch.float16).abs() * 0.1 + 0.01
+    zero_point = torch.randint(4, 12, (N_packed,), device=device, dtype=torch.uint8)
+    return {"x_packed": x_packed, "scale": scale, "zero_point": zero_point}
+
+def _ref_dequantize_int4(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.dequantize_int4_ref(inputs["x_packed"], inputs["scale"], inputs["zero_point"])
+
+def gen_dequantize_int8_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    x_int8 = torch.randint(-128, 127, (M, N), device=device, dtype=torch.int8)
+    scale = torch.randn(N, device=device, dtype=torch.float16).abs() * 0.1 + 0.01
+    zero_point = torch.randint(-5, 5, (N,), device=device, dtype=torch.int8)
+    return {"x_int8": x_int8, "scale": scale, "zero_point": zero_point}
+
+def _ref_dequantize_int8(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.dequantize_int8_ref(inputs["x_int8"], inputs["scale"], inputs["zero_point"])
+
+def gen_top_k_sampling_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    B, V = size["B"], size["V"]
+    logits = torch.randn(B, V, device=device, dtype=dtype)
+    return {"logits": logits, "k": 50, "temperature": 1.0}
+
+def gen_prefix_scan_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    x = torch.randn(M, N, device=device, dtype=dtype) * 0.1  # small values to avoid fp16 overflow in cumsum
+    return {"x": x}
+
+def gen_fused_bias_silu_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    x = torch.randn(M, N, device=device, dtype=dtype)
+    bias = torch.randn(N, device=device, dtype=dtype) * 0.1
+    return {"x": x, "bias": bias}
+
+def _ref_fused_bias_silu(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.fused_bias_silu_ref(inputs["x"], inputs["bias"])
+
+def gen_silu_gate_mul_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    gate = torch.randn(M, N, device=device, dtype=dtype)
+    up = torch.randn(M, N, device=device, dtype=dtype)
+    return {"gate": gate, "up": up}
+
+def _ref_silu_gate_mul(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.silu_gate_mul_ref(inputs["gate"], inputs["up"])
+
+def gen_moe_gating_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    T, E = size["T"], size["E"]
+    router_logits = torch.randn(T, E, device=device, dtype=dtype)
+    return {"router_logits": router_logits, "k": size.get("K", 2)}
+
+def _ref_moe_gating(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.moe_gating_ref(inputs["router_logits"], inputs["k"])
+
+def _ref_prefix_scan(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.prefix_scan_ref(inputs["x"])
+
+def _ref_top_k_sampling(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.top_k_sampling_ref(inputs["logits"], inputs["k"], inputs["temperature"])
 
 
 # =========================================================================
@@ -583,6 +710,252 @@ KERNEL_CONFIGS: Dict[str, Dict[str, Any]] = {
         "edge_sizes": [
             ("edge_1023", {"M": 1023, "N": 1024}),
             ("edge_4097", {"M": 4096, "N": 4097}),
+        ],
+    },
+
+    # -----------------------------------------------------------------
+    # FUSED RESIDUAL ADD + RMSNORM
+    # -----------------------------------------------------------------
+    "fused_residual_add_rmsnorm": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 768}),
+            ("medium",  {"M": 4096, "N": 1024}),
+            ("large",   {"M": 4096, "N": 4096}),
+            ("llama",   {"M": 2048, "N": 4096}),
+        ],
+        "test_dtypes": [torch.float16, torch.bfloat16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-2, "rtol": 1e-2},
+            torch.bfloat16: {"atol": 1e-1, "rtol": 5e-2},
+        },
+        # add + square + mean + sqrt + div + mul + scale = 7 ops per element
+        "flops_fn": lambda s: 7 * s["M"] * s["N"],
+        # read x, residual; read weight; write output
+        "bytes_fn": lambda s, dt: (3 * s["M"] * s["N"] + s["N"]) * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_fused_residual_add_rmsnorm_inputs,
+        "reference_fn": _ref_fused_residual_add_rmsnorm,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 768}),
+            ("edge_4097", {"M": 4097, "N": 1024}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "silu": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 1024}),
+            ("medium",  {"M": 4096, "N": 4096}),
+            ("large",   {"M": 8192, "N": 4096}),
+            ("llama",   {"M": 2048, "N": 11008}),
+            ("wide",    {"M": 1024, "N": 32768}),
+        ],
+        "test_dtypes": [torch.float16, torch.bfloat16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+            torch.bfloat16: {"atol": 2e-3, "rtol": 2e-3},
+        },
+        "flops_fn": lambda s: 4 * s["M"] * s["N"],
+        "bytes_fn": lambda s, dt: 2 * s["M"] * s["N"] * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_silu_inputs,
+        "reference_fn": _ref_silu,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 1024}),
+            ("edge_4097", {"M": 4097, "N": 1024}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "fused_bias_silu": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 1024}),
+            ("medium",  {"M": 4096, "N": 4096}),
+            ("large",   {"M": 8192, "N": 4096}),
+            ("llama",   {"M": 2048, "N": 11008}),
+        ],
+        "test_dtypes": [torch.float16, torch.bfloat16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+            torch.bfloat16: {"atol": 2e-3, "rtol": 2e-3},
+        },
+        "flops_fn": lambda s: 5 * s["M"] * s["N"],
+        "bytes_fn": lambda s, dt: (2 * s["M"] * s["N"] + s["N"]) * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_fused_bias_silu_inputs,
+        "reference_fn": _ref_fused_bias_silu,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 1024}),
+            ("edge_4097", {"M": 4097, "N": 1024}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "silu_gate_mul": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 1024}),
+            ("medium",  {"M": 4096, "N": 4096}),
+            ("large",   {"M": 8192, "N": 4096}),
+            ("llama",   {"M": 2048, "N": 11008}),
+            ("wide",    {"M": 1024, "N": 32768}),
+        ],
+        "test_dtypes": [torch.float16, torch.bfloat16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+            torch.bfloat16: {"atol": 2e-3, "rtol": 2e-3},
+        },
+        "flops_fn": lambda s: 5 * s["M"] * s["N"],  # exp + div + 2 mul
+        "bytes_fn": lambda s, dt: 3 * s["M"] * s["N"] * torch.tensor([], dtype=dt).element_size(),  # 2 reads + 1 write
+        "input_generator": gen_silu_gate_mul_inputs,
+        "reference_fn": _ref_silu_gate_mul,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 1024}),
+            ("edge_4097", {"M": 4097, "N": 1024}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "moe_gating": {
+        "test_sizes": [
+            ("small",    {"T": 1024, "E": 8, "K": 2}),
+            ("medium",   {"T": 4096, "E": 8, "K": 2}),
+            ("large",    {"T": 8192, "E": 8, "K": 2}),
+            ("mixtral",  {"T": 4096, "E": 8, "K": 2}),
+            ("wide",     {"T": 2048, "E": 64, "K": 4}),
+        ],
+        "test_dtypes": [torch.float16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+        },
+        "flops_fn": lambda s: 4 * s["T"] * s["E"],
+        "bytes_fn": lambda s, dt: 2 * s["T"] * s["E"] * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_moe_gating_inputs,
+        "reference_fn": _ref_moe_gating,
+        "edge_sizes": [
+            ("edge_1023", {"T": 1023, "E": 8, "K": 2}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "prefix_scan": {
+        "test_sizes": [
+            ("small",   {"M": 256,  "N": 512}),
+            ("medium",  {"M": 1024, "N": 1024}),
+            ("large",   {"M": 2048, "N": 2048}),
+            ("mamba",   {"M": 4096, "N": 1024}),
+            ("long",    {"M": 512,  "N": 4096}),
+        ],
+        "test_dtypes": [torch.float16, torch.float32],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-1, "rtol": 5e-2},  # cumsum accumulates error
+            torch.float32:  {"atol": 1e-4, "rtol": 1e-4},
+        },
+        "flops_fn": lambda s: s["M"] * s["N"],
+        "bytes_fn": lambda s, dt: 2 * s["M"] * s["N"] * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_prefix_scan_inputs,
+        "reference_fn": _ref_prefix_scan,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 512}),
+            ("edge_4097", {"M": 512, "N": 4097}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "top_k_sampling": {
+        "test_sizes": [
+            ("small",    {"B": 1,  "V": 32000}),
+            ("medium",   {"B": 4,  "V": 32000}),
+            ("large",    {"B": 8,  "V": 32000}),
+            ("llama3",   {"B": 1,  "V": 128256}),
+            ("gpt2",     {"B": 4,  "V": 50257}),
+        ],
+        "test_dtypes": [torch.float16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+        },
+        "flops_fn": lambda s: 6 * s["B"] * s["V"],
+        "bytes_fn": lambda s, dt: 2 * s["B"] * s["V"] * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_top_k_sampling_inputs,
+        "reference_fn": _ref_top_k_sampling,
+        "edge_sizes": [
+            ("edge_31999", {"B": 1, "V": 31999}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "dequantize_int4": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 1024}),
+            ("medium",  {"M": 4096, "N": 4096}),
+            ("large",   {"M": 8192, "N": 4096}),
+            ("llama",   {"M": 2048, "N": 11008}),
+        ],
+        "test_dtypes": [torch.float16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+        },
+        "flops_fn": lambda s: 2 * s["M"] * s["N"],
+        "bytes_fn": lambda s, dt: s["M"] * s["N"] // 2 + s["M"] * s["N"] * 2,  # packed read + fp16 write
+        "input_generator": gen_dequantize_int4_inputs,
+        "reference_fn": _ref_dequantize_int4,
+        "edge_sizes": [
+            ("edge_1022", {"M": 1023, "N": 1022}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "dequantize_int8": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 1024}),
+            ("medium",  {"M": 4096, "N": 4096}),
+            ("large",   {"M": 8192, "N": 4096}),
+            ("llama",   {"M": 2048, "N": 11008}),
+        ],
+        "test_dtypes": [torch.float16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+        },
+        "flops_fn": lambda s: 2 * s["M"] * s["N"],
+        "bytes_fn": lambda s, dt: s["M"] * s["N"] * 1 + s["M"] * s["N"] * 2,  # int8 read + fp16 write
+        "input_generator": gen_dequantize_int8_inputs,
+        "reference_fn": _ref_dequantize_int8,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 1024}),
+            ("edge_4097", {"M": 4097, "N": 1024}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "fused_residual_add_layernorm": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 768}),
+            ("medium",  {"M": 4096, "N": 1024}),
+            ("large",   {"M": 4096, "N": 4096}),
+            ("llama",   {"M": 2048, "N": 4096}),
+        ],
+        "test_dtypes": [torch.float16, torch.bfloat16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-2, "rtol": 1e-2},
+            torch.bfloat16: {"atol": 1e-1, "rtol": 5e-2},
+        },
+        "flops_fn": lambda s: 10 * s["M"] * s["N"],
+        "bytes_fn": lambda s, dt: (3 * s["M"] * s["N"] + 2 * s["N"]) * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_fused_residual_add_layernorm_inputs,
+        "reference_fn": _ref_fused_residual_add_layernorm,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 768}),
+            ("edge_4097", {"M": 4097, "N": 1024}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "gelu": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 1024}),
+            ("medium",  {"M": 4096, "N": 4096}),
+            ("large",   {"M": 8192, "N": 4096}),
+            ("llama",   {"M": 2048, "N": 11008}),
+            ("wide",    {"M": 1024, "N": 32768}),
+        ],
+        "test_dtypes": [torch.float16, torch.bfloat16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+            torch.bfloat16: {"atol": 2e-3, "rtol": 2e-3},
+        },
+        "flops_fn": lambda s: 6 * s["M"] * s["N"],
+        "bytes_fn": lambda s, dt: 2 * s["M"] * s["N"] * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_gelu_inputs,
+        "reference_fn": _ref_gelu,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 1024}),
+            ("edge_4097", {"M": 4097, "N": 1024}),
         ],
     },
 }

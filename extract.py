@@ -46,6 +46,17 @@ SHAPE_KEYS: Dict[str, List[str]] = {
     "rmsnorm":           ["M", "N"],
     "reduce":            ["M", "N"],
     "rotary_embedding":  ["B", "H", "N", "D"],
+    "fused_residual_add_rmsnorm": ["M", "N"],
+    "silu":              ["M", "N"],
+    "gelu":              ["M", "N"],
+    "fused_residual_add_layernorm": ["M", "N"],
+    "dequantize_int4":   ["M", "N"],
+    "dequantize_int8":   ["M", "N"],
+    "top_k_sampling":    ["B", "V"],
+    "prefix_scan":       ["M", "N"],
+    "moe_gating":        ["T", "E"],
+    "silu_gate_mul":     ["M", "N"],
+    "fused_bias_silu":   ["M", "N"],
 }
 
 # Aliases: profile_report.json may use different key names than bench.py
@@ -79,6 +90,39 @@ SHAPE_ALIAS_MAP: Dict[str, Dict[str, str]] = {
     "rotary_embedding": {
         "B": "batch", "H": "heads", "N": "seq_len", "S": "seq_len", "D": "head_dim",
         "batch": "batch", "heads": "heads", "seq_len": "seq_len", "head_dim": "head_dim",
+    },
+    "fused_residual_add_rmsnorm": {
+        "M": "M", "N": "N",
+    },
+    "silu": {
+        "M": "M", "N": "N",
+    },
+    "gelu": {
+        "M": "M", "N": "N",
+    },
+    "fused_residual_add_layernorm": {
+        "M": "M", "N": "N",
+    },
+    "dequantize_int4": {
+        "M": "M", "N": "N",
+    },
+    "dequantize_int8": {
+        "M": "M", "N": "N",
+    },
+    "top_k_sampling": {
+        "B": "B", "V": "V", "batch": "B", "vocab": "V",
+    },
+    "prefix_scan": {
+        "M": "M", "N": "N",
+    },
+    "moe_gating": {
+        "T": "T", "E": "E", "tokens": "T", "experts": "E",
+    },
+    "silu_gate_mul": {
+        "M": "M", "N": "N",
+    },
+    "fused_bias_silu": {
+        "M": "M", "N": "N",
     },
 }
 
@@ -127,6 +171,46 @@ TOLERANCES_MAP: Dict[str, Dict[str, Dict[str, float]]] = {
         "bfloat16": {"atol": 2e-3, "rtol": 2e-3},
         "float32":  {"atol": 1e-5, "rtol": 1e-5},
     },
+    "fused_residual_add_rmsnorm": {
+        "float16":  {"atol": 1e-2, "rtol": 1e-2},
+        "bfloat16": {"atol": 1e-1, "rtol": 5e-2},
+    },
+    "silu": {
+        "float16":  {"atol": 1e-3, "rtol": 1e-3},
+        "bfloat16": {"atol": 2e-3, "rtol": 2e-3},
+    },
+    "gelu": {
+        "float16":  {"atol": 1e-3, "rtol": 1e-3},
+        "bfloat16": {"atol": 2e-3, "rtol": 2e-3},
+    },
+    "fused_residual_add_layernorm": {
+        "float16":  {"atol": 1e-2, "rtol": 1e-2},
+        "bfloat16": {"atol": 1e-1, "rtol": 5e-2},
+    },
+    "dequantize_int4": {
+        "float16":  {"atol": 1e-3, "rtol": 1e-3},
+    },
+    "dequantize_int8": {
+        "float16":  {"atol": 1e-3, "rtol": 1e-3},
+    },
+    "top_k_sampling": {
+        "float16":  {"atol": 1e-3, "rtol": 1e-3},
+    },
+    "prefix_scan": {
+        "float16":  {"atol": 1e-1, "rtol": 5e-2},
+        "float32":  {"atol": 1e-4, "rtol": 1e-4},
+    },
+    "moe_gating": {
+        "float16":  {"atol": 1e-3, "rtol": 1e-3},
+    },
+    "silu_gate_mul": {
+        "float16":  {"atol": 1e-3, "rtol": 1e-3},
+        "bfloat16": {"atol": 2e-3, "rtol": 2e-3},
+    },
+    "fused_bias_silu": {
+        "float16":  {"atol": 1e-3, "rtol": 1e-3},
+        "bfloat16": {"atol": 2e-3, "rtol": 2e-3},
+    },
 }
 
 # FLOPS formulas as source strings, per op_type
@@ -140,6 +224,17 @@ FLOPS_FN_SRC: Dict[str, str] = {
     "rmsnorm":          'return 6 * s["M"] * s["N"]',
     "reduce":           'return s["M"] * s["N"]',
     "rotary_embedding": 'return 6 * s["batch"] * s["heads"] * s["seq_len"] * s["head_dim"]',
+    "fused_residual_add_rmsnorm": 'return 7 * s["M"] * s["N"]',
+    "silu":              'return 4 * s["M"] * s["N"]',
+    "gelu":              'return 6 * s["M"] * s["N"]',
+    "fused_residual_add_layernorm": 'return 10 * s["M"] * s["N"]',
+    "dequantize_int4":   'return 2 * s["M"] * s["N"]',
+    "dequantize_int8":   'return 2 * s["M"] * s["N"]',
+    "top_k_sampling":    'return 6 * s["B"] * s["V"]',
+    "prefix_scan":       'return s["M"] * s["N"]',
+    "moe_gating":        'return 4 * s["T"] * s["E"]',
+    "silu_gate_mul":     'return 5 * s["M"] * s["N"]',
+    "fused_bias_silu":   'return 5 * s["M"] * s["N"]',
 }
 
 # BYTES formulas as source strings, per op_type (dt_bytes is passed in)
@@ -153,6 +248,17 @@ BYTES_FN_SRC: Dict[str, str] = {
     "rmsnorm":          'return (2 * s["M"] * s["N"] + s["N"]) * dt_bytes',
     "reduce":           'return (s["M"] * s["N"] + s["M"]) * dt_bytes',
     "rotary_embedding": 'return (s["batch"] * s["heads"] * s["seq_len"] * s["head_dim"] * 2 + s["seq_len"] * s["head_dim"]) * dt_bytes',
+    "fused_residual_add_rmsnorm": 'return (3 * s["M"] * s["N"] + s["N"]) * dt_bytes',
+    "silu":              'return 2 * s["M"] * s["N"] * dt_bytes',
+    "gelu":              'return 2 * s["M"] * s["N"] * dt_bytes',
+    "fused_residual_add_layernorm": 'return (3 * s["M"] * s["N"] + 2 * s["N"]) * dt_bytes',
+    "dequantize_int4":   'return s["M"] * s["N"] // 2 + s["M"] * s["N"] * 2',
+    "dequantize_int8":   'return s["M"] * s["N"] * 1 + s["M"] * s["N"] * 2',
+    "top_k_sampling":    'return 2 * s["B"] * s["V"] * dt_bytes',
+    "prefix_scan":       'return 2 * s["M"] * s["N"] * dt_bytes',
+    "moe_gating":        'return 2 * s["T"] * s["E"] * dt_bytes',
+    "silu_gate_mul":     'return 3 * s["M"] * s["N"] * dt_bytes',
+    "fused_bias_silu":   'return (2 * s["M"] * s["N"] + s["N"]) * dt_bytes',
 }
 
 # Speedup potential heuristic per op_type
@@ -166,6 +272,17 @@ SPEEDUP_ESTIMATES: Dict[str, str] = {
     "rmsnorm":          "1.5-3x",
     "reduce":           "1.5-2x",
     "rotary_embedding": "1.5-2x",
+    "fused_residual_add_rmsnorm": "2-3x",
+    "silu":              "1.5-2x",
+    "gelu":              "1.5-2x",
+    "fused_residual_add_layernorm": "3-5x",
+    "dequantize_int4":   "2-3x",
+    "dequantize_int8":   "1.5-2x",
+    "top_k_sampling":    "2-3x",
+    "prefix_scan":       "1-2x",
+    "moe_gating":        "2-3x",
+    "silu_gate_mul":     "2-4x",
+    "fused_bias_silu":   "1.5-2x",
 }
 
 
@@ -235,6 +352,17 @@ def get_default_shape(op_type: str) -> Dict[str, int]:
         "rmsnorm":          {"M": 4096, "N": 4096},
         "reduce":           {"M": 4096, "N": 4096},
         "rotary_embedding": {"batch": 2, "heads": 32, "seq_len": 1024, "head_dim": 128},
+        "fused_residual_add_rmsnorm": {"M": 4096, "N": 4096},
+        "silu":              {"M": 4096, "N": 4096},
+        "gelu":              {"M": 4096, "N": 4096},
+        "fused_residual_add_layernorm": {"M": 4096, "N": 4096},
+        "dequantize_int4":   {"M": 4096, "N": 4096},
+        "dequantize_int8":   {"M": 4096, "N": 4096},
+        "top_k_sampling":    {"B": 1, "V": 32000},
+        "prefix_scan":       {"M": 2048, "N": 1024},
+        "moe_gating":        {"T": 4096, "E": 8},
+        "silu_gate_mul":     {"M": 4096, "N": 4096},
+        "fused_bias_silu":   {"M": 4096, "N": 4096},
     }
     return defaults.get(op_type, {"M": 2048, "N": 2048})
 
