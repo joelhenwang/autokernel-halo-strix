@@ -28,18 +28,20 @@ HIP_SRC = r"""
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
 
-// Tile dimensions -- tuned for RDNA 3.5 LDS capacity
+// Tile dimensions -- tuned for RDNA 3.5 (20 CUs, 64KB LDS per CU)
+// 64x64 output tile, K=16 for smaller LDS footprint = more occupancy
 constexpr int BLOCK_M = 64;
 constexpr int BLOCK_N = 64;
-constexpr int BLOCK_K = 32;
+constexpr int BLOCK_K = 16;
 
 // Thread block: 16x16 = 256 threads
-// Each thread computes a 4x4 tile of the output (BLOCK_M/16 x BLOCK_N/16)
-constexpr int THREAD_M = BLOCK_M / 16;  // 4
-constexpr int THREAD_N = BLOCK_N / 16;  // 4
+// Each thread computes a 4x4 tile of the output
+constexpr int THREAD_TILE_M = 4;  // BLOCK_M / 16
+constexpr int THREAD_TILE_N = 4;  // BLOCK_N / 16
 
-// Shared memory padding to avoid bank conflicts
-constexpr int SMEM_PAD = 8;
+// Shared memory padding to avoid bank conflicts (half = 2 bytes, 32 banks * 4B = 128B)
+constexpr int SMEM_PAD_A = 8;
+constexpr int SMEM_PAD_B = 8;
 
 __global__ void __launch_bounds__(256)
 matmul_kernel(
@@ -48,131 +50,95 @@ matmul_kernel(
     half* __restrict__ C,         // [M, N]
     int M, int N, int K
 ) {
-    // Block position in the output grid
-    const int bx = blockIdx.x;  // M dimension
-    const int by = blockIdx.y;  // N dimension
+    const int bx = blockIdx.x;
+    const int by = blockIdx.y;
+    const int tid = threadIdx.x;
+    const int tx = tid % 16;
+    const int ty = tid / 16;
 
-    // Thread position within the 16x16 thread block
-    const int tx = threadIdx.x % 16;
-    const int ty = threadIdx.x / 16;
-
-    // Global output base for this block
     const int block_row = bx * BLOCK_M;
     const int block_col = by * BLOCK_N;
 
-    // Double-buffered shared memory
-    __shared__ half smem_A[2][BLOCK_M][BLOCK_K + SMEM_PAD];
-    __shared__ half smem_B[2][BLOCK_K][BLOCK_N + SMEM_PAD];
+    // Single-buffered LDS (smaller footprint = better occupancy on RDNA 3.5)
+    // A: 64 x 16 = 1024 halfs + padding = ~2.1 KB
+    // B: 16 x 64 = 1024 halfs + padding = ~2.1 KB
+    // Total: ~4.2 KB << 64 KB LDS limit
+    __shared__ half smem_A[BLOCK_M][BLOCK_K + SMEM_PAD_A];
+    __shared__ half smem_B[BLOCK_K][BLOCK_N + SMEM_PAD_B];
 
-    // Per-thread accumulator: THREAD_M x THREAD_N floats
-    float acc[THREAD_M][THREAD_N];
+    // Per-thread accumulator
+    float acc[THREAD_TILE_M][THREAD_TILE_N];
     #pragma unroll
-    for (int i = 0; i < THREAD_M; i++)
+    for (int i = 0; i < THREAD_TILE_M; i++)
         #pragma unroll
-        for (int j = 0; j < THREAD_N; j++)
+        for (int j = 0; j < THREAD_TILE_N; j++)
             acc[i][j] = 0.0f;
 
-    const int tid = threadIdx.x;
     const int k_tiles = (K + BLOCK_K - 1) / BLOCK_K;
 
-    // Load first tile into buffer 0
-    // A tile: BLOCK_M * BLOCK_K = 64*32 = 2048 elements, 256 threads -> 8 per thread
-    #pragma unroll
-    for (int i = 0; i < 8; i++) {
-        int idx = tid * 8 + i;
-        int row = idx / BLOCK_K;
-        int col = idx % BLOCK_K;
-        int g_row = block_row + row;
-        int g_col = col;
-        if (g_row < M && g_col < K)
-            smem_A[0][row][col] = A[g_row * K + g_col];
-        else
-            smem_A[0][row][col] = __float2half(0.0f);
-    }
-    // B tile: BLOCK_K * BLOCK_N = 32*64 = 2048 elements -> 8 per thread
-    #pragma unroll
-    for (int i = 0; i < 8; i++) {
-        int idx = tid * 8 + i;
-        int row = idx / BLOCK_N;
-        int col = idx % BLOCK_N;
-        int g_row = row;
-        int g_col = block_col + col;
-        if (g_row < K && g_col < N)
-            smem_B[0][row][col] = B[g_row * N + g_col];
-        else
-            smem_B[0][row][col] = __float2half(0.0f);
-    }
-    __syncthreads();
+    // Each thread loads: 64*16/256 = 4 elements for A, 4 for B
+    for (int kt = 0; kt < k_tiles; kt++) {
+        int k_base = kt * BLOCK_K;
 
-    // Main loop with double buffering
-    for (int k = 0; k < k_tiles; k++) {
-        int cur_buf = k % 2;
-        int next_buf = 1 - cur_buf;
-
-        // Prefetch next tile (if not last)
-        if (k + 1 < k_tiles) {
-            int k_next = (k + 1) * BLOCK_K;
-            #pragma unroll
-            for (int i = 0; i < 8; i++) {
-                int idx = tid * 8 + i;
-                int row = idx / BLOCK_K;
-                int col = idx % BLOCK_K;
-                int g_row = block_row + row;
-                int g_col = k_next + col;
-                if (g_row < M && g_col < K)
-                    smem_A[next_buf][row][col] = A[g_row * K + g_col];
-                else
-                    smem_A[next_buf][row][col] = __float2half(0.0f);
-            }
-            #pragma unroll
-            for (int i = 0; i < 8; i++) {
-                int idx = tid * 8 + i;
-                int row = idx / BLOCK_N;
-                int col = idx % BLOCK_N;
-                int g_row = k_next + row;
-                int g_col = block_col + col;
-                if (g_row < K && g_col < N)
-                    smem_B[next_buf][row][col] = B[g_row * N + g_col];
-                else
-                    smem_B[next_buf][row][col] = __float2half(0.0f);
-            }
+        // Cooperative tile load: A
+        #pragma unroll
+        for (int i = 0; i < 4; i++) {
+            int idx = tid * 4 + i;
+            int row = idx / BLOCK_K;
+            int col = idx % BLOCK_K;
+            int g_row = block_row + row;
+            int g_col = k_base + col;
+            smem_A[row][col] = (g_row < M && g_col < K) ? A[g_row * K + g_col] : __float2half(0.0f);
         }
 
-        // Compute: each thread accumulates its THREAD_M x THREAD_N tile
+        // Cooperative tile load: B
+        #pragma unroll
+        for (int i = 0; i < 4; i++) {
+            int idx = tid * 4 + i;
+            int row = idx / BLOCK_N;
+            int col = idx % BLOCK_N;
+            int g_row = k_base + row;
+            int g_col = block_col + col;
+            smem_B[row][col] = (g_row < K && g_col < N) ? B[g_row * N + g_col] : __float2half(0.0f);
+        }
+
+        __syncthreads();
+
+        // Compute outer product
         #pragma unroll
         for (int kk = 0; kk < BLOCK_K; kk++) {
-            // Load THREAD_M elements from A column kk
-            float a_reg[THREAD_M];
+            float a_reg[THREAD_TILE_M];
             #pragma unroll
-            for (int i = 0; i < THREAD_M; i++) {
-                a_reg[i] = __half2float(smem_A[cur_buf][ty * THREAD_M + i][kk]);
-            }
-            // Load THREAD_N elements from B row kk
-            float b_reg[THREAD_N];
+            for (int i = 0; i < THREAD_TILE_M; i++)
+                a_reg[i] = __half2float(smem_A[ty * THREAD_TILE_M + i][kk]);
+
+            float b_reg[THREAD_TILE_N];
             #pragma unroll
-            for (int j = 0; j < THREAD_N; j++) {
-                b_reg[j] = __half2float(smem_B[cur_buf][kk][tx * THREAD_N + j]);
-            }
-            // Outer product accumulation
+            for (int j = 0; j < THREAD_TILE_N; j++)
+                b_reg[j] = __half2float(smem_B[kk][tx * THREAD_TILE_N + j]);
+
             #pragma unroll
-            for (int i = 0; i < THREAD_M; i++)
+            for (int i = 0; i < THREAD_TILE_M; i++)
                 #pragma unroll
-                for (int j = 0; j < THREAD_N; j++)
+                for (int j = 0; j < THREAD_TILE_N; j++)
                     acc[i][j] += a_reg[i] * b_reg[j];
         }
 
         __syncthreads();
     }
 
-    // Store results to global memory
+    // Store results — vectorized half2 writes where possible
     #pragma unroll
-    for (int i = 0; i < THREAD_M; i++) {
-        int g_row = block_row + ty * THREAD_M + i;
+    for (int i = 0; i < THREAD_TILE_M; i++) {
+        int g_row = block_row + ty * THREAD_TILE_M + i;
         if (g_row >= M) continue;
         #pragma unroll
-        for (int j = 0; j < THREAD_N; j++) {
-            int g_col = block_col + tx * THREAD_N + j;
-            if (g_col < N) {
+        for (int j = 0; j < THREAD_TILE_N; j += 2) {
+            int g_col = block_col + tx * THREAD_TILE_N + j;
+            if (g_col + 1 < N) {
+                half2 val = __halves2half2(__float2half(acc[i][j]), __float2half(acc[i][j+1]));
+                *reinterpret_cast<half2*>(&C[g_row * N + g_col]) = val;
+            } else if (g_col < N) {
                 C[g_row * N + g_col] = __float2half(acc[i][j]);
             }
         }
