@@ -59,12 +59,12 @@ _SUPPORTED_OP_TYPES: set[str] = set()
 
 
 def _discover_supported_op_types() -> set[str]:
-    """Scan kernels/ directory for supported kernel types."""
-    kernels_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels")
+    """Scan kernels/hip/ directory for supported kernel types."""
+    kernels_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "hip")
     supported = set()
     if os.path.isdir(kernels_dir):
         for fname in os.listdir(kernels_dir):
-            if fname.endswith(".py") and fname != "__init__.py":
+            if fname.endswith(".py") and fname not in ("__init__.py", "_compile.py"):
                 supported.add(fname[:-3])  # e.g. "matmul", "softmax"
     return supported
 
