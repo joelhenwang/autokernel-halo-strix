@@ -218,6 +218,24 @@ def compile_hip(
     hip_flags = list(_DEFAULT_HIP_FLAGS) + _get_arch_flags() + extra_hip_cflags
     host_flags = ["-O3"] + extra_cflags
 
+    # Build extra linker flags to find libamdhip64.
+    # PyTorch ROCm wheels bundle this in _rocm_sdk_core/lib but don't add it
+    # to the default linker search path.
+    extra_ldflags = []
+    try:
+        import _rocm_sdk_core
+        _sdk_lib = os.path.join(os.path.dirname(_rocm_sdk_core.__file__), "lib")
+        if os.path.isdir(_sdk_lib):
+            extra_ldflags.append(f"-L{_sdk_lib}")
+            extra_ldflags.append(f"-Wl,-rpath,{_sdk_lib}")
+    except ImportError:
+        pass
+    if _ROCM_INCLUDE:
+        _rocm_lib = os.path.join(os.path.dirname(_ROCM_INCLUDE), "lib")
+        if os.path.isdir(_rocm_lib):
+            extra_ldflags.append(f"-L{_rocm_lib}")
+            extra_ldflags.append(f"-Wl,-rpath,{_rocm_lib}")
+
     # If no custom C++ source, generate a forward declaration so that the
     # auto-generated pybind11 main.cpp can see the HIP function.
     if not cpp_src:
@@ -256,6 +274,7 @@ def compile_hip(
                 functions=[func_name],
                 extra_cuda_cflags=hip_flags,
                 extra_cflags=host_flags,
+                extra_ldflags=extra_ldflags if extra_ldflags else None,
                 build_directory=build_dir,
                 verbose=verbose,
             )
