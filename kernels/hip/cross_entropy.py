@@ -62,51 +62,43 @@ __global__ void cross_entropy_kernel(
     const half* row = logits + b * vocab;
     const int target = targets[b];
 
-    // Fused online max + exp-sum in single pass (saves one full read of logits)
+    // Phase 1: Find row max (all threads cooperate)
     float local_max = -FLT_MAX;
-    float local_sum = 0.0f;
-
-    // Scalar loads with online softmax (half2 causes precision issues with max tracking)
     for (int v = tid; v < vocab; v += BLOCK_SIZE) {
-        float val = __half2float(row[v]);
-        if (val > local_max) {
-            local_sum *= __expf(local_max - val);
-            local_max = val;
-        }
-        local_sum += __expf(val - local_max);
+        local_max = fmaxf(local_max, __half2float(row[v]));
     }
+    local_max = warp_reduce_max(local_max);
 
-    // Warp reduce max
-    float warp_max = warp_reduce_max(local_max);
-    local_sum *= __expf(local_max - warp_max);
-    float warp_sum = warp_reduce_sum(local_sum);
-
-    // Block reduce via shared memory
     __shared__ float smem_max[32];
-    __shared__ float smem_sum[32];
-
-    if (lane_id == 0) {
-        smem_max[warp_id] = warp_max;
-        smem_sum[warp_id] = warp_sum;
-    }
+    if (lane_id == 0) smem_max[warp_id] = local_max;
     __syncthreads();
-
     if (warp_id == 0) {
-        float m = (lane_id < num_warps) ? smem_max[lane_id] : -FLT_MAX;
-        float s = (lane_id < num_warps) ? smem_sum[lane_id] : 0.0f;
-        float block_max = warp_reduce_max(m);
-        s *= __expf(m - block_max);
-        float block_sum = warp_reduce_sum(s);
-        if (lane_id == 0) {
-            smem_max[0] = block_max;
-            smem_sum[0] = block_sum;
-        }
+        float val = (lane_id < num_warps) ? smem_max[lane_id] : -FLT_MAX;
+        val = warp_reduce_max(val);
+        if (lane_id == 0) smem_max[0] = val;
     }
     __syncthreads();
     float row_max = smem_max[0];
+
+    // Phase 2: Compute sum of exp(logits - max)
+    float local_sum = 0.0f;
+    for (int v = tid; v < vocab; v += BLOCK_SIZE) {
+        local_sum += __expf(__half2float(row[v]) - row_max);
+    }
+    local_sum = warp_reduce_sum(local_sum);
+
+    __shared__ float smem_sum[32];
+    if (lane_id == 0) smem_sum[warp_id] = local_sum;
+    __syncthreads();
+    if (warp_id == 0) {
+        float val = (lane_id < num_warps) ? smem_sum[lane_id] : 0.0f;
+        val = warp_reduce_sum(val);
+        if (lane_id == 0) smem_sum[0] = val;
+    }
+    __syncthreads();
     float row_sum = smem_sum[0];
 
-    // Compute loss = -logits[target] + max + log(sum)
+    // Phase 3: Compute loss = -logits[target] + max + log(sum)
     if (tid == 0) {
         float target_logit = __half2float(row[target]);
         losses[b] = -target_logit + row_max + __logf(row_sum);
