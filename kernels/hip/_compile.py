@@ -24,6 +24,18 @@ import torch
 
 _CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "autokernel", "hip_build")
 
+# Locate ROCm include path for thrust/rocprim headers.
+# PyTorch ROCm wheels may not bundle thrust; the system ROCm install provides it.
+_ROCM_INCLUDE = ""
+for _candidate in [
+    os.environ.get("ROCM_PATH", ""),
+    "/opt/rocm",
+    "/opt/rocm/core-7.12",
+]:
+    if _candidate and os.path.isdir(os.path.join(_candidate, "include", "thrust")):
+        _ROCM_INCLUDE = os.path.join(_candidate, "include")
+        break
+
 # Default HIP compiler flags (hipcc uses clang-style flags, not nvcc)
 _DEFAULT_HIP_FLAGS = [
     "-O3",
@@ -31,6 +43,8 @@ _DEFAULT_HIP_FLAGS = [
     "-std=c++17",
     "-munsafe-fp-atomics",
 ]
+if _ROCM_INCLUDE:
+    _DEFAULT_HIP_FLAGS.append(f"-I{_ROCM_INCLUDE}")
 
 # Module-level cache: {hash -> compiled module}
 _module_cache: dict = {}
