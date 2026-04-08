@@ -25,7 +25,7 @@ HIP_SRC = r"""
 #include <hip/hip_fp16.h>
 #include <float.h>
 
-constexpr int BLOCK_SIZE = 512;
+constexpr int BLOCK_SIZE = 256;
 constexpr int WARP_SIZE = 32;  // RDNA wave32
 
 // Wavefront-level max reduction
