@@ -298,8 +298,8 @@ def kernel_fn(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor) -> torc
 
     orig_shape = x.shape
 
-    # FP32 path: fall back to PyTorch (our HIP kernel is FP16-only)
-    if x.dtype == torch.float32:
+    # Non-FP16 path: fall back to PyTorch (our HIP kernel is FP16-only)
+    if x.dtype != torch.float16:
         return torch.nn.functional.layer_norm(x, [x.shape[-1]], weight, bias)
 
     if x.ndim == 1:

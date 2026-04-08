@@ -167,8 +167,8 @@ def kernel_fn(
     """Entry point called by bench.py. Must match reference.fused_mlp_ref signature."""
     assert x.is_cuda
 
-    # FP32 path: fall back to PyTorch (our HIP kernel is FP16-only)
-    if x.dtype == torch.float32:
+    # Non-FP16 path: fall back to PyTorch (our HIP kernel is FP16-only)
+    if x.dtype != torch.float16:
         hidden = torch.nn.functional.silu(x @ w_gate.t()) * (x @ w_up.t())
         return hidden @ w_down.t()
 

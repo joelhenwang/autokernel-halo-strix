@@ -163,8 +163,8 @@ def kernel_fn(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Te
     """Entry point called by bench.py. Must match reference.rotary_embedding_ref signature."""
     assert x.is_cuda
 
-    # FP32 path: fall back to PyTorch (our HIP kernel is FP16-only)
-    if x.dtype == torch.float32:
+    # Non-FP16 path: fall back to PyTorch (our HIP kernel is FP16-only)
+    if x.dtype != torch.float16:
         x1, x2 = x[..., ::2], x[..., 1::2]
         out = torch.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
         return out.flatten(-2)

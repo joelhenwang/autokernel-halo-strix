@@ -56,6 +56,9 @@ __device__ __forceinline__ float warp_reduce_sum(float val) {
 constexpr int WARPS_PER_BLOCK = 8;
 constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
 
+// For wide rows (>= 1024 cols), use multiple warps per row for better BW utilization.
+// For narrow rows, stick with one warp per row.
+
 __global__ void __launch_bounds__(THREADS_PER_BLOCK)
 softmax_kernel(
     const float* __restrict__ input,
@@ -99,6 +102,10 @@ softmax_kernel(
 // Softmax kernel -- fp16 path with half2 vectorized loads
 // =========================================================================
 
+// Online softmax: 2-pass instead of 3-pass
+// Pass 1: read input, compute running max AND running exp-sum (rescaling on the fly)
+// Pass 2: write output = exp(x - final_max) / final_sum
+// This reads global memory 2x instead of 3x (saves ~33% bandwidth)
 __global__ void __launch_bounds__(THREADS_PER_BLOCK)
 softmax_kernel_fp16(
     const half* __restrict__ input,
@@ -120,51 +127,49 @@ softmax_kernel_fp16(
         const half2* row_in_v  = reinterpret_cast<const half2*>(row_in);
         half2*       row_out_v = reinterpret_cast<half2*>(row_out);
 
-        // ---- Pass 1: find row max ----
+        // ---- Pass 1: online softmax — find max AND compute exp-sum in one pass ----
         float thread_max = -FLT_MAX;
+        float thread_sum = 0.0f;
 
         for (int i = lane; i < n_pairs; i += WARP_SIZE) {
             half2 v = row_in_v[i];
             float lo = __half2float(v.x);
             float hi = __half2float(v.y);
-            thread_max = fmaxf(thread_max, fmaxf(lo, hi));
+            float local_max = fmaxf(lo, hi);
+
+            if (local_max > thread_max) {
+                // Rescale previous sum when max increases
+                thread_sum *= __expf(thread_max - local_max);
+                thread_max = local_max;
+            }
+            thread_sum += __expf(lo - thread_max) + __expf(hi - thread_max);
         }
         if (n_tail && lane == 0) {
-            float last = __half2float(row_in[n_cols - 1]);
-            thread_max = fmaxf(thread_max, last);
+            float val = __half2float(row_in[n_cols - 1]);
+            if (val > thread_max) {
+                thread_sum *= __expf(thread_max - val);
+                thread_max = val;
+            }
+            thread_sum += __expf(val - thread_max);
         }
 
+        // Reduce max across wavefront
         float row_max = warp_reduce_max(thread_max);
-
-        // ---- Pass 2: exp(x - max) and accumulate sum ----
-        float thread_sum = 0.0f;
-
-        for (int i = lane; i < n_pairs; i += WARP_SIZE) {
-            half2 v = row_in_v[i];
-            float lo = __expf(__half2float(v.x) - row_max);
-            float hi = __expf(__half2float(v.y) - row_max);
-            row_out_v[i] = __halves2half2(__float2half(lo), __float2half(hi));
-            thread_sum += lo + hi;
-        }
-        if (n_tail && lane == 0) {
-            float val = __expf(__half2float(row_in[n_cols - 1]) - row_max);
-            row_out[n_cols - 1] = __float2half(val);
-            thread_sum += val;
-        }
-
+        // Rescale each thread's sum to the global max
+        thread_sum *= __expf(thread_max - row_max);
         float row_sum = warp_reduce_sum(thread_sum);
 
-        // ---- Pass 3: divide by sum ----
         float inv_sum = __fdividef(1.0f, row_sum);
 
+        // ---- Pass 2: write output = exp(x - max) * inv_sum ----
         for (int i = lane; i < n_pairs; i += WARP_SIZE) {
-            half2 v = row_out_v[i];
-            float lo = __half2float(v.x) * inv_sum;
-            float hi = __half2float(v.y) * inv_sum;
+            half2 v = row_in_v[i];
+            float lo = __expf(__half2float(v.x) - row_max) * inv_sum;
+            float hi = __expf(__half2float(v.y) - row_max) * inv_sum;
             row_out_v[i] = __halves2half2(__float2half(lo), __float2half(hi));
         }
         if (n_tail && lane == 0) {
-            float val = __half2float(row_out[n_cols - 1]) * inv_sum;
+            float val = __expf(__half2float(row_in[n_cols - 1]) - row_max) * inv_sum;
             row_out[n_cols - 1] = __float2half(val);
         }
     }
