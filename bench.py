@@ -406,6 +406,17 @@ def _ref_fused_bias_silu(inputs: dict) -> torch.Tensor:
     import reference
     return reference.fused_bias_silu_ref(inputs["x"], inputs["bias"])
 
+def gen_fused_bias_gelu_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
+    torch.manual_seed(seed)
+    M, N = size["M"], size["N"]
+    x = torch.randn(M, N, device=device, dtype=dtype)
+    bias = torch.randn(N, device=device, dtype=dtype) * 0.1
+    return {"x": x, "bias": bias}
+
+def _ref_fused_bias_gelu(inputs: dict) -> torch.Tensor:
+    import reference
+    return reference.fused_bias_gelu_ref(inputs["x"], inputs["bias"])
+
 def gen_silu_gate_mul_inputs(size: dict, dtype: torch.dtype, device: str, seed: int = 42) -> dict:
     torch.manual_seed(seed)
     M, N = size["M"], size["N"]
@@ -779,6 +790,28 @@ KERNEL_CONFIGS: Dict[str, Dict[str, Any]] = {
         "bytes_fn": lambda s, dt: (2 * s["M"] * s["N"] + s["N"]) * torch.tensor([], dtype=dt).element_size(),
         "input_generator": gen_fused_bias_silu_inputs,
         "reference_fn": _ref_fused_bias_silu,
+        "edge_sizes": [
+            ("edge_1023", {"M": 1023, "N": 1024}),
+            ("edge_4097", {"M": 4097, "N": 1024}),
+        ],
+    },
+    # -----------------------------------------------------------------
+    "fused_bias_gelu": {
+        "test_sizes": [
+            ("small",   {"M": 1024, "N": 1024}),
+            ("medium",  {"M": 4096, "N": 4096}),
+            ("large",   {"M": 8192, "N": 4096}),
+            ("bert",    {"M": 2048, "N": 3072}),
+        ],
+        "test_dtypes": [torch.float16, torch.bfloat16],
+        "tolerances": {
+            torch.float16:  {"atol": 1e-3, "rtol": 1e-3},
+            torch.bfloat16: {"atol": 2e-3, "rtol": 2e-3},
+        },
+        "flops_fn": lambda s: 5 * s["M"] * s["N"],
+        "bytes_fn": lambda s, dt: (2 * s["M"] * s["N"] + s["N"]) * torch.tensor([], dtype=dt).element_size(),
+        "input_generator": gen_fused_bias_gelu_inputs,
+        "reference_fn": _ref_fused_bias_gelu,
         "edge_sizes": [
             ("edge_1023", {"M": 1023, "N": 1024}),
             ("edge_4097", {"M": 4097, "N": 1024}),
