@@ -133,35 +133,42 @@ Momentum on MIXER only. FFN stays standard. This gives the convolution+recurrenc
 | Final RMSNorm | 1K |
 | **TOTAL** | **~245.3M** |
 
-## Hardware Optimization Notes
+## Hardware Optimization Notes (Strix Halo gfx1151)
 
-### MFU Analysis
+> Updated 2026-04-09 with AMADEUS measured baselines.
 
-| Operation | % of layer FLOPs | MFU | Notes |
-|-----------|-----------------|-----|-------|
-| FFN matmuls (gate_up + down) | ~65% | ~50-60% | rocBLAS, bandwidth-bound |
-| Conv/Griffin projections | ~25% | ~50-60% | rocBLAS, smaller matmuls |
-| Griffin recurrence | ~5% | ~95% | Element-wise = free |
-| Conv1d | ~3% | ~90% | Depthwise, cheap |
-| Norms, gates, momentum | ~2% | ~100% | Element-wise = free |
+### What's Faster vs AMADEUS
 
-**Blended MFU estimate: 65-75%.** Higher than AMADEUS (16%) because no complex SSM scan.
+Griffin scan is simpler than Mamba-3 SISO: real scalars (no complex, no dstate inner dimension). The chunked linear recurrence should be faster per step since Griffin has O(d_rec) state vs Mamba-3's O(d_rec × dstate). **However**, the scan was only 38% of AMADEUS per-layer time. The rest (FFN, conv, norms, LM head) is identical.
 
-### Throughput Estimate
+### Realistic Throughput Estimate (grounded in AMADEUS measurements)
 
-| Mode | Est. MFU | Est. tok/s | 45-min tokens |
-|------|----------|-----------|---------------|
-| Eager | 65-75% | **12-18K** | 32-49M |
-| + torch.compile | 75-85% | **16-22K** | 43-59M |
-| + autokernel | 78-88% | **18-25K** | 49-67M |
+AMADEUS component profiling (batch=8, seq=512):
+- Mamba3SISO scan: 10.6ms → 1.8ms (with HIP kernel) — **TEMPEST eliminates this entirely**
+- SwiGLU FFN: 3.7ms per layer — **same in TEMPEST**
+- GatedConv: 1.2ms per layer — **same**
+- RMSNorm ×2: 1.4ms per layer — **same**
+- LM Head: 13.1ms — **same (can't beat rocBLAS)**
 
-**vs AMADEUS (6.4K):** 2-4x faster. **vs Transformer+autokernel (43K):** 0.4-0.6x. The gap narrows significantly.
+**Per-layer estimate for TEMPEST:** 3.7 + 1.2 + 1.4 + ~0.5 (Griffin scan, simpler than Mamba) + ~0.3 (momentum, projections) ≈ **7.1ms** per layer (vs AMADEUS ~10.1ms)
+**16 layers:** ~114ms + 13ms (LM head) + ~5ms (embedding, overhead) ≈ **132ms** forward
+**Forward + backward:** ~396ms → **~10.4K tok/s eager**
+
+| Mode | Est. tok/s | 45-min tokens | vs AMADEUS optimized (10.4K) |
+|------|-----------|---------------|------------------------------|
+| Eager | **8-10K** | 22-27M | ~0.8-1.0x (comparable) |
+| + autokernel + compile | **11-14K** | 30-38M | ~1.1-1.3x |
+| + HIP Griffin scan kernel | **12-15K** | 32-41M | ~1.2-1.4x |
+
+**Reality check:** TEMPEST is NOT 2-4x faster than AMADEUS. It's 1.0-1.4x faster because the scan was only part of the cost, and FFN + LM head dominate. The throughput advantage is real but modest.
+
+**The actual bet:** At similar throughput, is Griffin + momentum BETTER quality-per-token than Mamba-3 + FiLM? That's the real experiment.
 
 ### Kernel Reuse
-- fused_residual_add_rmsnorm (6.6x) — all 16 layers
-- silu_gate_mul (1.6x) — all 16 SwiGLU FFNs
-- cross_entropy (1.8x) — loss
-- Chunked linear recurrence (from amadeus.py, simplified for real-valued Griffin)
+- **fused_residual_add_rmsnorm** (6.6x) — all 16 layers ✓
+- **silu_gate_mul** (1.6x) — all 16 SwiGLU FFNs ✓ (FusedSwiGLUPattern for w_gate_up+w_down)
+- **cross_entropy** (1.8x) — loss ✓
+- **Chunked linear recurrence** — Griffin scan is simpler than Mamba-3 (real-valued, no dstate). Reuse `selective_scan_chunked` from amadeus.py or even simpler: Griffin's state is 1D, so the existing HIP `selective_scan` kernel works directly with dstate=1.
 - Apply via `autokernel.optimize(model, training=True)`
 
 ---
@@ -190,17 +197,18 @@ Momentum on MIXER only. FFN stays standard. This gives the convolution+recurrenc
 |------|----------|------------|
 | Griffin quality < Mamba-3 (no data-dependent dynamics) | HIGH | Residual momentum adds expressiveness. 2-4x more data exposure compensates. Ablate: equal-time comparison. |
 | Momentum beta collapses to 0 | LOW | Init 0.5, learned. Monitor. If collapses: fix at 0.3. |
-| Still slower than transformer+autokernel | MEDIUM | At 18K vs 43K, transformer sees 2.4x more data. Quality-per-token must be 2.4x better. |
-| Chunked Griffin scan still slow | LOW | Griffin scan is SIMPLER than Mamba-3 — real scalars, no complex, no dstate. Should be faster. |
+| Still slower than transformer+autokernel | MEDIUM | At ~13K vs 43K, transformer sees ~3x more data. Quality-per-token must be ~3x better. Focus on quality-per-FLOP, not raw throughput. |
+| Chunked Griffin scan still slow | LOW | Griffin scan is SIMPLER than Mamba-3 — real scalars, no complex, no dstate. Existing HIP selective_scan kernel works. |
+| Comparable throughput to optimized AMADEUS | MEDIUM | TEMPEST is ~1.0-1.4x AMADEUS, not 2-4x. The value proposition shifts from "more data" to "better architecture at equal data." |
 
 ## Success Criteria
 
-1. Throughput > 12K tok/s (2x AMADEUS minimum)
-2. MFU > 60% (vs AMADEUS 16%)
-3. Loss at equal wall-clock time < AMADEUS loss
-4. Momentum beta stays non-zero (contributing)
-5. Decay spectrum preserved (fast/medium/slow heads remain distinct)
-6. Implementation < 300 lines
+1. Throughput > 10K tok/s with autokernel+compile (matching or exceeding AMADEUS optimized)
+2. **Loss at equal wall-clock time < AMADEUS loss** (the KEY metric)
+3. Momentum beta stays non-zero after training (momentum IS contributing)
+4. Decay spectrum preserved (fast/medium/slow heads remain distinct after training)
+5. Implementation < 300 lines
+6. Ablation: TEMPEST with momentum vs without — momentum must improve loss by >2%
 
 ## Implementation Roadmap
 

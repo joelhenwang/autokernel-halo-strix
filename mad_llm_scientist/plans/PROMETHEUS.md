@@ -62,9 +62,12 @@ def attention_layer_forward(self, h, velocity):
     k = self.wk(h_norm).view(B, T, 2, 128).transpose(1, 2)
     v = self.wv(h_norm).view(B, T, 2, 128).transpose(1, 2)
 
-    # flash-attn (ROCm build available on training machine)
-    attn_out = flash_attn_func(q, k, v, causal=True)  # O(T) memory
-    attn_out = self.wo(attn_out.reshape(B, T, 1024))
+    # PyTorch SDPA (NOT flash-attn — flash is 0.05x on gfx1151 without MFMA)
+    # Repeat KV for GQA: 2 KV heads → 8 query heads (4:1 ratio)
+    k = k.repeat_interleave(4, dim=1)
+    v = v.repeat_interleave(4, dim=1)
+    attn_out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+    attn_out = self.wo(attn_out.transpose(1, 2).reshape(B, T, 1024))
 
     # Momentum residual
     velocity = self.beta * velocity + attn_out
@@ -126,35 +129,61 @@ Applied to the MIXER output (conv/Griffin/attention), NOT to FFN. This gives the
 
 Under 250M with room. Options: increase ffn_inner, add PLE, add Engram.
 
-## Hardware Optimization Notes
+## Hardware Optimization Notes (Strix Halo gfx1151)
 
-### Throughput Estimate
-- 14 Griffin layers at ~85% MFU: 14/16 × 85% = 74% contribution
-- 2 flash-attn layers at ~40-54% MFU: 2/16 × 47% = 6% contribution
-- Blended MFU: ~**70-80%**
-- At 75% MFU: ~**20-30K tok/s** for 216M params
+> Updated 2026-04-09 with AMADEUS measured baselines and flash-attn reality check.
 
-### Token Budget
+### CRITICAL: flash-attn is 0.05x on gfx1151
 
-| Time | Tokens (at 25K tok/s) |
-|------|----------------------|
-| 45 min | **67.5M** (4.2 BabyLM epochs) |
-| 120 min | **180M** |
+**flash_attention on RDNA 3.5 without MFMA is extremely slow** (0.05x PyTorch in kernel benchmarks). The ROCm flash-attn build targets CDNA (MI300X with MFMA). On gfx1151, Q@K^T falls back to scalar FMA.
 
-vs AMADEUS: 17M in 45 min. **PROMETHEUS sees 4x more data.**
+**Recommendation:** Use `F.scaled_dot_product_attention(q, k, v, is_causal=True)` (PyTorch SDPA) instead. It goes through Inductor when compiled and is more reliable on RDNA. Still slower than Griffin layers, but usable.
+
+**Measured attention cost (from LlamaModel benchmarks):**
+- GQA attention layer (8q/2kv, d=1024, seq=512): ~8-12ms per layer
+- For 2 attention layers: ~16-24ms added to the forward pass
+
+### Realistic Throughput Estimate
+
+Using AMADEUS component profiling as baseline:
+- 14 Griffin layers × ~7.1ms each = ~100ms (same estimate as TEMPEST)
+- 2 SDPA attention layers × ~10ms each = ~20ms
+- LM Head: ~13ms
+- Overhead: ~5ms
+- **Forward total: ~138ms**
+- **Forward + backward: ~414ms → ~9.9K tok/s eager**
+
+| Mode | Est. tok/s | 45-min tokens | vs AMADEUS optimized (10.4K) |
+|------|-----------|---------------|------------------------------|
+| Eager | **7-9K** | 19-24M | ~0.7-0.9x (SLOWER) |
+| + autokernel + compile | **10-12K** | 27-32M | ~1.0-1.2x |
+| + HIP Griffin scan | **11-13K** | 30-35M | ~1.1-1.3x |
+
+**Reality check:** PROMETHEUS is **comparable to or slightly slower than** optimized AMADEUS, NOT 4x faster. The 2 attention layers add ~20ms overhead that offsets the Griffin scan savings. The value proposition is **quality** (global context from attention), not throughput.
+
+**The real question:** Do 2 attention layers at positions 4 and 12 improve loss enough to justify the ~10-15% throughput penalty vs TEMPEST (pure Griffin)?
+
+### Token Budget (corrected)
+
+| Time | Tokens (at 11K tok/s) | BabyLM epochs |
+|------|----------------------|---------------|
+| 45 min | **30M** | 1.9 |
+| 120 min | **79M** | 5.0 |
+
+vs AMADEUS optimized: 28M in 45 min. **Similar data exposure, not 4x more.**
 
 ### Kernel Reuse
-- fused_residual_add_rmsnorm (6.6x) — all 16 layers
-- silu_gate_mul (1.6x) — all 16 SwiGLU FFNs
-- cross_entropy (1.8x) — output loss
-- flash-attn (ROCm build) — layers 4, 12
-- Griffin scan: chunked linear recurrence (chunk_size=64)
+- **fused_residual_add_rmsnorm** (6.6x) — all 16 layers ✓
+- **silu_gate_mul** (1.6x) — all 16 SwiGLU FFNs ✓ (FusedSwiGLUPattern)
+- **cross_entropy** (1.8x) — loss ✓
+- **F.scaled_dot_product_attention** — layers 4, 12 (NOT flash-attn; use PyTorch SDPA)
+- **Chunked linear recurrence / HIP selective_scan** — 14 Griffin layers
 - Apply via `autokernel.optimize(model, training=True)`
 
-### Scan: Griffin is SIMPLER than Mamba-3
+### Griffin Scan: Simpler Than Mamba-3
 Griffin scan operator: `(a₂·a₁, a₂·b₁+b₂)` — real-valued scalars per dim.
-Mamba-3 scan: complex data-dependent A,B,C with RoPE.
-Griffin scan should be **faster per step** → higher MFU than AMADEUS.
+No complex state, no dstate inner loop. Existing HIP `selective_scan` kernel works directly.
+Expected ~0.5ms per Griffin layer (vs 1.8ms for Mamba-3 with HIP kernel).
 
 ## Training
 
@@ -171,18 +200,20 @@ Griffin scan should be **faster per step** → higher MFU than AMADEUS.
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| flash-attn on ROCm crashes | MEDIUM | Fallback: torch SDPA (slower but works). Or: remove attn layers → TEMPEST. |
-| 2 attn layers dominate wall-clock | LOW | flash-attn is efficient. If >20% wall-clock, reduce to 1 attn layer. |
-| Momentum destabilizes training | LOW | beta init 0.5, learned. If loss spikes, set beta→0 (= standard residual). |
-| Griffin quality < Mamba-3 | MEDIUM | The 4x more data exposure may compensate. Ablation: PROMETHEUS vs AMADEUS at equal wall-clock time. |
+| flash-attn 0.05x on gfx1151 | **HIGH** | **Do NOT use flash-attn.** Use `F.scaled_dot_product_attention` (PyTorch SDPA). Goes through Inductor when compiled. Still slow (~10ms/layer) but reliable. |
+| 2 attn layers dominate wall-clock | **MEDIUM** | At ~10ms each, they're ~15% of forward. If >25% wall-clock, reduce to 1 attn layer (at layer 8 only). |
+| Throughput slower than TEMPEST | **MEDIUM** | PROMETHEUS pays ~20ms attention tax for quality. If quality gain < 5% vs TEMPEST, drop attention → become TEMPEST. |
+| Momentum destabilizes training | LOW | beta init 0.5, learned via sigmoid(log_beta). If loss spikes, set beta→0 (= standard residual). |
+| Griffin quality < Mamba-3 | MEDIUM | At comparable throughput (~11K vs 10.4K), data exposure is similar. Quality comparison is fair: architecture vs architecture, not throughput vs throughput. |
 
 ## Success Criteria
 
-1. Throughput > 20K tok/s (3x AMADEUS)
-2. Loss at 45 min < AMADEUS loss at 45 min (despite simpler architecture)
-3. Momentum beta converges to non-zero value (momentum IS being used)
-4. flash-attn layers stable on ROCm (no crashes in 45 min)
-5. The 2 attention layers show qualitatively different attention patterns (not redundant)
+1. **Loss at 45 min < AMADEUS loss at 45 min** (the KEY metric — architecture quality at equal time)
+2. **Loss at 45 min < TEMPEST loss at 45 min** (attention layers must justify their cost)
+3. Throughput > 10K tok/s with autokernel+compile (competitive with AMADEUS optimized)
+4. Momentum beta converges to non-zero value
+5. SDPA attention layers stable (no crashes in 45 min)
+6. Ablation: PROMETHEUS vs TEMPEST (2 attn layers vs 0) — attention must improve loss by >3%
 
 ## Implementation Roadmap
 
