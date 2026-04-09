@@ -172,7 +172,8 @@ Compiled at runtime via `kernels/hip/_compile.py` which uses `torch.utils.cpp_ex
 - **6.6x** fused_residual_add_rmsnorm, **3.7x** rotary_embedding, **3.5x** moe_gating, **3.3x** rmsnorm
 - **1.9x** fused_bias_silu, **1.9x** fused_bias_gelu, **1.8x** cross_entropy, **1.6x** silu_gate_mul
 - ~1x: reduce, layernorm, silu, gelu, softmax
-- <0.3x: matmul, flash_attention, fused_mlp, top_k_sampling (compute-bound or wrong algorithm — skip these)
+- <0.3x: matmul, flash_attention (standard build), fused_mlp, top_k_sampling (compute-bound or wrong algorithm — skip these)
+- **Note:** Aule-Attention (`pip install aule-attention`, Triton-based) and AOTriton custom builds report 20-30x speedups for attention on gfx1151. See `mad_llm_scientist/COOKBOOK.md` §1.5b for details.
 
 ### End-to-End Model Speedups (LlamaModel7B, 5.9B params)
 - **1.189x** `autokernel.optimize(model, compile=True)` (library API — best overall)

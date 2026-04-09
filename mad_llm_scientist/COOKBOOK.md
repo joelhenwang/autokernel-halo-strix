@@ -133,6 +133,16 @@ h = associative_scan(operator, pairs)
 
 > **WARNING (verified on gfx1151):** `torch.associative_scan()` from `torch._higher_order_ops` is equally slow as a sequential Python loop on this hardware (~1.3K tok/s for 243M SSM model). The chunked approach achieves 6.4K tok/s. Do NOT use associative_scan — go straight to chunked linear recurrence.
 
+### 1.5b Attention Backend (for hybrid architectures like PROMETHEUS)
+
+For architectures with sparse attention layers (1-4 layers out of 16), use in order of preference:
+
+1. **Aule-Attention** (Triton, hardware-agnostic) — `pip install aule-attention`. Uses Triton kernels that compile for the actual hardware target (gfx1151). GQA native. head_dim≤128. Full backward. MIT license. `from aule_attention import flash_attention; flash_attention(q, k, v, causal=True)`. Source: github.com/AuleTechnologies/Aule-Attention.
+2. **PyTorch SDPA** — `F.scaled_dot_product_attention(q, k, v, is_causal=True)`. Goes through Inductor when compiled. Reliable fallback.
+3. **flash-attn ROCm build** — Available on training machine but **0.05x on gfx1151** (targets CDNA/MFMA, not RDNA). LAST resort.
+
+> **Note:** Standard flash-attn is 0.05x on gfx1151 because it needs MFMA matrix cores. Aule-Attention avoids this by generating Triton code for the actual target. Benchmark before committing — no published perf data for RDNA 3.5.
+
 ### 1.6 Engram Hash Tables
 
 | Field | Value |

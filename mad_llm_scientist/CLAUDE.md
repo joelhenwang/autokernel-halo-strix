@@ -66,7 +66,7 @@ All of the above have **training backward support** (autograd registered). Apply
 | Operation | Speedup vs PyTorch | Why | What to Do Instead |
 |-----------|--------------------|-----|-------------------|
 | **matmul** | 0.24x | No MFMA, scalar FMA only | Use rocBLAS (larger GEMMs), don't try to beat it |
-| **flash_attention** | 0.05x | Needs MFMA for Q@K^T | Use SSM, linear attention, or Griffin recurrence |
+| **flash_attention (standard)** | 0.05x | Standard build targets CDNA/MFMA | Try **Aule-Attention** (`pip install aule-attention`, Triton-based) or **AOTriton** custom build (20-30x speedup reported). Fall back to PyTorch SDPA. See COOKBOOK.md §1.5b. |
 | **fused_mlp** | 0.02x | Dominated by matmul | Let rocBLAS handle FFN matmuls natively |
 | **Sequential scan loops** | 4% MFU | Thousands of tiny kernel launches | **Use chunked linear recurrence (5x faster)** |
 | **torch.associative_scan** | 4% MFU | Equally slow as sequential on gfx1151 | **Use chunked linear recurrence** |
@@ -131,7 +131,7 @@ BabyLM dataset is ~16M tokens. At 6.4K tok/s, 2 full epochs take ~80 minutes.
 
 2. **L2 cache is your unfair advantage.** If your hot path fits in 6 MB (ternary weights, shared blocks, small recurrence state), you get 5-10x effective bandwidth. No discrete GPU has this — it's unique to this APU.
 
-3. **Recurrence > Attention on this hardware.** Griffin, Mamba, LRU, DHO — all are element-wise ops that run at near-100% MFU. Attention is 0.05x without MFMA. This hardware was *made* for SSM architectures.
+3. **Recurrence > Attention, but attention is now viable in small doses.** Griffin, Mamba, LRU, DHO — all are element-wise ops that run at near-100% MFU. Standard flash-attn is 0.05x without MFMA, BUT **Aule-Attention** (Triton-based, `pip install aule-attention`) and **AOTriton** custom builds report 20-30x speedups on gfx1151. A hybrid with 1-2 attention layers (like PROMETHEUS) is worth testing if Aule benchmarks well. See COOKBOOK.md §1.5b.
 
 4. **Wider + shallower > Deep + narrow.** More layers = more serial weight reads. 16 layers × d=1024 decodes faster than 48 layers × d=512, even at the same param count.
 

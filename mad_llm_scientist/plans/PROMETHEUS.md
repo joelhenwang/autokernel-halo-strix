@@ -62,9 +62,17 @@ def attention_layer_forward(self, h, velocity):
     k = self.wk(h_norm).view(B, T, 2, 128).transpose(1, 2)
     v = self.wv(h_norm).view(B, T, 2, 128).transpose(1, 2)
 
-    # PyTorch SDPA (NOT flash-attn — flash is 0.05x on gfx1151 without MFMA)
-    # Repeat KV for GQA: 2 KV heads → 8 query heads (4:1 ratio)
-    k = k.repeat_interleave(4, dim=1)
+    # Attention backend priority:
+    # 1. aule-attention (Triton, hardware-agnostic, GQA native, pip install)
+    #    `from aule_attention import flash_attention`
+    #    attn_out = flash_attention(q, k, v, causal=True)  # handles GQA natively
+    # 2. F.scaled_dot_product_attention (PyTorch SDPA, Inductor backend)
+    # 3. flash-attn ROCm (0.05x on gfx1151 — LAST resort)
+    #
+    # Aule-Attention uses Triton kernels → generates code for gfx1151 directly.
+    # MIT license, pip install aule-attention, head_dim<=128, full backward.
+    # github.com/AuleTechnologies/Aule-Attention
+    k = k.repeat_interleave(4, dim=1)  # only if using SDPA; aule handles GQA natively
     v = v.repeat_interleave(4, dim=1)
     attn_out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
     attn_out = self.wo(attn_out.transpose(1, 2).reshape(B, T, 1024))
@@ -133,35 +141,62 @@ Under 250M with room. Options: increase ffn_inner, add PLE, add Engram.
 
 > Updated 2026-04-09 with AMADEUS measured baselines and flash-attn reality check.
 
-### CRITICAL: flash-attn is 0.05x on gfx1151
+### Attention Backend on gfx1151: Three Options
 
-**flash_attention on RDNA 3.5 without MFMA is extremely slow** (0.05x PyTorch in kernel benchmarks). The ROCm flash-attn build targets CDNA (MI300X with MFMA). On gfx1151, Q@K^T falls back to scalar FMA.
+The *standard* flash-attn ROCm build is 0.05x on gfx1151 (targets CDNA/MFMA). But there are viable alternatives:
 
-**Recommendation:** Use `F.scaled_dot_product_attention(q, k, v, is_causal=True)` (PyTorch SDPA) instead. It goes through Inductor when compiled and is more reliable on RDNA. Still slower than Griffin layers, but usable.
+**Option 1: Aule-Attention (Triton, recommended to try first)**
+- `pip install aule-attention` — uses Triton kernels that compile for the actual target hardware
+- GQA native, head_dim≤128, full backward pass, MIT license
+- AMD RDNA3 listed; gfx1151 (RDNA 3.5) not explicitly confirmed but likely works via Triton/ROCm
+- API: `from aule_attention import flash_attention; flash_attention(q, k, v, causal=True)`
+- **Must benchmark on gfx1151 before committing** — no published perf data for RDNA 3.5
 
-**Measured attention cost (from LlamaModel benchmarks):**
-- GQA attention layer (8q/2kv, d=1024, seq=512): ~8-12ms per layer
-- For 2 attention layers: ~16-24ms added to the forward pass
+**Option 2: AOTriton custom PyTorch build (fastest if it works)**
+- Community effort got flash attention on gfx1151 via AOTriton (ahead-of-time Triton compilation)
+- Results: **20-30x forward speedup** (1950ms → 68.5ms), 8-20x backward speedup
+- Requires custom PyTorch build — WIP scripts at `github.com/lhl/strix-halo-testing`
+- Known issues: GPU hangs with CUDA graphs, amdsmi segfaults
+- Source: https://community.frame.work/t/pytorch-w-flash-attention-vllm-for-strix-halo/74736
+
+**Option 3: PyTorch SDPA (reliable fallback)**
+- `F.scaled_dot_product_attention(q, k, v, is_causal=True)`
+- Goes through Inductor when compiled. Always works, no custom builds needed.
+
+**Strategy:** Try Aule-Attention first (pip install). If it benchmarks well on gfx1151, the 2 attention layers become cheap and PROMETHEUS's throughput improves significantly. Fall back to SDPA otherwise.
+
+**Estimated attention cost per layer:**
+
+| Backend | Per layer | 2 layers total | Impact on throughput |
+|---------|----------|---------------|---------------------|
+| Aule/AOTriton (if working) | ~1-3ms | ~2-6ms | Negligible — PROMETHEUS ≈ TEMPEST speed |
+| PyTorch SDPA | ~8-12ms | ~16-24ms | ~10-15% slower than TEMPEST |
+| Standard flash-attn | ~50+ms | ~100+ms | Unusable — kills throughput |
 
 ### Realistic Throughput Estimate
 
-Using AMADEUS component profiling as baseline:
-- 14 Griffin layers × ~7.1ms each = ~100ms (same estimate as TEMPEST)
-- 2 SDPA attention layers × ~10ms each = ~20ms
+Using AMADEUS component profiling as baseline (batch=8, seq=512):
+- 14 Griffin layers × ~7.1ms each = ~100ms
+- 2 attention layers: **depends on backend** (see above)
 - LM Head: ~13ms
 - Overhead: ~5ms
-- **Forward total: ~138ms**
-- **Forward + backward: ~414ms → ~9.9K tok/s eager**
 
-| Mode | Est. tok/s | 45-min tokens | vs AMADEUS optimized (10.4K) |
-|------|-----------|---------------|------------------------------|
-| Eager | **7-9K** | 19-24M | ~0.7-0.9x (SLOWER) |
-| + autokernel + compile | **10-12K** | 27-32M | ~1.0-1.2x |
-| + HIP Griffin scan | **11-13K** | 30-35M | ~1.1-1.3x |
+**Scenario A: Aule-Attention or AOTriton works (~2ms/attn layer)**
+- Forward: 100 + 4 + 13 + 5 = **~122ms** → fwd+bwd ~366ms → **~11.2K tok/s eager**
+- With autokernel + compile: **~14-16K tok/s**
+- PROMETHEUS ≈ TEMPEST throughput. Attention is ~free. **Best scenario.**
 
-**Reality check:** PROMETHEUS is **comparable to or slightly slower than** optimized AMADEUS, NOT 4x faster. The 2 attention layers add ~20ms overhead that offsets the Griffin scan savings. The value proposition is **quality** (global context from attention), not throughput.
+**Scenario B: PyTorch SDPA fallback (~10ms/attn layer)**
+- Forward: 100 + 20 + 13 + 5 = **~138ms** → fwd+bwd ~414ms → **~9.9K tok/s eager**
+- With autokernel + compile: **~11-13K tok/s**
+- ~10-15% slower than TEMPEST. Attention has a cost.
 
-**The real question:** Do 2 attention layers at positions 4 and 12 improve loss enough to justify the ~10-15% throughput penalty vs TEMPEST (pure Griffin)?
+| Mode | Scenario A (Aule) | Scenario B (SDPA) | vs AMADEUS (10.4K) |
+|------|--------------------|--------------------|--------------------|
+| Eager | **10-12K** | **7-9K** | 1.0x / 0.7-0.9x |
+| + autokernel + compile | **14-16K** | **11-13K** | 1.3-1.5x / 1.1-1.2x |
+
+**The real question:** Does Aule-Attention work on gfx1151? If yes, PROMETHEUS is the best architecture (Griffin speed + attention quality). If no, it's a tradeoff: ~10-15% throughput penalty for global context. Either way, the quality comparison vs TEMPEST (no attention) is the key experiment.
 
 ### Token Budget (corrected)
 
@@ -200,9 +235,9 @@ Expected ~0.5ms per Griffin layer (vs 1.8ms for Mamba-3 with HIP kernel).
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| flash-attn 0.05x on gfx1151 | **HIGH** | **Do NOT use flash-attn.** Use `F.scaled_dot_product_attention` (PyTorch SDPA). Goes through Inductor when compiled. Still slow (~10ms/layer) but reliable. |
-| 2 attn layers dominate wall-clock | **MEDIUM** | At ~10ms each, they're ~15% of forward. If >25% wall-clock, reduce to 1 attn layer (at layer 8 only). |
-| Throughput slower than TEMPEST | **MEDIUM** | PROMETHEUS pays ~20ms attention tax for quality. If quality gain < 5% vs TEMPEST, drop attention → become TEMPEST. |
+| Attention backend performance | **HIGH** | Try Aule-Attention first (`pip install aule-attention`). If fast on gfx1151 → attention is ~free. If not → fall back to SDPA (~10ms/layer). Do NOT use standard flash-attn (0.05x). |
+| 2 attn layers dominate wall-clock (SDPA scenario) | **MEDIUM** | Only applies if Aule-Attention doesn't work. At ~10ms SDPA each, they're ~15% of forward. If >25% wall-clock, reduce to 1 attn layer (at layer 8 only). |
+| Throughput slower than TEMPEST (SDPA scenario) | **MEDIUM** | ~10-15% penalty with SDPA. If quality gain < 5% vs TEMPEST, drop attention → become TEMPEST. With Aule-Attention this risk disappears. |
 | Momentum destabilizes training | LOW | beta init 0.5, learned via sigmoid(log_beta). If loss spikes, set beta→0 (= standard residual). |
 | Griffin quality < Mamba-3 | MEDIUM | At comparable throughput (~11K vs 10.4K), data exposure is similar. Quality comparison is fair: architecture vs architecture, not throughput vs throughput. |
 
