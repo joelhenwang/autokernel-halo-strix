@@ -2,7 +2,7 @@
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/UfEyc72t)
 
-**Autoresearch for GPU kernels.** Give it any PyTorch model, go to sleep, wake up to optimized HIP C++ kernels for AMD Strix Halo (gfx1151, RDNA 3.5).
+**Autoresearch for GPU kernels and training.** Give it any PyTorch model, go to sleep, wake up to optimized HIP C++ kernels and a trained model on AMD Strix Halo (gfx1151, RDNA 3.5).
 
 ![AutoKernel Progress](progress.png)
 
@@ -16,6 +16,7 @@ Give AutoKernel any PyTorch model. It will:
 2. **Extract** each bottleneck as a standalone HIP C++ kernel
 3. **Optimize** each kernel autonomously (edit, benchmark, keep/revert -- forever)
 4. **Verify** end-to-end correctness and report the total speedup
+5. **Train** models using the optimized kernels (3.05x faster, 54% MFU)
 
 The agent reads `program.md` -- the "research org code" -- which contains comprehensive instructions for autonomous operation. It edits `kernel.py` one kernel at a time, runs `bench.py` (fixed benchmark with 5-stage correctness checks + roofline analysis), and either keeps or reverts the change. The orchestrator decides when to move to the next kernel using Amdahl's law.
 
@@ -63,6 +64,33 @@ The agent will:
 4. Verify end-to-end correctness and report total speedup
 
 `program.md` is intentionally comprehensive so the agent can run 10+ hours without getting stuck. It includes a 6-tier optimization playbook, decision framework, crash handling, and Amdahl's law reasoning.
+
+## Training Pipeline
+
+Once kernels are optimized, use them for fast pretraining via the `halo_training/` package:
+
+```bash
+# Train with autokernel-optimized HIP kernels (3.05x speedup)
+python -m halo_training --model models/llama_7b.py --class-name LlamaModel \
+    --compile --optimize-kernels --dataset babylm
+
+# Smoke test (200 steps: loss convergence, grad norms, memory, throughput)
+python -m halo_training --model models/llama_7b.py --class-name LlamaModel --smoke
+```
+
+```python
+# Library API
+from halo_training import train
+from models.llama_7b import LlamaModel
+stats = train(LlamaModel(), dataset="babylm", compile=True, optimize_kernels=True)
+# → 43K tok/s, 54% MFU with autokernel backward
+```
+
+**Two modes**, auto-selected by model size:
+- **Mode A** (<2B params): Whole-model `torch.compile`, direct forward/backward. 43K tok/s with autokernel.
+- **Mode B** (>2B params): Per-layer activation checkpointing + streaming. 853 tok/s on 2.09B model, 34.5 GB memory.
+
+See [`halo_training/README.md`](halo_training/README.md) for full documentation.
 
 ## The Pipeline
 
@@ -190,9 +218,10 @@ autokernel/
   export_hf.py          export optimized kernels to HuggingFace Kernels format
   analysis.py           experiment visualization (generates progress.png)
 
-  kernels/              starter Triton kernels (9 types)
-  kernels/cuda/         starter CUDA C++ kernels (9 types, tensor core accelerated)
+  kernels/hip/          20 HIP C++ kernels + _torch_ops.py (custom op autograd for training)
   kernelbench/          KernelBench integration (bridge, eval harness, scorer)
+  halo_training/        composable training stack (Mode A/B, smoke tests, BPB/MFU metrics)
+  autokernel/           library API: autokernel.optimize(model) for inference + training
   models/               self-contained model definitions (GPT-2, LLaMA, BERT)
   workspace/            runtime artifacts (gitignored)
 ```
@@ -235,6 +264,11 @@ This project is **autoresearch for GPU kernels** -- directly inspired by Andrej 
 Built by [RightNow AI](https://www.rightnowai.co). For enterprise GPU optimization, check out [RightNow Enterprise](https://www.rightnowai.co/forge).
 
 ## Changelog
+
+### v2.1.0
+- `halo_training/` composable training stack: Mode A (<2B) + Mode B (>2B, layer-streaming)
+- Autokernel training backward: 3.05x speedup (14K → 43K tok/s), 54% MFU
+- CLI: `python -m halo_training`, smoke tests, BPB/MFU metrics, streaming trainer
 
 ### v1.3.0
 - AMD ROCm GPU support: MI300X, MI325X, MI350X, MI355X detection and specs (thanks [@andyluo7](https://github.com/andyluo7))

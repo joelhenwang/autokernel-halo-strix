@@ -10,9 +10,6 @@ wheels/
 .venv
 worktrees/
 
-# Agent prompt files
-CLAUDE.md
-AGENTS.md
 
 # Experimental artifacts
 dev/
@@ -34,3 +31,13 @@ workspace/
 
 # Graphify knowledge graph output
 graphify-out/
+
+# Local scripts with SSH credentials
+run_remote.sh
+sync_remote.sh
+
+# Tar archives (not source)
+*.tar
+
+# Claude local settings
+.claude/settings.local.json

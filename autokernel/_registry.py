@@ -68,6 +68,7 @@ def optimize(
     compile_mode: str = "default",
     include: Optional[List[str]] = None,
     exclude: Optional[List[str]] = None,
+    training: bool = False,
 ) -> nn.Module:
     """
     Auto-detect model architecture and apply all applicable HIP kernel optimizations.
@@ -84,16 +85,20 @@ def optimize(
         The optimized model (same object, modified in-place).
     """
     # 1. Preserve complex buffers, cast dtype, restore
-    complex_bufs = _preserve_complex_buffers(model)
-    model = model.to(dtype=dtype)
-    if complex_bufs:
-        _restore_complex_buffers(model, complex_bufs)
+    # When training=True, skip dtype cast — let AMP handle fp16 during forward.
+    # GradScaler requires fp32 parameters to unscale gradients correctly.
+    if not training:
+        complex_bufs = _preserve_complex_buffers(model)
+        model = model.to(dtype=dtype)
+        if complex_bufs:
+            _restore_complex_buffers(model, complex_bufs)
 
     # 2. Move to GPU
     if torch.cuda.is_available() and not next(model.parameters()).is_cuda:
         model = model.cuda()
 
-    model.eval()
+    if not training:
+        model.eval()
 
     # 3. Select applicable patterns
     patterns = _select_patterns(include, exclude)

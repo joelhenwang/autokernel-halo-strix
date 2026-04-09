@@ -7,27 +7,30 @@
 
 ## 1. Hardware Architecture
 
-### Strix Halo Key Specs
+### Strix Halo Key Specs (Confirmed: Ryzen AI MAX+ 395)
 
 | Parameter | Value |
 |-----------|-------|
 | Architecture | RDNA 3.5 (APU, integrated GPU) |
 | ISA | gfx1151 |
-| Compute Units | ~40 CUs (varies by SKU) |
-| Work Group Processors | ~20 WGPs (2 CUs per WGP) |
-| Memory | Shared LPDDR5X (unified with CPU) |
-| Memory Bandwidth | ~120 GB/s (estimated, varies by config) |
-| FP16 Peak | ~50 TFLOPS (estimated) |
-| FP32 Peak | ~25 TFLOPS (estimated) |
+| CPU | 16 Zen 5 cores / 32 threads, 3.0–5.1 GHz, 16 MB L2 + 64 MB L3, AVX-512 |
+| GPU | Radeon 8060S |
+| Compute Units | 40 CUs |
+| Work Group Processors | 20 WGPs (2 CUs per WGP) |
+| Memory | 128 GB soldered LPDDR5X, 256-bit bus (unified CPU+GPU) |
+| GPU-Visible Memory | ~116 GB (reported by PyTorch, rest reserved for CPU/OS) |
+| Memory Bandwidth | ~240 GB/s (LPDDR5X-7500) |
+| FP16 Peak | ~59.4 TFLOPS |
+| FP32 Peak | ~29.7 TFLOPS |
 | LDS per CU | 64 KB |
 | L2 Cache | ~6 MB |
 | Wavefront Size | **32 threads** (wave32, preferred for compute) |
 | Max VGPRs per SIMD | 1536 |
 | SIMDs per CU | 2 |
-| TDP | 28-54W (APU) |
+| TDP | 45–120W configurable |
+| NPU | XDNA 2, 50 TOPS INT8 |
 
-**Note:** Exact specs should be verified on hardware. Update this document with
-real measurements from `rocm-smi` and benchmarking.
+**Verified on hardware:** PyTorch 2.10.0+rocm7.12.0, ROCm HIP 7.12, `rocminfo` confirms gfx1151.
 
 ### Key Differences from CDNA (MI300X)
 
@@ -35,17 +38,17 @@ real measurements from `rocm-smi` and benchmarking.
 |---------|---------------|----------------------|
 | GPU Type | Discrete (HBM3) | APU (LPDDR5X shared) |
 | Wavefront Size | 64 | 32 (preferred) |
-| Matrix Cores | MFMA (1307 TFLOPS FP16) | WMMA (limited, ~50 TFLOPS FP16) |
-| Memory BW | 5300 GB/s | ~120 GB/s |
+| Matrix Cores | MFMA (1307 TFLOPS FP16) | **None** (no MFMA, scalar FMA only) |
+| Memory BW | 5300 GB/s | ~240 GB/s |
 | L2 Cache | 256 MB | ~6 MB |
-| CUs | 304 | ~40 |
+| CUs | 304 | 40 |
 | LDS per CU | 64 KB | 64 KB |
-| Power | 750W | 28-54W |
+| Power | 750W | 45-120W |
 
 ### Memory Hierarchy
 
 ```
-LPDDR5X (shared with CPU, ~120 GB/s)
+LPDDR5X (shared with CPU, ~240 GB/s)
     ↓
 L2 Cache (~6 MB, shared by all CUs)
     ↓
@@ -56,7 +59,7 @@ LDS (64 KB per CU, explicitly managed in HIP via __shared__)
 Registers (VGPRs per SIMD, partitioned across active wavefronts)
 ```
 
-**Critical:** Since bandwidth is ~120 GB/s (vs 5300 GB/s on MI300X), nearly ALL
+**Critical:** Since bandwidth is ~240 GB/s (vs 5300 GB/s on MI300X), nearly ALL
 kernels will be memory-bound. Optimization priority: minimize global memory traffic,
 maximize LDS reuse, use vectorized loads (128-bit).
 
@@ -167,7 +170,7 @@ if (warp_id == 0) {
 
 ### Tier 5: APU-Specific
 - **No PCIe transfers**: GPU and CPU share the same memory
-- **Bandwidth is the bottleneck**: ~120 GB/s vs 5300 GB/s on MI300X
+- **Bandwidth is the bottleneck**: ~240 GB/s vs 5300 GB/s on MI300X
 - **Ridge point is very high**: nearly everything is memory-bound
 - **Fusion is critical**: fuse operations to avoid extra global memory reads/writes
 - **Prefetch**: Use computation to hide memory latency
@@ -210,7 +213,7 @@ rocm-smi --showuse --showmemuse
    Stay well under 64 KB total to allow occupancy.
 
 3. **Low bandwidth**: Don't expect to match MI300X throughput. Focus on achieving
-   high % of the ~120 GB/s peak for memory-bound kernels.
+   high % of the ~240 GB/s peak for memory-bound kernels.
 
 4. **No MFMA**: Don't try to use CDNA matrix instructions. Use scalar tiled GEMM
    with shared memory for matmul/attention.

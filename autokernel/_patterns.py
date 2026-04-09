@@ -340,6 +340,47 @@ class SiluGateMulPattern(Pattern):
         return _SiluGateMulReplacement(module, kernel_fn, *attrs)
 
 
+class FusedSwiGLUPattern(Pattern):
+    """Matches SwiGLU with fused gate+up projection (w_gate_up + w_down).
+
+    AMADEUS and similar models use a 2-projection design:
+        gate, up = w_gate_up(x).chunk(2, dim=-1)
+        return w_down(silu(gate) * up)
+
+    The silu_gate_mul HIP kernel accelerates the silu(gate) * up step.
+    """
+
+    def __init__(self):
+        super().__init__("fused_silu_gate_mul", priority=45, op_speedup=1.6)
+
+    def matches(self, name: str, module: nn.Module, model: nn.Module) -> bool:
+        return (
+            hasattr(module, "w_gate_up")
+            and hasattr(module, "w_down")
+            and isinstance(getattr(module, "w_gate_up", None), nn.Linear)
+        )
+
+    def apply(self, name: str, module: nn.Module, model: nn.Module) -> nn.Module:
+        from kernels.hip.silu_gate_mul import kernel_fn
+        return _FusedSwiGLUReplacement(module, kernel_fn)
+
+
+class _FusedSwiGLUReplacement(nn.Module):
+    def __init__(self, original: nn.Module, kernel_fn: Callable):
+        super().__init__()
+        self.w_gate_up = original.w_gate_up
+        self.w_down = original.w_down
+        self.kernel_fn = kernel_fn
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        gate, up = self.w_gate_up(x).chunk(2, dim=-1)
+        if gate.dtype == torch.float16:
+            activated = self.kernel_fn(gate.contiguous(), up.contiguous())
+        else:
+            activated = F.silu(gate) * up
+        return self.w_down(activated)
+
+
 class RotaryEmbeddingPattern(Pattern):
     def __init__(self):
         super().__init__("rotary_embedding", priority=30, op_speedup=3.7)
@@ -369,6 +410,7 @@ ALL_PATTERNS: List[Pattern] = [
     FusedQKVPattern(),
     RMSNormPattern(),
     LayerNormPattern(),
+    FusedSwiGLUPattern(),
     SiluGateMulPattern(),
     RotaryEmbeddingPattern(),
 ]

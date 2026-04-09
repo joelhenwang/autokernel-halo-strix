@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.1.0 -- 2026-04-09
+
+### Halo Training Stack
+
+- **New `halo_training/` package**: Composable pretraining stack for AMD Strix Halo
+  - Mode A (<2B params): whole-model `torch.compile`, direct forward/backward
+  - Mode B (>2B params): per-layer activation checkpointing + streaming via `LayerStreamingTrainer`
+  - Auto mode selection based on model size and available GPU memory (60% threshold)
+- **Training CLI**: `python -m halo_training --model ... --class-name ... --dataset ...`
+  - `--compile`, `--optimize-kernels`, `--smoke`, `--mode A|B|auto`
+  - 45-minute default time budget, configurable batch/block sizes, gradient accumulation
+- **Autokernel training backward**: Added `register_autograd` for 4 custom HIP ops
+  (rmsnorm, rotary_emb_fp32, silu_gate_mul, fused_res_rmsnorm) in `kernels/hip/_torch_ops.py`.
+  Forward uses HIP kernels, backward uses pure PyTorch. Composes with `torch.compile`.
+- **3.05x training speedup** (14K → 43K tok/s) with autokernel backward on 124.7M model, 54% MFU
+- **Smoke test framework** (`run_smoke_test`): 200-step validation with 6 pass/fail criteria
+  (loss decrease, no NaN/Inf, grad norms < 10, memory < 6 GB, throughput > 10K tok/s, state-norm ratio)
+- **Metrics**: BPB (bits-per-byte), MFU (model FLOP utilization), structured JSON logging
+- **Optimizer**: COOKBOOK.md parameter groups with DeepSpeed CPUAdam fallback (ROCm monkey-patch)
+- **Callbacks**: PhaseScheduler (multi-phase unfreezing), MemoryMonitor, StateNormMonitor
+  (recurrence instability detection), PerParamGradMonitor
+- **Evaluation**: `evaluate_bpb` (validation BPB), `benchmark_inference` (prefill + decode)
+- **`autokernel/_registry.py`**: Pattern matching optimizer with `autokernel.optimize(model, training=True)` support
+- **`cudagraph_mark_step_begin()`** fix for `torch.compile(mode="reduce-overhead")` + gradient accumulation
+
 ## v2.0.0 -- 2026-04-07
 
 ### Full Pivot to AMD Strix Halo (gfx1151) + HIP C++
