@@ -26,6 +26,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Fast causal conv1d backend (10x vs nn.Conv1d)
+try:
+    from causal_conv1d import causal_conv1d_fn
+    _HAS_CAUSAL_CONV1D = True
+except ImportError:
+    _HAS_CAUSAL_CONV1D = False
+
+# Fast selective scan backend (5.6x vs HIP kernel)
+try:
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn as _mamba_ssm_scan_fn
+    _HAS_MAMBA_SSM = True
+except ImportError:
+    _HAS_MAMBA_SSM = False
+
 
 @dataclass
 class AmadeusConfig:
@@ -79,29 +93,74 @@ class GatedConv(nn.Module):
     def __init__(self, d_model: int, d_conv: int, kernel_size: int = 3):
         super().__init__()
         self.d_conv = d_conv
+        self.kernel_size = kernel_size
         self.proj = nn.Linear(d_model, 3 * d_conv, bias=False)
-        # Depthwise causal conv: left-pad by (kernel_size - 1)
-        self.conv = nn.Conv1d(
-            d_conv, d_conv, kernel_size=kernel_size,
-            padding=kernel_size - 1, groups=d_conv, bias=True,
-        )
+        if _HAS_CAUSAL_CONV1D:
+            # causal_conv1d_fn expects weight (D, K) and optional bias (D,)
+            self.conv_weight = nn.Parameter(torch.randn(d_conv, kernel_size))
+            self.conv_bias = nn.Parameter(torch.zeros(d_conv))
+        else:
+            # Depthwise causal conv: left-pad by (kernel_size - 1)
+            self.conv = nn.Conv1d(
+                d_conv, d_conv, kernel_size=kernel_size,
+                padding=kernel_size - 1, groups=d_conv, bias=True,
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, _ = x.shape
         b, c, h_tilde = self.proj(x).chunk(3, dim=-1)   # each (B, T, d_conv)
         y = b * h_tilde                                   # gate
-        # Conv expects (B, C, T) layout
-        z = self.conv(y.transpose(1, 2))[:, :, :T]        # causal: truncate future
-        z = z.transpose(1, 2)                              # back to (B, T, d_conv)
+        if _HAS_CAUSAL_CONV1D:
+            # causal_conv1d_fn: input (B, D, L), weight (D, K) → output (B, D, L)
+            z = causal_conv1d_fn(
+                y.transpose(1, 2), self.conv_weight, self.conv_bias
+            ).transpose(1, 2)
+        else:
+            # Conv expects (B, C, T) layout
+            z = self.conv(y.transpose(1, 2))[:, :, :T]    # causal: truncate future
+            z = z.transpose(1, 2)                          # back to (B, T, d_conv)
         return c * z                                       # output gate
 
 
 _HIP_SCAN_AVAILABLE = None  # lazy check
 
 
+def _mamba_ssm_scan(x, dt, A_log, B, C, D, n_heads):
+    """Wrapper to call mamba-ssm selective_scan_fn with our tensor layout.
+
+    Our layout: x (B, T, D), dt (B, T, D), A_log (D,), B (B, T, N), C (B, T, N), D (D,)
+    mamba-ssm: u (B, D, L), delta (B, D, L), A (D, N), B (B, N, L), C (B, N, L), D (D,)
+    """
+    batch, seqlen, d_inner = x.shape
+    dstate = B.shape[-1]
+
+    u = x.transpose(1, 2).contiguous()          # (B, D, L)
+    delta = dt.transpose(1, 2).contiguous()      # (B, D, L)
+    A = -torch.exp(A_log.float()).view(d_inner // dstate if d_inner > dstate else d_inner, dstate)
+    # Reshape A to (D, N): if d_inner = n_heads * dstate, A is (n_heads, dstate) → repeat
+    # A_log is (D,) = (n_heads * dstate,). mamba-ssm expects A (D, N).
+    # Our A is diagonal per-dim. Expand to (D, N) by repeating.
+    A = -torch.exp(A_log.float()).unsqueeze(-1).expand(d_inner, dstate)
+    B_t = B.transpose(1, 2).contiguous()         # (B, N, L)
+    C_t = C.transpose(1, 2).contiguous()         # (B, N, L)
+    D_f = D.float()
+
+    y = _mamba_ssm_scan_fn(u.float(), delta.float(), A, B_t.float(), C_t.float(), D_f)
+    return y.transpose(1, 2).to(x.dtype)         # (B, T, D)
+
+
 def _scan_dispatch(x, dt, A_log, B, C, D, n_heads):
-    """Try HIP fused scan kernel, fall back to chunked Python scan."""
+    """Try mamba-ssm > HIP fused scan kernel > chunked Python scan."""
     global _HIP_SCAN_AVAILABLE
+
+    # Priority 1: mamba-ssm (5.6x faster)
+    if _HAS_MAMBA_SSM and x.is_cuda:
+        try:
+            return _mamba_ssm_scan(x, dt, A_log, B, C, D, n_heads)
+        except Exception:
+            pass
+
+    # Priority 2: HIP kernel
     if _HIP_SCAN_AVAILABLE is None:
         try:
             from kernels.hip.selective_scan import kernel_fn as _hip_scan_fn
@@ -114,6 +173,8 @@ def _scan_dispatch(x, dt, A_log, B, C, D, n_heads):
             return _hip_selective_scan(x, dt, A_log, B, C, D, n_heads)
         except Exception:
             pass  # fall through to chunked
+
+    # Priority 3: chunked Python
     return selective_scan_chunked(x, dt, A_log, B, C, D, n_heads)
 
 

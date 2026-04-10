@@ -217,3 +217,9 @@ The conductor/PLE additions are element-wise ops (linear projections, sigmoid, m
 - **AMADEUS measured:** 6,400 tok/s, 15.9% MFU, 12.7 GB memory (eager, 243M params)
 - This variant adds <5M params → expect similar throughput
 - **Token budget:** 15 min = ~5.8M | 45 min = ~17M | 120 min = ~46M
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed, try/except fallback
+- **Mamba-3 scan:** mamba-ssm selective_scan_fn (5.6x, 0.32ms) — drop-in upgrade for AMADEUS base
+- **Conductor/PLE ops:** Element-wise, no external kernel needed

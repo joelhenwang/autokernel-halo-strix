@@ -159,3 +159,9 @@ Parallel hybrid runs conv and recurrence on the same input — no extra serial c
 `ffn_inner=1792` (1.75x) is reduced from Caveman's 2240 (2.19x) to fit 250M budget. This saves ~15% memory bandwidth per layer but may hurt quality. Benchmark both 1792 and 2240 before committing.
 
 ### MFU: 65-75% training (same as Caveman LFM)
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed, try/except fallback
+- **SSM scan (if Mamba path used):** mamba-ssm selective_scan_fn (5.6x, 0.32ms) — drop-in upgrade
+- **Griffin scan:** Chunked linear recurrence remains primary. FLA HGRN (0.40ms) as alternative.

@@ -137,11 +137,10 @@ h = associative_scan(operator, pairs)
 
 For architectures with sparse attention layers (1-4 layers out of 16), use in order of preference:
 
-1. **Aule-Attention** (Triton, hardware-agnostic) — `pip install aule-attention`. Uses Triton kernels that compile for the actual hardware target (gfx1151). GQA native. head_dim≤128. Full backward. MIT license. `from aule_attention import flash_attention; flash_attention(q, k, v, causal=True)`. Source: github.com/AuleTechnologies/Aule-Attention.
+1. **hybrid_flash_sdpa_attention** — flash_attn forward + SDPA backward with shared logsumexp. **8.9% faster than pure SDPA** (3.50ms vs 3.84ms fwd+bwd). Import: `from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention`. Input: `(B, T, H, D)`. Full backward with gradient accuracy max_diff=0.002.
 2. **PyTorch SDPA** — `F.scaled_dot_product_attention(q, k, v, is_causal=True)`. Goes through Inductor when compiled. Reliable fallback.
-3. **flash-attn ROCm build** — Available on training machine but **0.05x on gfx1151** (targets CDNA/MFMA, not RDNA). LAST resort.
 
-> **Note:** Standard flash-attn is 0.05x on gfx1151 because it needs MFMA matrix cores. Aule-Attention avoids this by generating Triton code for the actual target. Benchmark before committing — no published perf data for RDNA 3.5.
+> **Note:** Pure flash_attn is 4.2x faster on forward but Triton backward is 66% slower than SDPA on gfx11. The hybrid combines flash_attn's fast forward with SDPA's fast backward by passing softmax logsumexp directly — no recompute overhead.
 
 ### 1.6 Engram Hash Tables
 
@@ -367,6 +366,81 @@ class MomentumResidual(nn.Module):
 **Math:** Early layers contribute ~1/(1-beta) more to the final state. At beta=0.5: ~2x amplification for early layers. Creates a natural gradient highway — early layers get stronger gradients without any explicit mechanism.
 
 **Why it works:** Standard residuals are memoryless — each layer adds independently. Momentum gives the residual stream INERTIA. If layers 1-5 all push in the same direction, the accumulated velocity carries that signal further. This is Newtonian mechanics applied to the depth dimension.
+
+---
+
+## Section 1b: External Kernel Integration
+
+All verified on gfx1151 with full backward support. Use try/except imports for graceful fallback.
+
+### causal-conv1d (10x vs nn.Conv1d)
+
+Drop-in replacement for depthwise causal convolution in any GatedConv module:
+
+```python
+try:
+    from causal_conv1d import causal_conv1d_fn
+    _HAS_CAUSAL_CONV1D = True
+except ImportError:
+    _HAS_CAUSAL_CONV1D = False
+
+# In GatedConv.__init__:
+if _HAS_CAUSAL_CONV1D:
+    self.conv_weight = nn.Parameter(torch.randn(d_conv, kernel_size))
+    self.conv_bias = nn.Parameter(torch.zeros(d_conv))
+else:
+    self.conv = nn.Conv1d(d_conv, d_conv, kernel_size, padding=kernel_size-1, groups=d_conv, bias=True)
+
+# In GatedConv.forward:
+if _HAS_CAUSAL_CONV1D:
+    z = causal_conv1d_fn(y.transpose(1, 2), self.conv_weight, self.conv_bias).transpose(1, 2)
+else:
+    z = self.conv(y.transpose(1, 2))[:, :, :T].transpose(1, 2)
+```
+
+**Applies to:** ALL architectures with GatedConv (AMADEUS, TEMPEST, PROMETHEUS, Caveman LFM, Parallel Caveman, etc.)
+
+### mamba-ssm selective scan (5.6x vs HIP kernel)
+
+Drop-in upgrade for AMADEUS and any Mamba-based SSM:
+
+```python
+try:
+    from mamba_ssm.ops.selective_scan_interface import selective_scan_fn
+    _HAS_MAMBA_SSM = True
+except ImportError:
+    _HAS_MAMBA_SSM = False
+
+# In _scan_dispatch: priority mamba-ssm > HIP kernel > chunked Python
+# Tensor layout conversion: our (B,T,D) → mamba-ssm (B,D,L)
+```
+
+**Applies to:** AMADEUS, CAVEMAN-LFM (Mamba path), any architecture using selective scan.
+
+### hybrid_flash_sdpa_attention (8.9% faster than SDPA)
+
+For training with attention layers — combines flash_attn's fast forward with SDPA's fast backward:
+
+```python
+from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
+# Input: (B, T, H, D) — flash_attn native layout
+y = hybrid_flash_sdpa_attention(q, k, v, causal=True)
+```
+
+**Applies to:** PROMETHEUS, any hybrid architecture with attention layers.
+
+### FLA recurrence ops (Triton, pure Python fallback)
+
+Alternative recurrence backends for Griffin/Mamba-style architectures:
+
+| Op | Time | Use Case |
+|----|------|----------|
+| `fla.ops.gla.chunk_gla` | 1.28ms | Griffin alternative (gated linear attention) |
+| `fla.ops.retention.chunk_retention` | 0.77ms | Fastest FLA recurrence |
+| `fla.ops.hgrn.chunk_hgrn` | 0.40ms | Per-dim recurrence (B,T,D) — replaces Griffin |
+| `fla.ops.delta_rule.chunk_delta_rule` | 1.60ms | Most expressive, DeltaNet |
+
+**Applies to:** SPECTRAL-HYDRA (HGRN as alternative to element-wise recurrence), HARMONIC-DREAMER (DeltaNet as alternative to DHO), any plan with custom recurrence.
 
 ---
 

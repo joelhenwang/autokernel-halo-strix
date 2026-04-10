@@ -5,9 +5,8 @@ Hybrid architecture: mostly Griffin (element-wise, fast) with 2 attention
 layers at strategic positions (4 and 12) for global context.
 
 Attention backend selection (in order of preference):
-  1. Aule-Attention (Triton, pip install aule-attention)
+  1. hybrid_attention (flash fwd + SDPA bwd, 8.9% faster than SDPA)
   2. PyTorch SDPA (F.scaled_dot_product_attention)
-  3. Standard flash-attn (LAST resort — 0.05x on gfx1151)
 
 Usage:
     python -m halo_training --model models/prometheus.py --class-name Prometheus --dataset babylm
@@ -39,11 +38,11 @@ def _detect_attn_backend():
     if _ATTN_BACKEND is not None:
         return _ATTN_BACKEND
 
-    # Try Aule-Attention first
+    # Priority 1: hybrid_attention (flash fwd + SDPA bwd, 8.9% faster)
     try:
-        from aule_attention import flash_attention
-        _ATTN_BACKEND = "aule"
-        print("[Prometheus] Attention backend: Aule-Attention (Triton)")
+        from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
+        _ATTN_BACKEND = "hybrid"
+        print("[Prometheus] Attention backend: hybrid (flash fwd + SDPA bwd)")
         return _ATTN_BACKEND
     except ImportError:
         pass
@@ -55,11 +54,19 @@ def _detect_attn_backend():
 
 
 def _attention_forward(q, k, v, causal=True):
-    """Dispatch to best available attention backend."""
+    """Dispatch to best available attention backend.
+
+    q, k, v are (B, H, T, D) from GQAAttentionLayer.
+    hybrid_attention expects (B, T, H, D) — transpose as needed.
+    """
     backend = _detect_attn_backend()
-    if backend == "aule":
-        from aule_attention import flash_attention
-        return flash_attention(q, k, v, causal=causal)
+    if backend == "hybrid":
+        from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
+        # hybrid expects (B, T, H, D); q/k/v are (B, H, T, D)
+        out = hybrid_flash_sdpa_attention(
+            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=causal
+        )
+        return out.transpose(1, 2)  # back to (B, H, T, D)
     else:
         return F.scaled_dot_product_attention(q, k, v, is_causal=causal)
 

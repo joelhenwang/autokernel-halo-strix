@@ -280,3 +280,9 @@ The Griffin operator `(a₂·a₁, a₂·b₁+b₂)` is the same associative sca
 - Griffin recurrence is element-wise (~95% MFU)
 - Caveman routing (`where(is_glue, bypass, rec_out)`) is negligible cost
 - **Overall training MFU: 65-75%** (limited by FFN weight reads)
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed, try/except fallback
+- **SSM scan (if Mamba path used):** mamba-ssm selective_scan_fn (5.6x, 0.32ms) — drop-in upgrade
+- **Griffin scan:** Chunked linear recurrence remains primary. FLA HGRN (0.40ms) as alternative.

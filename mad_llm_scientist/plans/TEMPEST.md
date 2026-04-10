@@ -221,3 +221,9 @@ AMADEUS component profiling (batch=8, seq=512):
 7. Measure MFU: target >60%
 8. Full BabyLM training (45 min)
 9. Compare vs AMADEUS at equal wall-clock time
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — `try/except` import in `models/tempest.py`, auto-used if installed. Shared with PROMETHEUS (imports from tempest).
+- **Griffin scan:** Chunked linear recurrence remains the primary scan backend. FLA HGRN (0.40ms) is an alternative per-dim recurrence if Griffin scan proves slow.
+- **Expected throughput with causal-conv1d:** 12-16K tok/s (vs estimated 8-10K eager baseline)

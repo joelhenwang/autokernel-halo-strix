@@ -183,3 +183,9 @@ If Griffin replacement happens, add residual momentum to compensate for the qual
 5. If FFN: this is the fundamental limit — consider TEMPEST.
 6. Ablate FiLM: measure loss with/without.
 7. Document ALL findings for future architecture decisions.
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **mamba-ssm:** selective_scan_fn (5.6x, 0.32ms) — add to optimization roadmap for any Mamba-based architecture
+- **causal-conv1d:** 10x conv speedup — add to optimization roadmap for all GatedConv architectures
+- **hybrid_attention:** 8.9% faster than SDPA for training — add to optimization roadmap for attention layers

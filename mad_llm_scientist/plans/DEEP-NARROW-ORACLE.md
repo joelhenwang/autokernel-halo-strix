@@ -180,3 +180,8 @@ With d=512, per-layer weights (~2 MB) fit in L2 (6 MB). But 48 layers total (~96
 
 ### Throughput: ~4-6K tok/s (48 serial layers hurt), MFU: 50-60%
 The serial depth is the main throughput limiter. Consider reducing to 32 layers if throughput matters more than depth.
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — critical for 48 layers of conv
+- **Throughput estimates updated:** With causal-conv1d, conv overhead drops significantly across all 48 layers

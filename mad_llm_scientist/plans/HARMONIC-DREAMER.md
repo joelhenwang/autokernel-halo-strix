@@ -267,3 +267,8 @@ The 3 frequency bands (8/32/128 token periods) are set via omega init. Verify af
 
 ### Throughput: ~5-7K tok/s (complex ops are 2x slower than real), MFU: 55-65%
 Complex arithmetic doubles the FLOPs vs real. Budget accordingly.
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **DHO recurrence:** FLA DeltaNet (1.60ms) as alternative to custom DHO implementation
+- **GatedConv (if used):** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed

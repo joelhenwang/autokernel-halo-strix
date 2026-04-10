@@ -277,3 +277,7 @@ The `StateNormMonitor` (designed for Griffin-style fixed recurrence) gives **fal
 
 ### halo_training Integration
 Evaluation can use `halo_training.evaluate.evaluate_bpb()` and `benchmark_inference()` directly.
+
+### External Kernel Integration (verified 2026-04-10)
+
+Add external kernel benchmarks to evaluation suite: causal-conv1d, mamba-ssm scan, hybrid_attention, FLA ops (GLA, Retention, HGRN, DeltaNet). Reference: `scripts/bench_external_kernels.py`.

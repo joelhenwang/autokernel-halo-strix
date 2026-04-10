@@ -331,3 +331,8 @@ Previous estimate "~25M tokens in 15 min" is optimistic. Based on AMADEUS baseli
 
 ### Scan: Chunked Linear Recurrence
 Backbone uses Griffin recurrence → same chunked scan. Reference: `models/amadeus.py:selective_scan_chunked`.
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **Speculative decode verification:** flash_attn forward (4.2x faster than SDPA, 0.25ms) for decode-time verification
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed

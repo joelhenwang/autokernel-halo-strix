@@ -237,3 +237,9 @@ for l, layer in enumerate(layers):
 
 ### Decay Bias Verification
 After training, plot histogram of α = sigmoid(linear + decay_bias) per dimension band. If fast/medium/slow bands don't separate, increase decay_bias LR from 0.1x to 0.2x base.
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed
+- **Element-wise recurrence:** FLA HGRN (0.40ms) as alternative to custom per-dim recurrence
+- **Griffin scan:** Chunked linear recurrence or FLA chunk_hgrn

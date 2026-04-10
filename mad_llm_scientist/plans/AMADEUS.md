@@ -248,3 +248,9 @@ h = gamma.unsqueeze(1) * h + beta.unsqueeze(1)  # FiLM: channel-wise affine
 - **FiLM identity init:** zero weights/biases so initial transform is h×1+0=h
 - **GradScaler inf during warmup is normal** — scaler adjusts scale down, training continues
 - **StateNormMonitor gives false positives** for data-dependent SSMs (max_ratio 3-5 is normal)
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — `try/except` import in `models/amadeus.py`, auto-used if installed
+- **SSM scan:** mamba-ssm `selective_scan_fn` (5.6x vs HIP kernel, 0.32ms) — highest priority in `_scan_dispatch()`, replaces HIP and chunked fallbacks
+- **Expected throughput with external kernels:** 12-15K tok/s (vs 10.4K baseline)

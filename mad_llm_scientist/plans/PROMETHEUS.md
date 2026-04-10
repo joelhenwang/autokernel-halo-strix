@@ -141,62 +141,44 @@ Under 250M with room. Options: increase ffn_inner, add PLE, add Engram.
 
 > Updated 2026-04-09 with AMADEUS measured baselines and flash-attn reality check.
 
-### Attention Backend on gfx1151: Three Options
+### Attention Backend on gfx1151: Verified Results (2026-04-10)
 
-The *standard* flash-attn ROCm build is 0.05x on gfx1151 (targets CDNA/MFMA). But there are viable alternatives:
+**Winner: hybrid_flash_sdpa_attention** — flash_attn forward (0.25ms) + SDPA backward (2.92ms) = **3.50ms fwd+bwd, 8.9% faster than pure SDPA** (3.84ms). Wired into `models/prometheus.py` with auto-detection.
 
-**Option 1: Aule-Attention (Triton, recommended to try first)**
-- `pip install aule-attention` — uses Triton kernels that compile for the actual target hardware
-- GQA native, head_dim≤128, full backward pass, MIT license
-- AMD RDNA3 listed; gfx1151 (RDNA 3.5) not explicitly confirmed but likely works via Triton/ROCm
-- API: `from aule_attention import flash_attention; flash_attention(q, k, v, causal=True)`
-- **Must benchmark on gfx1151 before committing** — no published perf data for RDNA 3.5
+| Backend | Fwd+Bwd | vs SDPA | Status |
+|---------|---------|---------|--------|
+| **hybrid_attention** | **3.50ms** | **8.9% faster** | **Active** (auto-detected) |
+| PyTorch SDPA | 3.84ms | baseline | Fallback |
+| flash_attn (pure Triton) | 4.84ms | 26% slower | Avoid for training |
 
-**Option 2: AOTriton custom PyTorch build (fastest if it works)**
-- Community effort got flash attention on gfx1151 via AOTriton (ahead-of-time Triton compilation)
-- Results: **20-30x forward speedup** (1950ms → 68.5ms), 8-20x backward speedup
-- Requires custom PyTorch build — WIP scripts at `github.com/lhl/strix-halo-testing`
-- Known issues: GPU hangs with CUDA graphs, amdsmi segfaults
-- Source: https://community.frame.work/t/pytorch-w-flash-attention-vllm-for-strix-halo/74736
-
-**Option 3: PyTorch SDPA (reliable fallback)**
-- `F.scaled_dot_product_attention(q, k, v, is_causal=True)`
-- Goes through Inductor when compiled. Always works, no custom builds needed.
-
-**Strategy:** Try Aule-Attention first (pip install). If it benchmarks well on gfx1151, the 2 attention layers become cheap and PROMETHEUS's throughput improves significantly. Fall back to SDPA otherwise.
+**How it works:** `kernels/hip/hybrid_attention.py` uses flash_attn's fast forward, then passes the softmax logsumexp directly to `torch.ops.aten._flash_attention_backward` (SDPA's fast CK backward). No recompute overhead. Gradient accuracy: max_diff=0.002.
 
 **Estimated attention cost per layer:**
 
-| Backend | Per layer | 2 layers total | Impact on throughput |
-|---------|----------|---------------|---------------------|
-| Aule/AOTriton (if working) | ~1-3ms | ~2-6ms | Negligible — PROMETHEUS ≈ TEMPEST speed |
-| PyTorch SDPA | ~8-12ms | ~16-24ms | ~10-15% slower than TEMPEST |
-| Standard flash-attn | ~50+ms | ~100+ms | Unusable — kills throughput |
+| Backend | Per layer fwd+bwd | 2 layers total | Impact on throughput |
+|---------|-------------------|---------------|---------------------|
+| **hybrid_attention** | ~3.5ms | ~7ms | Negligible — PROMETHEUS ≈ TEMPEST speed |
+| PyTorch SDPA | ~3.8ms | ~7.7ms | ~5% slower than hybrid |
 
-### Realistic Throughput Estimate
+### Realistic Throughput Estimate (updated with hybrid_attention)
 
 Using AMADEUS component profiling as baseline (batch=8, seq=512):
 - 14 Griffin layers × ~7.1ms each = ~100ms
-- 2 attention layers: **depends on backend** (see above)
+- 2 hybrid attention layers × ~3.5ms fwd+bwd = ~7ms
 - LM Head: ~13ms
 - Overhead: ~5ms
 
-**Scenario A: Aule-Attention or AOTriton works (~2ms/attn layer)**
-- Forward: 100 + 4 + 13 + 5 = **~122ms** → fwd+bwd ~366ms → **~11.2K tok/s eager**
+**With hybrid_attention (verified):**
+- Forward: ~100 + ~3.5 + 13 + 5 = **~122ms** → fwd+bwd ~366ms → **~11.2K tok/s eager**
 - With autokernel + compile: **~14-16K tok/s**
-- PROMETHEUS ≈ TEMPEST throughput. Attention is ~free. **Best scenario.**
+- PROMETHEUS ≈ TEMPEST throughput. Attention is near-free with hybrid backend.
 
-**Scenario B: PyTorch SDPA fallback (~10ms/attn layer)**
-- Forward: 100 + 20 + 13 + 5 = **~138ms** → fwd+bwd ~414ms → **~9.9K tok/s eager**
-- With autokernel + compile: **~11-13K tok/s**
-- ~10-15% slower than TEMPEST. Attention has a cost.
+| Mode | Throughput | vs AMADEUS (10.4K) |
+|------|-----------|-------------------|
+| Eager | **10-12K** | ~1.0x |
+| + autokernel + compile | **14-16K** | ~1.3-1.5x |
 
-| Mode | Scenario A (Aule) | Scenario B (SDPA) | vs AMADEUS (10.4K) |
-|------|--------------------|--------------------|--------------------|
-| Eager | **10-12K** | **7-9K** | 1.0x / 0.7-0.9x |
-| + autokernel + compile | **14-16K** | **11-13K** | 1.3-1.5x / 1.1-1.2x |
-
-**The real question:** Does Aule-Attention work on gfx1151? If yes, PROMETHEUS is the best architecture (Griffin speed + attention quality). If no, it's a tradeoff: ~10-15% throughput penalty for global context. Either way, the quality comparison vs TEMPEST (no attention) is the key experiment.
+**Key insight:** hybrid_attention makes the 2 attention layers cost only ~7ms total (fwd+bwd), which is <5% of total wall-clock. PROMETHEUS gets global context essentially for free.
 
 ### Token Budget (corrected)
 
@@ -211,7 +193,7 @@ vs AMADEUS optimized: 28M in 45 min. **Similar data exposure, not 4x more.**
 - **fused_residual_add_rmsnorm** (6.6x) — all 16 layers ✓
 - **silu_gate_mul** (1.6x) — all 16 SwiGLU FFNs ✓ (FusedSwiGLUPattern)
 - **cross_entropy** (1.8x) — loss ✓
-- **F.scaled_dot_product_attention** — layers 4, 12 (NOT flash-attn; use PyTorch SDPA)
+- **hybrid_flash_sdpa_attention** — layers 4, 12 (8.9% faster than SDPA, auto-detected)
 - **Chunked linear recurrence / HIP selective_scan** — 14 Griffin layers
 - Apply via `autokernel.optimize(model, training=True)`
 
@@ -261,3 +243,10 @@ Expected ~0.5ms per Griffin layer (vs 1.8ms for Mamba-3 with HIP kernel).
 7. Full training on BabyLM
 8. Ablation: momentum ON vs OFF
 9. Ablation: 2 attn layers vs 0 (= TEMPEST) vs 4
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — imported from `models/tempest.py` which has `try/except` integration
+- **Attention:** hybrid_flash_sdpa_attention (8.9% faster than SDPA) — auto-detected in `_detect_attn_backend()`, combines flash_attn forward + SDPA backward
+- **Griffin scan:** FLA HGRN (0.40ms) available as alternative per-dim recurrence
+- **Expected throughput with external kernels:** 10-14K tok/s eager, 14-16K with autokernel+compile

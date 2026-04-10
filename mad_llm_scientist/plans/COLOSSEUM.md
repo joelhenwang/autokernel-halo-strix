@@ -179,3 +179,7 @@ The `halo_training/` package already implements unified memory training:
 - 2.09B transformer: 853 tok/s, 34.5 GB (Mode B)
 
 Much of this plan is already implemented. Focus integration effort on novel architectures, not reimplementing the training loop.
+
+### External Kernel Integration (verified 2026-04-10)
+
+Updated baselines should include external kernel speedups: causal-conv1d (10x), mamba-ssm scan (5.6x), hybrid_attention (8.9% vs SDPA). All verified on gfx1151 with full backward.

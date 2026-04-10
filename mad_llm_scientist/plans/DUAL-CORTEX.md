@@ -294,3 +294,8 @@ For any recurrence in System-1 path. Reference: `models/amadeus.py:selective_sca
 
 ### Throughput: ~5-7K tok/s (depends on System-2 activation rate), MFU: 60-75%
 If System-2 rarely activates (>80% System-1), throughput approaches Caveman LFM levels. If System-2 activates frequently with attention, throughput drops significantly.
+
+### External Kernel Integration (verified 2026-04-10)
+
+- **Slow path attention:** hybrid_flash_sdpa_attention (8.9% faster than SDPA) — from kernels/hip/hybrid_attention.py
+- **GatedConv (if used):** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed
