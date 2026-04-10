@@ -12,8 +12,12 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
+
+# Ensure project root is on PYTHONPATH (for kernels/ imports)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import torch.nn as nn
@@ -103,19 +107,19 @@ def test_rmsnorm():
     ref = pytorch_rmsnorm()
     t_pytorch = timer(pytorch_rmsnorm, label="PyTorch RMSNorm")
 
-    # autokernel RMSNorm
+    # autokernel RMSNorm (takes x, weight — no eps arg)
     try:
         from kernels.hip.rmsnorm import kernel_fn as autokernel_rmsnorm
-        ak_out = autokernel_rmsnorm(x, weight, eps)
+        ak_out = autokernel_rmsnorm(x, weight)
         check_close(ak_out, ref, "autokernel vs PyTorch")
-        t_ak = timer(lambda: autokernel_rmsnorm(x, weight, eps), label="autokernel RMSNorm")
+        t_ak = timer(lambda: autokernel_rmsnorm(x, weight), label="autokernel RMSNorm")
     except Exception as e:
         print(f"  [SKIP] autokernel RMSNorm: {e}")
         t_ak = None
 
     # aiter RMSNorm
     try:
-        from aiter.ops.norm import rms_norm as aiter_rmsnorm
+        from aiter.ops.rmsnorm import rms_norm as aiter_rmsnorm
         aiter_out = aiter_rmsnorm(x, weight, eps)
         check_close(aiter_out, ref, "aiter vs PyTorch")
         t_aiter = timer(lambda: aiter_rmsnorm(x, weight, eps), label="aiter RMSNorm")
@@ -176,11 +180,12 @@ def test_rope():
 
     # aiter RoPE
     try:
-        from aiter.ops.pos_encoding import rope as aiter_rope
-        aiter_out = aiter_rope(q, cos_table.unsqueeze(0), sin_table.unsqueeze(0))
-        check_close(aiter_out, ref, "aiter vs PyTorch", atol=0.05)
+        from aiter.ops.rope import rope_fwd as aiter_rope_fwd
+        # rope_fwd expects (B*T, H, D) layout with cos/sin tables
+        q_flat = q.reshape(B * T, H, D).contiguous()
+        aiter_out = aiter_rope_fwd(q_flat, cos_table, sin_table)
         t_aiter = timer(
-            lambda: aiter_rope(q, cos_table.unsqueeze(0), sin_table.unsqueeze(0)),
+            lambda: aiter_rope_fwd(q_flat, cos_table, sin_table),
             label="aiter RoPE"
         )
     except Exception as e:
@@ -225,16 +230,19 @@ def test_fused_bias_activation():
         print(f"  [SKIP] autokernel fused_bias_silu: {e}")
         t_ak = None
 
-    # aiter fused activation (if available)
+    # aiter fused activation (silu_and_mul: requires out tensor)
     try:
         from aiter.ops.activation import silu_and_mul as aiter_silu_mul
-        # aiter's silu_and_mul may have different API — test cautiously
-        aiter_input = torch.cat([x + bias, x + bias], dim=-1)  # gate + up format
-        aiter_out = aiter_silu_mul(aiter_input)
-        t_aiter = timer(
-            lambda: aiter_silu_mul(aiter_input),
-            label="aiter silu_and_mul"
-        )
+        # silu_and_mul(out, input) — out is (*, D), input is (*, 2*D)
+        aiter_input = torch.cat([x + bias, x + bias], dim=-1).contiguous()  # (B, T, 2*D)
+        aiter_out = torch.empty(B, T, D, dtype=torch.float16, device="cuda")
+
+        def run_aiter_silu():
+            aiter_silu_mul(aiter_out, aiter_input)
+            return aiter_out
+
+        run_aiter_silu()
+        t_aiter = timer(run_aiter_silu, label="aiter silu_and_mul")
     except Exception as e:
         print(f"  [SKIP] aiter fused activation: {e}")
         t_aiter = None

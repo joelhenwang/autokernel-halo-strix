@@ -17,6 +17,9 @@ import os
 import sys
 import time
 
+# Ensure project root is on PYTHONPATH
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -37,7 +40,7 @@ def profile_training(args):
 
     # Load model
     ModelClass = load_model_class(args.model, args.class_name)
-    model = ModelClass().to(device).to(torch.float16)
+    model = ModelClass().to(device)  # fp32 master weights, autocast handles fp16
     model.train()
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -56,16 +59,15 @@ def profile_training(args):
         model = torch.compile(model, mode="default")
         print("Applied torch.compile()")
 
-    # Setup optimizer
+    # Setup optimizer (no GradScaler — external kernels like mamba-ssm may produce fp16 grads)
     optimizer = torch.optim.AdamW(model.parameters(), lr=8e-4, fused=True)
-    scaler = torch.amp.GradScaler("cuda")
 
     # Setup data
     from halo_training.data import BabyLMDataset, build_dataloader
     dataset = BabyLMDataset(block_size=args.block_size)
     loader = build_dataloader(
         dataset, batch_size=args.batch_size,
-        num_workers=args.num_workers, pin_memory=True,
+        num_workers=args.num_workers,
     )
     loader_iter = iter(loader)
 
@@ -98,8 +100,12 @@ def profile_training(args):
         except StopIteration:
             loader_iter = iter(loader)
             batch = next(loader_iter)
-        input_ids = batch[:, :-1].to(device)
-        targets = batch[:, 1:].to(device)
+        # BabyLMDataset returns (input_ids, targets) tuple
+        if isinstance(batch, (list, tuple)):
+            input_ids, targets = batch[0].to(device), batch[1].to(device)
+        else:
+            input_ids = batch[:, :-1].to(device)
+            targets = batch[:, 1:].to(device)
         torch.cuda.synchronize()
         timings["data_load"].append(time.time() - t0)
 
@@ -126,26 +132,24 @@ def profile_training(args):
 
         # Backward pass
         t0 = time.time()
-        scaler.scale(loss).backward()
+        loss.backward()
         torch.cuda.synchronize()
         timings["backward"].append(time.time() - t0)
 
         # Gradient clipping
         t0 = time.time()
-        scaler.unscale_(optimizer)
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         torch.cuda.synchronize()
         timings["grad_clip"].append(time.time() - t0)
 
         # Optimizer step
         t0 = time.time()
-        scaler.step(optimizer)
+        optimizer.step()
         torch.cuda.synchronize()
         timings["optimizer_step"].append(time.time() - t0)
 
-        # Scaler update
+        # Zero grad
         t0 = time.time()
-        scaler.update()
         optimizer.zero_grad(set_to_none=True)
         torch.cuda.synchronize()
         timings["scaler_update"].append(time.time() - t0)
@@ -234,8 +238,11 @@ def profile_training(args):
                     loader_iter = iter(loader)
                     batch = next(loader_iter)
 
-                input_ids = batch[:, :-1].to(device)
-                targets = batch[:, 1:].to(device)
+                if isinstance(batch, (list, tuple)):
+                    input_ids, targets = batch[0].to(device), batch[1].to(device)
+                else:
+                    input_ids = batch[:, :-1].to(device)
+                    targets = batch[:, 1:].to(device)
 
                 with torch.amp.autocast("cuda", dtype=torch.float16):
                     logits = model(input_ids)
@@ -244,11 +251,9 @@ def profile_training(args):
                     else:
                         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.reshape(-1))
 
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
+                loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
         trace_path = f"profile_trace_{args.class_name.lower()}.json"
