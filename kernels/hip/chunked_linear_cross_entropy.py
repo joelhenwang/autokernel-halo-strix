@@ -41,7 +41,7 @@ class _ChunkedLinearCrossEntropy(torch.autograd.Function):
 
     @staticmethod
     @custom_fwd(device_type="cuda")
-    def forward(ctx, hidden, weight, targets, chunk_size, ignore_index):
+    def forward(ctx, hidden, weight, targets, chunk_size, ignore_index, store_fp32=False):
         N, D = hidden.shape
         V = weight.shape[0]
 
@@ -77,8 +77,8 @@ class _ChunkedLinearCrossEntropy(torch.autograd.Function):
             if not valid_mask.all():
                 grad_logits_chunk[~valid_mask] = 0.0
 
-            # Save in fp16 to minimize memory (98 MB per chunk at V=50257)
-            saved_grad_logits.append(grad_logits_chunk.half())
+            # Save grad_logits (fp16 default to save memory, fp32 optional to skip conversion)
+            saved_grad_logits.append(grad_logits_chunk if store_fp32 else grad_logits_chunk.half())
 
         if n_valid > 0:
             total_loss = total_loss / n_valid
@@ -125,7 +125,7 @@ class _ChunkedLinearCrossEntropy(torch.autograd.Function):
         return (
             grad_hidden.to(hidden.dtype),
             grad_weight.to(weight.dtype),
-            None, None, None,  # targets, chunk_size, ignore_index
+            None, None, None, None,  # targets, chunk_size, ignore_index, store_fp32
         )
 
 
@@ -143,10 +143,11 @@ class ChunkedLinearCrossEntropyLoss(nn.Module):
     Saves ~300 MB on a 250M model with vocab=50257, batch=16, seq=256.
     """
 
-    def __init__(self, chunk_size: int = 1024, ignore_index: int = -100):
+    def __init__(self, chunk_size: int = 1024, ignore_index: int = -100, store_fp32: bool = False):
         super().__init__()
         self.chunk_size = chunk_size
         self.ignore_index = ignore_index
+        self.store_fp32 = store_fp32
 
     def forward(
         self,
@@ -175,4 +176,5 @@ class ChunkedLinearCrossEntropyLoss(nn.Module):
 
         return _ChunkedLinearCrossEntropy.apply(
             hidden, weight, targets, self.chunk_size, self.ignore_index,
+            self.store_fp32,
         )
