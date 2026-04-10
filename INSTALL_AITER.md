@@ -101,7 +101,21 @@ SDPA fwd+bwd: 4.14ms
 
 flash_attn and SDPA both compute a `softmax_lse` (log-sum-exp) tensor of shape `(B, H, T)` in float32 during the forward pass. The backward uses this logsumexp to recompute the attention probability matrix without storing the full N×N attention matrix. By passing flash_attn's logsumexp directly to PyTorch's aten-level `_flash_attention_backward`, we skip the forward recompute entirely. Gradient accuracy: max_diff=0.002 (within fp16 tolerance).
 
-## 7. Known issues
+## 7. Triton backward tuning results (exhaustive)
+
+We tested every viable optimization path for the flash_attn backward on gfx1151:
+
+| Approach | Fwd+Bwd | vs SDPA | Verdict |
+|----------|---------|---------|---------|
+| **hybrid_v2** (flash fwd + SDPA aten bwd) | **3.51ms** | **8.6% faster** | Best for training |
+| SDPA | 3.84ms | baseline | Simple fallback |
+| flash_attn (Triton, autotuned 4 configs) | 4.81ms | 25% slower | 32x32 confirmed optimal for RDNA |
+| hybrid_v1 (SDPA recompute bwd) | 4.52ms | 18% slower | Recompute cost too high |
+| flash_attn (split mode) | 15.39ms | 4x slower | 3 kernel launches catastrophic |
+
+**Triton autotune confirmed:** The original 32x32x32x32 RDNA config is already optimal. Larger tiles (64x64, 32x128, 128x64) were tested via `scripts/patch_aiter_bwd_rdna.py` and all performed worse — RDNA 3.5 without MFMA can't exploit larger tiles effectively. The `exp2` trick is already in use (3 calls, 0 bare exp calls). Split backward mode launches 3 separate kernels with 3x overhead.
+
+## 8. Known issues
 
 - **CK JIT still reports CK ops disabled at runtime.** The `module_aiter_core` builds successfully but CK attention backward is fundamentally not supported on gfx11 architecture. aiter correctly falls back to Triton for attention ops. The CK JIT build enables other aiter features (fused RMSNorm, quantization, RoPE, MoE gating).
 
@@ -109,8 +123,11 @@ flash_attn and SDPA both compute a `softmax_lse` (log-sum-exp) tensor of shape `
 
 - **First import is slow (~8s).** The CK JIT compiles on first use. Subsequent imports use the cached `.so` at `aiter/aiter/jit/module_aiter_core.so`.
 
-## 8. Files
+## 9. Files
 
-- `scripts/patch_aiter_ck_rocm.sh` — Automated patch script
-- `aiter/` — aiter source (git repo, patches applied in-place)
+- `scripts/patch_aiter_ck_rocm.sh` — Automated CK header patch for ROCm 7.12 math builtins
+- `scripts/patch_aiter_bwd_rdna.py` — RDNA backward config tuning (edit bwd.py configs + BWD_MODE)
+- `kernels/hip/hybrid_attention.py` — Hybrid flash fwd + SDPA bwd (best training backend)
+- `scripts/bench_attention_backward.py` — Isolated fwd/bwd/fwd+bwd benchmark for all backends
+- `aiter/` — aiter source (git repo, CK patches applied in-place)
 - `aiter/aiter/jit/build/module_aiter_core/` — JIT build cache (auto-generated)
