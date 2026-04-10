@@ -39,6 +39,7 @@ def run_training_bench(model, label, batch_size=16, seq_len=256, steps=50, warmu
         try:
             import autokernel
             model = autokernel.optimize(model, training=True)
+            print(f"  autokernel optimizations applied")
         except Exception as e:
             print(f"  autokernel: {e}")
 
@@ -180,6 +181,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--seq-len", type=int, default=256)
     parser.add_argument("--compile", action="store_true", help="Apply torch.compile")
+    parser.add_argument("--optimize", action="store_true", help="Apply autokernel.optimize()")
     parser.add_argument("--model", choices=["llama", "amadeus", "both"], default="both")
     args = parser.parse_args()
 
