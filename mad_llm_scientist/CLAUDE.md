@@ -42,9 +42,9 @@ PyTorch `nn.Linear` calls rocBLAS (Tensile scalar FMA on gfx1151). You cannot be
 | LM head | Single `Linear(d, vocab)` | Tiered/adaptive softmax |
 | MoE experts | Grouped GEMM or few large experts | Many tiny experts |
 | Hidden dim | Multiples of 128 (1024, 1536, 2048) | Odd sizes (768, 513, 640) |
-
-> **Tested:** hipBLASLt env vars (`ROCBLAS_USE_HIPBLASLT=1`, Stream-K) have **no effect** on gfx1151. Tensile scalar FMA is already near-optimal. aiter HIP ops (RMSNorm, RoPE, activation) **do not build** on gfx1151 (CDNA `mfma_adaptor` dependency). Only aiter's Triton path works (flash_attn).
 | Attention | GQA (8Q:2KV) | Full MHA or single-head |
+
+> **Tested (2026-04-10):** hipBLASLt env vars (`ROCBLAS_USE_HIPBLASLT=1`, Stream-K) have **no effect** on gfx1151 — Tensile scalar FMA is already near-optimal. `rocblas-gemm-tune` exists but is ABI-incompatible with the system rocBLAS (Tensile init crash). aiter HIP ops (RMSNorm, RoPE, activation) **do not build** on gfx1151 (CDNA `mfma_adaptor` dependency in opus.hpp). Only aiter's Triton-based flash_attn works.
 
 ---
 
@@ -78,7 +78,9 @@ PyTorch `nn.Linear` calls rocBLAS (Tensile scalar FMA on gfx1151). You cannot be
 
 For ANY recurrence/SSM (Griffin, Mamba, DHO, LRU, GRU):
 - **NEVER**: `for t in range(seq_len)` or `torch.associative_scan` → 1.3K tok/s
-- **ALWAYS**: Chunked linear recurrence (chunk_size=64) → 6.4K tok/s (5x faster). Ref: `models/amadeus.py:selective_scan_chunked`
+- **BEST**: mamba-ssm `selective_scan_fn` (0.32ms, 5.6x vs HIP kernel) — **already wired into amadeus.py as priority 1**
+- **GOOD**: Chunked linear recurrence (chunk_size=64) → 6.4K tok/s (5x faster than sequential). Ref: `models/amadeus.py:selective_scan_chunked`
+- **FLA alternatives**: HGRN (0.40ms), Retention (0.77ms), GLA (1.28ms) — all pure Triton, full backward
 
 ---
 
@@ -92,6 +94,25 @@ For ANY recurrence/SSM (Griffin, Mamba, DHO, LRU, GRU):
 | AMADEUS (SSM hybrid) | 243.8M | eager, chunked scan | 6,400 | 16% |
 
 BabyLM: ~16M tokens. At 6.4K tok/s, 2 epochs ≈ 80 min.
+
+### External Kernels Wired Into Models (2026-04-10)
+
+All three architectures now auto-detect and use fast backends via try/except imports:
+- **AMADEUS** (`models/amadeus.py`): mamba-ssm scan (priority 1 in `_scan_dispatch`) + causal-conv1d in GatedConv
+- **TEMPEST** (`models/tempest.py`): causal-conv1d in GatedConv
+- **PROMETHEUS** (`models/prometheus.py`): hybrid_flash_sdpa_attention (auto-detected) + causal-conv1d (via tempest import)
+
+If a package isn't installed, models fall back gracefully to nn.Conv1d / HIP scan / SDPA.
+
+### Unified Memory Training Insights (profiled 2026-04-10)
+
+| Insight | Value | Design Implication |
+|---------|-------|-------------------|
+| **Data loading** | 0.4% of step | No PCIe transfer on unified memory. Don't over-optimize data pipeline. |
+| **Backward pass** | 53% of step | Reducing backward cost (simpler ops, fewer activations to recompute) is the #1 lever. |
+| **Optimizer step** | 19% of step | Fused AdamW still reads/writes all params. CPUAdam for >2B models. |
+| **Batch size sweet spot** | 16 (seq=256) | L2 cache (6 MB) fits activations; larger batches plateau. |
+| **pin_memory** | No-op | Unified memory is already shared. Don't bother. |
 
 ### MFU by Architecture Type
 
@@ -111,7 +132,7 @@ BabyLM: ~16M tokens. At 6.4K tok/s, 2 epochs ≈ 80 min.
 ### Golden Rules
 1. **Fusion is #1 lever (6-16x).** Design fusable op sequences: residual+norm, bias+activation, gate+multiply.
 2. **L2 cache is your unfair advantage.** Hot path < 6 MB → 5-10x effective bandwidth. Unique to this APU.
-3. **Recurrence > Attention, but attention viable in small doses.** Griffin/Mamba/LRU run near-100% MFU. Aule-Attention (Triton) enables 1-2 attention layers if it benchmarks well.
+3. **Recurrence > Attention, but attention viable in small doses.** Griffin/Mamba/LRU run near-100% MFU. hybrid_flash_sdpa_attention (8.9% faster than SDPA) makes 1-2 attention layers nearly free (~3.5ms fwd+bwd each).
 4. **Wider + shallower > Deep + narrow.** 16L × d=1024 > 48L × d=512 at same params.
 5. **Quantization-friendly = inference-fast.** int4 dequant is 16.3x. No outlier activations.
 6. **Every plan needs "Hardware Optimization Notes"**: kernels to reuse, scan choice, throughput estimate.
@@ -129,6 +150,10 @@ BabyLM: ~16M tokens. At 6.4K tok/s, 2 epochs ≈ 80 min.
 - MoE with many small experts (small GEMMs < fewer large GEMMs)
 - FP8/FP4 quantization (hardware doesn't support FP8/FP4 GEMM — use int4/int8)
 - Odd hidden dimensions (non-multiple-of-128 wastes Tensile tile edges)
+- aiter HIP ops (RMSNorm, RoPE, activation) — CDNA-only, don't build on gfx1151
+- hipBLASLt/Stream-K tuning — tested, no effect on gfx1151 scalar FMA
+
+**ROCm source build warning:** Any new CUDA/HIP package needs math function patching (`expf` → `__builtin_expf`, etc.) for ROCm 7.12 on gfx1151. See `knowledge/amd_rdna35_strix_halo.md` §7 for the pattern. Expect 1-2 hours per package to install from source.
 
 ---
 
