@@ -32,8 +32,8 @@ constexpr int BLOCK_SIZE = 256;
 __global__ void rotary_embedding_backward_kernel(
     const half* __restrict__ GRAD_OUT,
     half* __restrict__ GRAD_X,
-    const float* __restrict__ cos_full,  // [N, D] or broadcastable — full cos values
-    const float* __restrict__ sin_full,  // [N, D] or broadcastable — full sin values
+    const float* __restrict__ cos_full,  // [N, D] fp32
+    const float* __restrict__ sin_full,  // [N, D] fp32
     int cos_stride_n,                    // stride for N dim in cos/sin
     int B, int H, int N, int D
 ) {
@@ -41,28 +41,35 @@ __global__ void rotary_embedding_backward_kernel(
     const int half_D = D / 2;
 
     for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < total; idx += gridDim.x * blockDim.x) {
-        int d_pair = idx % half_D;
+        // k ranges over [0, D/2). Maps to split-half pair: (k, k + D/2)
+        int k = idx % half_D;
         int remainder = idx / half_D;
         int n = remainder % N;
         remainder = remainder / N;
         int h = remainder % H;
         int b = remainder / H;
 
-        int base_idx = ((b * H + h) * N + n) * D + d_pair * 2;
-        float g0 = __half2float(GRAD_OUT[base_idx]);
-        float g1 = __half2float(GRAD_OUT[base_idx + 1]);
+        int row_start = ((b * H + h) * N + n) * D;
+        int idx_lo = row_start + k;          // first half dim
+        int idx_hi = row_start + k + half_D; // second half dim
 
-        // cos/sin indexed at the first element of each pair
-        // In real RoPE, cos[2k] == cos[2k+1] (paired structure)
-        int cs_idx = n * cos_stride_n + d_pair * 2;
-        float c = cos_full[cs_idx];
-        float s = sin_full[cs_idx];
+        float g_lo = __half2float(GRAD_OUT[idx_lo]);
+        float g_hi = __half2float(GRAD_OUT[idx_hi]);
 
-        // Backward of interleaved rotary:
-        // Forward: y0 = x0*c - x1*s, y1 = x0*s + x1*c
-        // Backward: gx0 = g0*c + g1*s, gx1 = g1*c - g0*s
-        GRAD_X[base_idx]     = __float2half(g0 * c + g1 * s);
-        GRAD_X[base_idx + 1] = __float2half(g1 * c - g0 * s);
+        // cos/sin for this pair
+        int cs_lo = n * cos_stride_n + k;
+        int cs_hi = n * cos_stride_n + k + half_D;
+        float c_lo = cos_full[cs_lo];
+        float s_lo = sin_full[cs_lo];
+        float c_hi = cos_full[cs_hi];
+        float s_hi = sin_full[cs_hi];
+
+        // Backward of: grad_x = g * cos + rotate_half(g) * (-sin)
+        // rotate_half([a, b]) = [-b, a] for split-half convention
+        // grad_x[k]      = g[k]*c[k]      + (-g[k+D/2])*(-s[k])      = g[k]*c[k] + g[k+D/2]*s[k]
+        // grad_x[k+D/2]  = g[k+D/2]*c[k+D/2] + g[k]*(-s[k+D/2])     = g[k+D/2]*c[k+D/2] - g[k]*s[k+D/2]
+        GRAD_X[idx_lo] = __float2half(g_lo * c_lo + g_hi * s_lo);
+        GRAD_X[idx_hi] = __float2half(g_hi * c_hi - g_lo * s_hi);
     }
 }
 
