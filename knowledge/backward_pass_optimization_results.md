@@ -27,22 +27,46 @@
 | **Activation quantization** | Experimental | 2x activation memory reduction (approximate gradients) |
 | **Stream overlap** | Experimental | 15-20% hiding (non-deterministic scheduling) |
 
-## Estimated Training Impact
+## Measured End-to-End Training Impact
 
-### LlamaModel 124.7M (baseline: 43K tok/s)
-- Backward is ~53% of step → ~25ms backward per step
-- Fused norms (12.5x × 32 calls): saves ~10ms
-- Fused rotary (4.7x × 16 calls): saves ~1ms
-- Fused SiLU (10.7x × 16 calls): saves ~5ms
-- Estimated backward reduction: ~16ms → ~9ms (1.8x backward, ~1.35x overall)
-- **Projected tok/s: ~58K** (from 43K)
+### LlamaModel 124.7M (autokernel.optimize, batch=8, seq=256)
 
-### AMADEUS 243.8M (baseline: 10.4K tok/s)
-- Backward dominated by selective scan (~20ms × 16 calls = ~320ms per step)
-- Scan backward 21x: ~320ms → ~15ms
-- Plus norm/activation fusions: additional ~15ms savings
-- Estimated backward reduction: ~350ms → ~40ms (8.75x backward, ~2.5x overall)
-- **Projected tok/s: ~26K** (from 10.4K)
+| Metric | Before (PyTorch bwd) | After (HIP bwd) | Change |
+|--------|---------------------|-----------------|--------|
+| Step (ms) | 44.82 | 44.25 | **1.01x** |
+| Forward (ms) | 27.49 | 27.27 | — |
+| Backward (ms) | 10.86 | 10.44 | **1.04x** |
+| Backward % of step | 24.2% | 23.6% | — |
+| Throughput (tok/s) | 45,692 | 46,284 | **1.01x** |
+| MFU | 57.5% | 58.3% | +0.8% |
+
+**Why only 1.04x backward:** Backward is only 24% of the step (not 53% as in eager AMADEUS). The forward dominates at 27ms. Within the backward, attention backward (via SDPA) is the main cost — our fused RMSNorm/SiLU/rotary backward kernels are fast but are a small fraction.
+
+### AMADEUS 243.8M (autokernel.optimize, batch=8, seq=256)
+
+| Metric | Before (PyTorch bwd) | After (HIP bwd) | Change |
+|--------|---------------------|-----------------|--------|
+| Step (ms) | 271.97 | 272.13 | 1.00x |
+| Backward (ms) | 159.60 | 160.09 | 1.00x |
+| Throughput (tok/s) | 7,530 | 7,526 | 1.00x |
+| MFU | 18.5% | 18.5% | — |
+
+**Why 1.00x:** The SSM selective scan dominates AMADEUS backward (160ms) and uses its own code path (`mamba_ssm.selective_scan_fn` or chunked scan), NOT the `torch.ops.autokernel.selective_scan` custom op. The autokernel pattern only replaces RMSNorm and SwiGLU, whose backward is a tiny fraction of the 160ms total.
+
+### Gap Between Isolated and End-to-End
+
+| Kernel | Isolated Speedup | End-to-End Impact | Reason |
+|--------|-----------------|-------------------|--------|
+| rmsnorm_backward | 12.51x | ~2% of backward | Small per-call cost, many calls but each <0.1ms |
+| silu_gate_mul_backward | 10.74x | ~1% of backward | Element-wise, already fast in PyTorch |
+| rotary_embedding_backward | 4.67x | <1% of backward | Only used in attention models |
+| selective_scan_backward | 21.15x | **0% (not wired)** | AMADEUS uses own scan path |
+
+### What Would Unlock Full Potential
+
+1. **Wire scan backward into AMADEUS's scan path** — the 21x kernel sits unused because AMADEUS calls `mamba_ssm.selective_scan_fn` which has its own backward
+2. **torch.compile integration** — would route all ops through custom ops more aggressively, letting backward kernels fire for more operations
+3. **Target attention backward** — for LlamaModel, attention backward is the dominant cost (not norm/activation)
 
 ## Correctness Notes
 
