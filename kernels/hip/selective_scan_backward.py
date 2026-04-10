@@ -218,6 +218,7 @@ reverse_gradient_kernel(
     // Associative operator: (a, b) where gs = a * gs_incoming + b
     // Per timestep: a = dA[t], b = dA[t] * gy[t] * C[t]
     // Compose: (a2, b2) ⊕ (a1, b1) = (a2*a1, a2*b1 + b2) — same SSM operator
+    float local_grad_D_sum = 0.0f;
     float chunk_decay = 1.0f;
     float chunk_value = 0.0f;
     local_grad_D_sum = 0.0f;

@@ -145,14 +145,32 @@ def test_silu_gate_mul_backward(M=4096, N=2048, device="cuda"):
 
 
 def test_rotary_backward(B=4, H=12, N=256, D=64, device="cuda"):
-    """Test fused rotary embedding backward vs PyTorch."""
+    """Test fused rotary embedding backward vs PyTorch.
+
+    Uses interleaved pair convention (adjacent dims) matching the forward
+    HIP kernel in rotary_embedding.py. cos/sin have paired structure:
+    cos[n, 2k] == cos[n, 2k+1] for each frequency.
+    """
     from kernels.hip.rotary_embedding_backward import kernel_fn as hip_bwd
 
     grad_output = torch.randn(B, H, N, D, device=device, dtype=torch.float16)
-    cos = torch.randn(1, 1, N, D, device=device, dtype=torch.float32)
-    sin = torch.randn(1, 1, N, D, device=device, dtype=torch.float32)
 
-    # PyTorch reference
+    # Build cos/sin with proper paired structure (each frequency shared by 2 dims)
+    half_D = D // 2
+    freqs = torch.randn(N, half_D, device=device, dtype=torch.float32)
+    cos_half = torch.cos(freqs)  # (N, D/2)
+    sin_half = torch.sin(freqs)  # (N, D/2)
+    # Interleave: cos[n, 2k] = cos[n, 2k+1] = cos_half[n, k]
+    cos_full = cos_half.unsqueeze(-1).expand(-1, -1, 2).reshape(N, D)
+    sin_full = sin_half.unsqueeze(-1).expand(-1, -1, 2).reshape(N, D)
+    cos = cos_full.unsqueeze(0).unsqueeze(0)  # (1, 1, N, D)
+    sin = sin_full.unsqueeze(0).unsqueeze(0)  # (1, 1, N, D)
+
+    # PyTorch reference (interleaved convention):
+    # For pair (g0, g1) at positions (2k, 2k+1) with shared cos c, sin s:
+    #   gx0 = g0*c + g1*s
+    #   gx1 = g1*c - g0*s
+    # This matches rotate_half when cos/sin have paired structure
     g = grad_output.float()
     c = cos.float()
     s = sin.float()
@@ -168,7 +186,7 @@ def test_rotary_backward(B=4, H=12, N=256, D=64, device="cuda"):
 
     def pytorch_bwd():
         gf = grad_output.float()
-        _ = gf * cos + rotate_half(gf) * (-sin)
+        _ = gf * c + rotate_half(gf) * (-s)
 
     def hip_bwd_fn():
         hip_bwd(grad_output, cos, sin)

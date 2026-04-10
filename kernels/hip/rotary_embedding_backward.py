@@ -52,14 +52,15 @@ __global__ void rotary_embedding_backward_kernel(
         float g0 = __half2float(GRAD_OUT[base_idx]);
         float g1 = __half2float(GRAD_OUT[base_idx + 1]);
 
-        // cos/sin indexed at the FIRST element of each pair
+        // cos/sin indexed at the first element of each pair
+        // In real RoPE, cos[2k] == cos[2k+1] (paired structure)
         int cs_idx = n * cos_stride_n + d_pair * 2;
         float c = cos_full[cs_idx];
         float s = sin_full[cs_idx];
 
-        // Backward of rotary: apply with negated sin
-        // Forward was: y0 = x0*c - x1*s, y1 = x0*s + x1*c
-        // Backward:    gx0 = g0*c + g1*s, gx1 = -g0*s + g1*c
+        // Backward of interleaved rotary:
+        // Forward: y0 = x0*c - x1*s, y1 = x0*s + x1*c
+        // Backward: gx0 = g0*c + g1*s, gx1 = g1*c - g0*s
         GRAD_X[base_idx]     = __float2half(g0 * c + g1 * s);
         GRAD_X[base_idx + 1] = __float2half(g1 * c - g0 * s);
     }
