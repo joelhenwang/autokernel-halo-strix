@@ -59,26 +59,21 @@ class _ChunkedLinearCrossEntropy(torch.autograd.Function):
             # GEMM 1: matmul via rocBLAS
             chunk_logits = F.linear(chunk_h.float(), weight.float())  # (chunk, V)
 
-            # Softmax (computed once, used for both loss and grad_logits)
-            chunk_probs = F.softmax(chunk_logits, dim=-1)  # (chunk, V) fp32
-
-            # Loss: NLL from pre-computed softmax
+            # Use log_softmax for numerically stable loss, softmax for grad_logits
             valid_mask = chunk_t != ignore_index
             if valid_mask.any():
-                valid_probs = chunk_probs[valid_mask]
+                valid_logits = chunk_logits[valid_mask]
                 valid_targets = chunk_t[valid_mask]
-                # NLL = -log(prob[target])
-                target_probs = valid_probs[torch.arange(valid_probs.shape[0], device=valid_probs.device), valid_targets]
-                chunk_loss = -torch.log(target_probs.clamp(min=1e-8)).sum()
+                # Numerically stable loss via F.cross_entropy
+                chunk_loss = F.cross_entropy(valid_logits, valid_targets, reduction='sum')
                 total_loss += chunk_loss
                 n_valid += valid_mask.sum().item()
 
             # Approach D: compute grad_logits = softmax - one_hot NOW
-            # This is the CE gradient w.r.t. logits — always the same formula
-            grad_logits_chunk = chunk_probs  # reuse the tensor (will modify in-place)
+            chunk_probs = F.softmax(chunk_logits, dim=-1)  # (chunk, V) fp32
+            grad_logits_chunk = chunk_probs
             if valid_mask.any():
                 grad_logits_chunk[valid_mask, chunk_t[valid_mask]] -= 1.0
-            # Zero out invalid positions
             if not valid_mask.all():
                 grad_logits_chunk[~valid_mask] = 0.0
 
