@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 AutoKernel is an autonomous AI agent system for GPU kernel optimization and model training on AMD Strix Halo (gfx1151, RDNA 3.5 APU, ROCm 7.12). The kernel agent modifies one kernel file at a time, runs a fixed evaluation harness, and keeps or reverts changes. The `halo_training/` package uses these optimized kernels for fast pretraining (3.05x speedup, 54% MFU).
 
 ## Commands
+### Note: If the Halo Strix machine is the remote machine, use `run_remote.sh` to run commands on the remote machine with the Halo Strix hardware. Quickly go through the script to understand the workspace path and venv in the remote machine.
 
 ```bash
 # Setup (uv package manager, Python 3.10+, PyTorch 2.10.0+rocm7.12)
@@ -62,8 +63,24 @@ GPU: Radeon 8060S (gfx1151), 40 CUs, wave32, **no MFMA**, ~59.4 TFLOPS FP16. Mem
 - **6-16x**: dequantize_int4 (16.3x), fused_residual_add_layernorm (10.7x), prefix_scan (8.4x), dequantize_int8 (8.1x), fused_residual_add_rmsnorm (6.6x)
 - **1.5-4x**: rotary_embedding (3.7x), moe_gating (3.5x), rmsnorm (3.3x), fused_bias_silu/gelu (1.9x), cross_entropy (1.8x), silu_gate_mul (1.6x)
 - **~1x**: reduce, layernorm, silu, gelu, softmax
-- **<0.3x (skip)**: matmul, flash_attention (standard), fused_mlp, top_k_sampling
-- **Attention alternative:** Aule-Attention (Triton, `pip install aule-attention`) and AOTriton report 20-30x on gfx1151. See `mad_llm_scientist/COOKBOOK.md` §1.5b.
+- **<0.3x (skip)**: matmul, flash_attention (standard HIP build), fused_mlp, top_k_sampling
+
+### External Kernel Libraries (verified on gfx1151)
+
+| Package | Op | Time | vs Baseline | Backward | Use Case |
+|---------|-----|------|------------|----------|----------|
+| **causal-conv1d** 1.6.1 | depthwise conv1d | **0.02ms** | 10x vs nn.Conv1d | Yes | All GatedConv in all architectures |
+| **mamba-ssm** 2.3.0 | selective scan | **0.32ms** | 5.6x vs our HIP kernel | Yes | Drop-in upgrade for AMADEUS |
+| **flash_attn** 2.8.4 (aiter) | attention fwd | **0.25ms** | 4.2x vs SDPA | **No** (Triton bwd slower) | **Inference/decode only** |
+| **flash_attn** 2.8.4 (aiter) | attention fwd+bwd | 4.81ms | 0.86x vs SDPA | Yes | Training: use SDPA instead |
+| **FLA** 0.4.2 | GLA | **1.28ms** | — | Yes | Griffin alternative (Triton) |
+| **FLA** 0.4.2 | Retention | **0.77ms** | — | Yes | Fastest FLA recurrence |
+| **FLA** 0.4.2 | HGRN | **0.40ms** | — | Yes | Per-dim recurrence (B,T,D) |
+| **FLA** 0.4.2 | DeltaNet | **1.60ms** | — | Yes | Most expressive, slowest |
+
+**Key finding:** flash_attn forward is 4.2x faster than SDPA, but fwd+bwd is 15% *slower*. Use SDPA for training, flash_attn for inference. CK backward is not supported on gfx11 — aiter uses Triton backward which is slower.
+
+**Installation:** All packages require source builds with ROCm patches. See `INSTALL_CAUSAL_CONV1D.md`, `INSTALL_MAMBA_SSM.md`, `INSTALL_AITER.md`. Key: replace bare `expf`/`exp2f`/`powf`/`__logf` with `__builtin_` equivalents in device code. Scripts: `scripts/install_causal_conv1d_rocm.sh`, `scripts/install_mamba_ssm_rocm.sh`, `scripts/patch_aiter_ck_rocm.sh`.
 
 ### End-to-End Speedups (LlamaModel7B, 5.9B)
 - **1.189x** `autokernel.optimize(model, compile=True)` — best overall

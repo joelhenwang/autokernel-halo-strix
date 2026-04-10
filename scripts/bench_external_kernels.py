@@ -46,56 +46,79 @@ def check_close(a, b, name, atol=0.01, rtol=0.01):
 
 
 # ============================================================================
-# Test 1: Aule-Attention
+# Test 1: Flash Attention (AOTriton via flash_attn package)
 # ============================================================================
 
 def test_attention():
     print("\n" + "=" * 60)
-    print("TEST: Aule-Attention (Triton flash attention)")
+    print("TEST: Flash Attention (AOTriton backend)")
     print("=" * 60)
 
     try:
-        from aule_attention import flash_attention
-    except ImportError:
-        print("  SKIP: aule-attention not installed (pip install aule-attention)")
+        # Use aiter Triton backend (supports backward on gfx11)
+        import os
+        os.environ["FLASH_ATTENTION_TRITON_AMD_ENABLE"] = "TRUE"
+        from flash_attn import flash_attn_func
+    except ImportError as e:
+        print(f"  SKIP: flash-attn not installed ({e})")
         return
 
+    # flash_attn_func expects (B, T, H, D) layout, not (B, H, T, D)
     B, H, T, D = 8, 8, 512, 128
-    q = torch.randn(B, H, T, D, device="cuda", dtype=torch.float16)
-    k = torch.randn(B, H, T, D, device="cuda", dtype=torch.float16)
-    v = torch.randn(B, H, T, D, device="cuda", dtype=torch.float16)
+    q = torch.randn(B, T, H, D, device="cuda", dtype=torch.float16)
+    k = torch.randn(B, T, H, D, device="cuda", dtype=torch.float16)
+    v = torch.randn(B, T, H, D, device="cuda", dtype=torch.float16)
 
-    # Correctness vs SDPA
-    y_aule = flash_attention(q, k, v, causal=True)
-    y_sdpa = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-    check_close(y_aule, y_sdpa, "aule vs SDPA")
+    # flash_attn forward
+    y_flash = flash_attn_func(q, k, v, causal=True)
+
+    # SDPA reference (needs B, H, T, D layout)
+    q_sdpa = q.transpose(1, 2)
+    k_sdpa = k.transpose(1, 2)
+    v_sdpa = v.transpose(1, 2)
+    y_sdpa = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, is_causal=True)
+    y_sdpa = y_sdpa.transpose(1, 2)  # back to (B, T, H, D)
+
+    check_close(y_flash, y_sdpa, "flash_attn vs SDPA")
 
     # Backward test
-    loss = y_aule.sum()
-    loss.backward()
-    print(f"  Backward: OK (grad shapes correct)")
+    try:
+        q_grad = q.clone().detach().requires_grad_(True)
+        y = flash_attn_func(q_grad, k, v, causal=True)
+        y.sum().backward()
+        print(f"  Backward: OK (q.grad shape={q_grad.grad.shape})")
+        has_backward = True
+    except RuntimeError as e:
+        print(f"  Backward: NOT SUPPORTED ({e})")
+        has_backward = False
 
-    # Speed
+    # Speed — forward only
     q2 = q.clone().detach().requires_grad_(False)
     k2 = k.clone().detach().requires_grad_(False)
     v2 = v.clone().detach().requires_grad_(False)
 
-    timer(lambda: flash_attention(q2, k2, v2, causal=True), label="Aule forward")
-    timer(lambda: F.scaled_dot_product_attention(q2, k2, v2, is_causal=True), label="SDPA forward")
+    timer(lambda: flash_attn_func(q2, k2, v2, causal=True), label="flash_attn forward")
+    timer(lambda: F.scaled_dot_product_attention(
+        q2.transpose(1, 2), k2.transpose(1, 2), v2.transpose(1, 2), is_causal=True
+    ), label="SDPA forward")
 
-    # Forward+backward
-    def aule_fwd_bwd():
-        q3 = q.clone().detach().requires_grad_(True)
-        y = flash_attention(q3, k, v, causal=True)
-        y.sum().backward()
+    # Forward+backward (only if backward is supported)
+    if has_backward:
+        def flash_fwd_bwd():
+            q3 = q.clone().detach().requires_grad_(True)
+            y = flash_attn_func(q3, k, v, causal=True)
+            y.sum().backward()
 
-    def sdpa_fwd_bwd():
-        q3 = q.clone().detach().requires_grad_(True)
-        y = F.scaled_dot_product_attention(q3, k, v, is_causal=True)
-        y.sum().backward()
+        def sdpa_fwd_bwd():
+            q3 = q_sdpa.clone().detach().requires_grad_(True)
+            y = F.scaled_dot_product_attention(q3, k_sdpa, v_sdpa, is_causal=True)
+            y.sum().backward()
 
-    timer(aule_fwd_bwd, label="Aule fwd+bwd")
-    timer(sdpa_fwd_bwd, label="SDPA fwd+bwd")
+        timer(flash_fwd_bwd, label="flash_attn fwd+bwd")
+        timer(sdpa_fwd_bwd, label="SDPA fwd+bwd")
+    else:
+        print("  (fwd+bwd benchmark skipped — backward not supported on this GPU)")
+
     print(f"  Shape: ({B},{H},{T},{D}) — GQA-ready")
 
 
@@ -115,12 +138,12 @@ def test_scan():
         return
 
     B, D, L, N = 8, 384, 512, 64
-    u = torch.randn(B, D, L, device="cuda", dtype=torch.float16)
-    delta = torch.randn(B, D, L, device="cuda", dtype=torch.float16)
+    u = torch.randn(B, D, L, device="cuda", dtype=torch.float16, requires_grad=True)
+    delta = torch.randn(B, D, L, device="cuda", dtype=torch.float16, requires_grad=True)
     A = -torch.rand(D, N, device="cuda", dtype=torch.float32)
     B_mat = torch.randn(B, N, L, device="cuda", dtype=torch.float16)
     C_mat = torch.randn(B, N, L, device="cuda", dtype=torch.float16)
-    D_vec = torch.randn(D, device="cuda", dtype=torch.float16)
+    D_vec = torch.randn(D, device="cuda", dtype=torch.float32)
 
     # Correctness vs reference
     y_kern = selective_scan_fn(u, delta, A, B_mat, C_mat, D_vec, delta_softplus=True)
@@ -177,8 +200,8 @@ def test_conv():
         return
 
     B, D, L, K = 8, 640, 512, 3
-    x = torch.randn(B, D, L, device="cuda", dtype=torch.float16)
-    weight = torch.randn(D, K, device="cuda", dtype=torch.float16)
+    x = torch.randn(B, D, L, device="cuda", dtype=torch.float16, requires_grad=True)
+    weight = torch.randn(D, K, device="cuda", dtype=torch.float16, requires_grad=True)
 
     # causal_conv1d forward
     y_fast = causal_conv1d_fn(x, weight)
@@ -187,17 +210,19 @@ def test_conv():
     conv = nn.Conv1d(D, D, K, padding=K - 1, groups=D, bias=False).cuda().half()
     with torch.no_grad():
         conv.weight.copy_(weight.unsqueeze(1))
-    y_ref = conv(x)[:, :, :L]
+    x_ref = x.clone().detach()
+    y_ref = conv(x_ref)[:, :, :L]
 
     check_close(y_fast, y_ref, "causal_conv1d vs nn.Conv1d")
 
     # Backward
     y_fast.sum().backward()
-    print(f"  Backward: OK")
+    print(f"  Backward: OK (x.grad shape={x.grad.shape})")
 
     # Speed
-    x2 = x.clone().detach()
-    timer(lambda: causal_conv1d_fn(x2, weight), label="causal_conv1d forward")
+    x2 = torch.randn(B, D, L, device="cuda", dtype=torch.float16)
+    w2 = weight.clone().detach()
+    timer(lambda: causal_conv1d_fn(x2, w2), label="causal_conv1d forward")
     timer(lambda: conv(x2)[:, :, :L], label="nn.Conv1d forward")
 
     print(f"  Shape: ({B},{D},{L}), kernel={K}")
@@ -222,10 +247,12 @@ def test_fla():
         v = torch.randn(B, H, T, D, device="cuda", dtype=torch.float16)
         g = torch.randn(B, H, T, D, device="cuda", dtype=torch.float16)
 
-        o, final_state = chunk_gla(q, k, v, g)
+        o, final_state = chunk_gla(q, k, v, g, output_final_state=True)
         print(f"  Forward OK: output={o.shape}, state={final_state.shape}")
 
-        o.sum().backward()
+        q2 = q.clone().detach().requires_grad_(True)
+        o2, _ = chunk_gla(q2, k, v, g)
+        o2.sum().backward()
         print(f"  Backward: OK")
 
         timer(lambda: chunk_gla(q, k, v, g), label="GLA forward")
@@ -267,12 +294,13 @@ def test_fla():
     except Exception as e:
         print(f"  FAIL: DeltaNet — {e}")
 
-    # Test HGRN2
+    # Test HGRN (expects (B, T, D) — no head dim, per-dimension recurrence)
     try:
         from fla.ops.hgrn import chunk_hgrn
         print("\n  --- HGRN ---")
-        x = torch.randn(B, H, T, D, device="cuda", dtype=torch.float16)
-        g = torch.randn(B, H, T, D, device="cuda", dtype=torch.float16)
+        D_hgrn = H * D  # flatten heads into dim
+        x = torch.randn(B, T, D_hgrn, device="cuda", dtype=torch.float16)
+        g = torch.randn(B, T, D_hgrn, device="cuda", dtype=torch.float16)
 
         o, final_state = chunk_hgrn(x, g)
         print(f"  Forward OK: output={o.shape}")

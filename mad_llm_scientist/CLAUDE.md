@@ -50,14 +50,26 @@ PyTorch `nn.Linear` calls rocBLAS (Tensile scalar FMA on gfx1151). You cannot be
 
 **Fast ops** (use freely): RMSNorm (3.3x), fused residual+RMSNorm (6.6x), SwiGLU (1.6x), RoPE (3.7x), cross_entropy (1.8x), int4 dequant (16.3x), prefix scan (8.4x), element-wise ops (~free). All have autograd. Apply via `autokernel.optimize(model, training=True)`. See root CLAUDE.md for full speedup table.
 
+### External Libraries (verified on gfx1151, all have training backward)
+
+| Package | Op | Speedup | Notes |
+|---------|-----|---------|-------|
+| **causal-conv1d** | depthwise conv1d | **10x** vs nn.Conv1d | Drop-in for all GatedConv |
+| **mamba-ssm** | selective scan | **5.6x** vs our HIP kernel | Drop-in upgrade for AMADEUS |
+| **FLA** (Triton) | GLA, Retention, HGRN, DeltaNet | 0.4-1.6ms | Griffin/Mamba alternatives with full backward |
+| **flash_attn** (aiter) | attention forward | **4.2x** vs SDPA | **Inference only** — fwd+bwd 15% slower than SDPA |
+
+**Attention for training:** Use **SDPA** (PyTorch built-in). flash_attn's Triton backward is slower on gfx11.
+**Attention for inference/decode:** Use **flash_attn** (4.2x forward speedup).
+
 ### Slow Operations (design around these)
 
 | Operation | Speed | What to Do Instead |
 |-----------|-------|-------------------|
 | matmul | 0.24x | rocBLAS handles it. Use larger, fused GEMMs. |
-| flash_attention (standard) | 0.05x | Try Aule-Attention (Triton) or AOTriton (20-30x reported). Fall back to SDPA. See COOKBOOK.md §1.5b. |
+| flash_attention (standard HIP) | 0.05x | Use SDPA for training, flash_attn (aiter) for inference |
 | fused_mlp | 0.02x | Let rocBLAS handle FFN matmuls natively |
-| Sequential scan / associative_scan | 4% MFU | **Chunked linear recurrence (5x faster)** |
+| Sequential scan / associative_scan | 4% MFU | **mamba-ssm scan** (0.32ms) or chunked linear recurrence |
 | Adaptive softmax (training) | -4% | Single LM head (1 large GEMM > 3 tier GEMMs) |
 
 ### The Scan Rule (CRITICAL)
