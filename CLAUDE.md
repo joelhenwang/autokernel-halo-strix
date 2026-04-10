@@ -77,6 +77,7 @@ GPU: Radeon 8060S (gfx1151), 40 CUs, wave32, **no MFMA**, ~59.4 TFLOPS FP16. Mem
 | **FLA** 0.4.2 | Retention | **0.77ms** | — | Yes | Fastest FLA recurrence |
 | **FLA** 0.4.2 | HGRN | **0.40ms** | — | Yes | Per-dim recurrence (B,T,D) |
 | **FLA** 0.4.2 | DeltaNet | **1.60ms** | — | Yes | Most expressive, slowest |
+| **scattermoe** 0.3.0 | fused MoE (Triton) | fwd+bwd OK | — | Yes | MoE architectures (CHIMERA, GENIUS-CAVEMAN) |
 
 **Attention backend selection (gfx1151):**
 - **Training:** Use `hybrid_flash_sdpa_attention` from `kernels/hip/hybrid_attention.py` — flash_attn forward (0.25ms) + SDPA aten backward with shared logsumexp (2.92ms) = **3.50ms**, 8.9% faster than pure SDPA (3.84ms). Gradient accuracy: max_diff=0.002 (fp16 tolerance).
@@ -84,6 +85,19 @@ GPU: Radeon 8060S (gfx1151), 40 CUs, wave32, **no MFMA**, ~59.4 TFLOPS FP16. Mem
 - **Avoid:** Pure flash_attn for training (Triton backward is 66% slower than SDPA on gfx11).
 
 **Installation:** All packages require source builds with ROCm patches. See `INSTALL_CAUSAL_CONV1D.md`, `INSTALL_MAMBA_SSM.md`, `INSTALL_AITER.md`. Key: replace bare `expf`/`exp2f`/`powf`/`__logf` with `__builtin_` equivalents in device code. Scripts: `scripts/install_causal_conv1d_rocm.sh`, `scripts/install_mamba_ssm_rocm.sh`, `scripts/patch_aiter_ck_rocm.sh`.
+
+**Liger-Kernel 0.7.0:** Tested 2026-04-10 — mostly **incompatible with gfx1151**. FusedLinearCrossEntropyLoss crashes (hipErrorIllegalAddress). RMSNorm crashes (API mismatch with PyTorch 2.10). Only SwiGLU works but our HIP kernel beats it (1.7x vs 1.6x). Not recommended for gfx1151.
+
+### New Fused Kernels (2026-04-10)
+
+| Kernel | Speedup | File | Notes |
+|--------|---------|------|-------|
+| **fused_mhc_sinkhorn** | **28.5x** | `kernels/hip/fused_mhc_sinkhorn.py` | 3 projections + 20-iter Sinkhorn 4x4 in registers. Exact correctness. |
+| **fused_engram_gate_conv** | **7.4x** | `kernels/hip/fused_engram_gate_conv.py` | Gate + gated value + depthwise conv1d. Wired into `models/engram.py`. |
+| **fused_ple_gate** | ~3-5x (est.) | `kernels/hip/fused_ple_gate.py` | Linear->GELU->Linear->RMSNorm. Wired into `models/ple.py` (mode "a" only). |
+| **chunked_linear_cross_entropy** | Memory opt | `kernels/hip/chunked_linear_cross_entropy.py` | Saves 2-12 GB by chunking LM head+CE. 25% slower backward (recomputes logits). |
+
+**Anti-pattern confirmed:** Engram Variants A (hash+gather+gate) and C (full fusion) were 5-7x SLOWER than PyTorch because they put matmuls inside HIP kernels. On gfx1151 without MFMA, never put matmuls in HIP kernels — let rocBLAS handle them.
 
 ### End-to-End Speedups (LlamaModel7B, 5.9B)
 - **1.189x** `autokernel.optimize(model, compile=True)` — best overall
@@ -99,8 +113,19 @@ GPU: Radeon 8060S (gfx1151), 40 CUs, wave32, **no MFMA**, ~59.4 TFLOPS FP16. Mem
 | AMADEUS 243.8M | autokernel + compile + HIP scan | **10.4K** | **26%** |
 | AMADEUS 243.8M | eager, chunked scan | 6.5K | 16% |
 | AMADEUS 243.8M | sequential scan | 1.3K | 4% |
+| Tempest 244.5M | compile + autokernel | **8,152** | **20.1%** |
+| Tempest + MatFormer 244.5M | compile + autokernel | **8,166** | **20.2%** |
 
 AMADEUS best loss: 12.18 (BPB 4.88) after 2 epochs on BabyLM (30.8M tokens, 79 min).
+
+### PLE + MatFormer Ablation (Tempest base, 10-min runs)
+- **PLE Path A:** Best quality (loss 22.65, -1.5% vs base) at 3% throughput cost
+- **MatFormer:** Free (+0.2% tok/s), negligible quality cost, enables elastic inference
+- **PLE Path B / A+B:** No benefit — drop
+- See `knowledge/ple_ablation_results.md` for full results
+
+### Data / Tokenization
+- EOS token (50256, `<|endoftext|>`) inserted between documents in `halo_training/data.py`
 
 ### Winning Optimization Patterns
 1. **Kernel fusion** (6-16x): Fuse 3+ ops into one kernel. Each eliminated intermediate tensor saves 2 memory passes.
@@ -174,3 +199,10 @@ rocprofv3 --hip-trace --hsa-trace -o trace.csv python bench.py  # counters
 ### Compilation
 - hipcc takes ~100s per file. Pre-compile before benchmarking. Hash-based caching in `_compile.py`.
 - `-fno-fast-math -ffp-contract=off` when exact fp16 rounding matters.
+- `_compile.py` auto-prepends ROCm 7.12 compat preamble to all HIP source: `__expf`->`__builtin_expf`, `sqrtf`->`__builtin_sqrtf`, `rsqrtf`/`fmaxf`/`fminf`/`__fdividef` device wrappers, `std::min`/`std::max`. No manual patching of individual kernel files needed.
+
+### Training Target
+- **Phase 1:** Beat LFM2.5-350M on standard benchmarks (HellaSwag, ARC, MMLU)
+- **Phase 2:** Instruction-tune for on-device Strix Halo assistant
+- **Dataset funnel:** smoke -> BabyLM -> GPT-training-small -> Dolma 10B -> Dolma 100B
+- See `docs/superpowers/specs/2026-04-10-training-evolution-design.md` for full 5-stage pipeline
