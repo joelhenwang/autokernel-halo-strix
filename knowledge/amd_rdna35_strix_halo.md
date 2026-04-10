@@ -422,7 +422,7 @@ All transformer layers have identical GEMM shapes → capture once, replay per l
 
 Tensile scalar FMA is already near-optimal for these shapes on gfx1151. The env vars target CDNA/MFMA workloads.
 
-**rocblas-gemm-tune: AVAILABLE but ABI-INCOMPATIBLE.** Binary at `~/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/rocblas-gemm-tune` was built from source against a different rocBLAS version than the system `/opt/rocm/core-7.12/lib/librocblas.so.5`. Fails with "Could not initialize Tensile host" — the Tensile kernel objects at `/opt/rocm/core-7.12/lib/rocblas/library/` (151 gfx1151 .hsaco files) don't match the client binary's expected ABI. Would need to rebuild the client against the exact same rocBLAS version, or install matching `rocblas-clients` package.
+**rocblas-gemm-tune: BLOCKED (ABI mismatch, tested twice).** Binary at `~/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/rocblas-gemm-tune` links against system `/opt/rocm/core-7.12/lib/librocblas.so.5` but crashes with "Could not initialize Tensile host" — the Tensile host C++ code compiled into the client doesn't match the serialization format of the system's `.dat`/`.co` files (151 gfx1151 .hsaco files at `/opt/rocm/core-7.12/lib/rocblas/library/`). The system rocBLAS was installed via pip (`rocm-sdk-libraries-gfx1151 7.12.0`), not from the same source tree as the client. `ROCBLAS_TENSILE_LIBPATH` env var doesn't help — the failure is in Tensile host init, before kernel loading. **Fix:** Build the client from the exact same rocBLAS source+commit that produced the system `librocblas.so.5`, or find a matching `rocblas-clients` package for ROCm 7.12.
 
 ---
 
