@@ -11,7 +11,13 @@ Usage:
 """
 
 import argparse
+import os
+import sys
 import time
+
+# Ensure project root is on path (for `from kernels.hip...` imports)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import torch
 import torch.nn as nn
 
