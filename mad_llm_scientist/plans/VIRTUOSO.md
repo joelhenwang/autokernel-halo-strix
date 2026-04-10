@@ -1,5 +1,7 @@
 # VIRTUOSO
 
+> **Superseded** by composable PLE+MatFormer modules. See `models/ple.py`, `models/matformer.py`, `models/virtuoso.py` and `docs/superpowers/specs/2026-04-10-ple-matformer-design.md`.
+
 **The Master Performer: AMADEUS Base + Per-Layer Embeddings (PLE) + FiLM Conditioning**
 
 *A virtuoso doesn't just play the notes — they bring unique perception and interpretation to every phrase. Each layer of VIRTUOSO has its own eyes (PLE) and its own feeling for the piece (FiLM).*
