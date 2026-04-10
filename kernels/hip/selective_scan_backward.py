@@ -213,55 +213,11 @@ reverse_gradient_kernel(
     int t_start_rev = rev_tid * chunk_size;
     int t_end_rev = min(t_start_rev + chunk_size, seq_len);
 
-    // Pass 1: Local reverse scan within thread's chunk
-    // Scan from high t to low t
-    float local_grad_state = 0.0f;
-    float local_decay = 1.0f;
-    float local_grad_D_sum = 0.0f;
-
-    // Temporary storage for per-timestep gradients (we'll rewrite them in pass 3)
-    // For now just compute boundary (decay, grad_state) pair
-    for (int t = t_end_rev - 1; t >= t_start_rev; t--) {
-        long long idx = base_in + (long long)t * d_inner;
-        long long st_idx = base_st + (long long)(t + 1) * d_inner;
-
-        float gy = grad_y[idx];
-        float c_val = C[idx];
-        float da = dA[idx];
-        float x_val = x[idx];
-
-        // Accumulate local grad contributions
-        local_grad_state += gy * c_val;
-        local_grad_D_sum += gy * x_val;
-
-        // Propagate backward through dA
-        local_grad_state *= da;
-        local_decay *= da;
-    }
-    // After the loop: local_grad_state has been multiplied by all dA's in the chunk
-    // The boundary pair is (local_decay, local_grad_state_before_decay)
-    // But we need to undo the last multiply to get the state ENTERING the chunk
-
-    // Actually, let's redo this more carefully.
-    // The reverse scan operator: given grad_state_after_chunk, the contribution is:
-    //   grad_state_before = local_decay * grad_state_after + local_contribution
-    // where local_contribution includes all grad_y*C terms multiplied by appropriate dA products
-    // This IS the SSM operator: (local_decay, local_contribution)
-
-    // Re-derive: scanning from t=T-1 to t=0:
-    //   gs[t] = gs[t+1] * dA[t+1] + gy[t]*C[t]   (simplified)
-    // Wait, the actual formula from _torch_ops.py:
-    //   grad_state += gy[t] * C[t]
-    //   grad_dA[t] = grad_state * states[t]
-    //   grad_dBx[t] = grad_state
-    //   grad_state *= dA[t]
-    // So the recurrence is: gs_new = (gs_old + gy*C) * dA = dA*gs_old + dA*gy*C
-    // Associative operator: (a, b) where gs_new = a * gs_incoming + b
-    // For single timestep t: a = dA[t], b = dA[t] * gy[t] * C[t]
-    // Compose: (a2, b2) ⊕ (a1, b1) = (a2*a1, a2*b1 + b2)
-    // Same SSM operator! Just with a = dA[t], b = dA[t]*gy[t]*C[t]
-
-    // Let's redo pass 1 properly with this operator
+    // Pass 1: Local reverse scan — compute boundary (decay, value) pair
+    // Reverse recurrence: gs_new = dA[t] * gs_old + dA[t] * gy[t] * C[t]
+    // Associative operator: (a, b) where gs = a * gs_incoming + b
+    // Per timestep: a = dA[t], b = dA[t] * gy[t] * C[t]
+    // Compose: (a2, b2) ⊕ (a1, b1) = (a2*a1, a2*b1 + b2) — same SSM operator
     float chunk_decay = 1.0f;
     float chunk_value = 0.0f;
     local_grad_D_sum = 0.0f;
@@ -281,8 +237,8 @@ reverse_gradient_kernel(
         local_grad_D_sum += gy * x_val;
     }
 
-    // Store partial grad_D sum
-    grad_D_partial[bd_idx] = local_grad_D_sum;
+    // Accumulate grad_D across all threads in this block (each thread has a chunk)
+    atomicAdd(&grad_D_partial[bd_idx], local_grad_D_sum);
 
     // Pass 2: Block-wide reverse scan of (chunk_decay, chunk_value) pairs
     // Note: thread 0 has the LAST chunk (highest t), thread BLOCK_SIZE-1 has the FIRST

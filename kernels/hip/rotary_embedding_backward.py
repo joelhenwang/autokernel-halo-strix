@@ -32,8 +32,9 @@ constexpr int BLOCK_SIZE = 256;
 __global__ void rotary_embedding_backward_kernel(
     const half* __restrict__ GRAD_OUT,
     half* __restrict__ GRAD_X,
-    const float* __restrict__ cos_cache,  // [N, D/2] fp32
-    const float* __restrict__ sin_cache,  // [N, D/2] fp32
+    const float* __restrict__ cos_full,  // [N, D] or broadcastable — full cos values
+    const float* __restrict__ sin_full,  // [N, D] or broadcastable — full sin values
+    int cos_stride_n,                    // stride for N dim in cos/sin
     int B, int H, int N, int D
 ) {
     const int total = B * H * N * (D / 2);
@@ -51,9 +52,10 @@ __global__ void rotary_embedding_backward_kernel(
         float g0 = __half2float(GRAD_OUT[base_idx]);
         float g1 = __half2float(GRAD_OUT[base_idx + 1]);
 
-        int cache_idx = n * half_D + d_pair;
-        float c = cos_cache[cache_idx];
-        float s = sin_cache[cache_idx];
+        // cos/sin indexed at the FIRST element of each pair
+        int cs_idx = n * cos_stride_n + d_pair * 2;
+        float c = cos_full[cs_idx];
+        float s = sin_full[cs_idx];
 
         // Backward of rotary: apply with negated sin
         // Forward was: y0 = x0*c - x1*s, y1 = x0*s + x1*c
@@ -64,11 +66,11 @@ __global__ void rotary_embedding_backward_kernel(
 }
 
 torch::Tensor rotary_embedding_backward_hip(
-    torch::Tensor grad_output, torch::Tensor cos_cache, torch::Tensor sin_cache
+    torch::Tensor grad_output, torch::Tensor cos_flat, torch::Tensor sin_flat,
+    int64_t cos_stride_n
 ) {
     TORCH_CHECK(grad_output.is_cuda(), "grad_output must be on GPU");
     TORCH_CHECK(grad_output.dim() == 4, "grad_output must be [B, H, N, D]");
-    TORCH_CHECK(cos_cache.dtype() == torch::kFloat32, "cos_cache must be float32");
 
     int B = grad_output.size(0);
     int H = grad_output.size(1);
@@ -84,8 +86,9 @@ torch::Tensor rotary_embedding_backward_hip(
     rotary_embedding_backward_kernel<<<blocks, BLOCK_SIZE>>>(
         reinterpret_cast<const half*>(grad_output.data_ptr<at::Half>()),
         reinterpret_cast<half*>(grad_x.data_ptr<at::Half>()),
-        cos_cache.data_ptr<float>(),
-        sin_cache.data_ptr<float>(),
+        cos_flat.data_ptr<float>(),
+        sin_flat.data_ptr<float>(),
+        (int)cos_stride_n,
         B, H, N, D
     );
 
@@ -99,8 +102,14 @@ _module = None
 def _get_module():
     global _module
     if _module is None:
+        cpp_src = r"""
+#include <torch/extension.h>
+torch::Tensor rotary_embedding_backward_hip(
+    torch::Tensor, torch::Tensor, torch::Tensor, int64_t);
+"""
         _module = compile_hip(
             HIP_SRC, "rotary_embedding_backward_hip",
+            cpp_src=cpp_src,
             extra_hip_cflags=["-fno-fast-math", "-ffp-contract=off"],
         )
     return _module
@@ -113,8 +122,8 @@ def kernel_fn(
 
     Args:
         grad_output: (B, H, N, D) upstream gradient, fp16
-        cos: (1, 1, N, D) or broadcastable, fp32
-        sin: (1, 1, N, D) or broadcastable, fp32
+        cos: (..., N, D) broadcastable, fp32 — full D (not D/2)
+        sin: (..., N, D) broadcastable, fp32 — full D (not D/2)
 
     Returns:
         grad_x: same shape/dtype as grad_output
@@ -133,17 +142,21 @@ def kernel_fn(
         grad_x = g * c + rotate_half(g) * (-s)
         return grad_x.to(grad_output.dtype)
 
-    # Prepare cos/sin as (N, D/2) fp32 cache
-    # cos and sin come in as (1, 1, N, D) — extract (N, D/2)
     N = grad_output.shape[2]
     D = grad_output.shape[3]
-    half_D = D // 2
 
-    # cos/sin are (1,1,N,D) with first half = cos values, we need (N, D/2)
-    cos_cache = cos.float().squeeze(0).squeeze(0)[:N, :half_D].contiguous()
-    sin_cache = sin.float().squeeze(0).squeeze(0)[:N, :half_D].contiguous()
+    # Flatten cos/sin to (N, D) contiguous — squeeze batch dims
+    cos_2d = cos.float().reshape(-1, cos.shape[-1])
+    sin_2d = sin.float().reshape(-1, sin.shape[-1])
+    # Take last N rows (in case of batch dims) and ensure D matches
+    if cos_2d.shape[0] > N:
+        cos_2d = cos_2d[:N]
+        sin_2d = sin_2d[:N]
+    cos_2d = cos_2d.contiguous()
+    sin_2d = sin_2d.contiguous()
+    cos_stride_n = cos_2d.stride(0)
 
     go = grad_output.contiguous()
 
     mod = _get_module()
-    return mod.rotary_embedding_backward_hip(go, cos_cache, sin_cache)
+    return mod.rotary_embedding_backward_hip(go, cos_2d, sin_2d, cos_stride_n)
