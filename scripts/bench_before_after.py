@@ -191,7 +191,7 @@ def main():
     if args.model in ("llama", "both"):
         models_to_test.append(("models/llama_7b.py", "LlamaModel"))
     if args.model in ("amadeus", "both"):
-        models_to_test.append(("models/amadeus.py", "AMADEUS"))
+        models_to_test.append(("models/amadeus.py", "Amadeus"))
 
     all_results = []
 
