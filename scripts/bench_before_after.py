@@ -50,7 +50,15 @@ def run_training_bench(model, label, batch_size=16, seq_len=256, steps=50, warmu
         except Exception as e:
             print(f"  compile failed: {e}")
 
-    vocab_size = getattr(model, "vocab_size", 50257)
+    vocab_size = getattr(model, "vocab_size", None)
+    if vocab_size is None:
+        # Try to get from embedding layer
+        for m in model.modules():
+            if isinstance(m, nn.Embedding):
+                vocab_size = m.weight.shape[0]
+                break
+    if vocab_size is None:
+        vocab_size = 50257
     n_params = sum(p.numel() for p in model.parameters())
     scaler = torch.amp.GradScaler("cuda")
     optimizer = torch.optim.AdamW(model.parameters(), lr=8e-4, fused=True)
