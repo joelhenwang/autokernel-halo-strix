@@ -94,9 +94,11 @@ Only aiter's **Triton-based ops** work (flash_attn via `FLASH_ATTENTION_TRITON_A
 - autokernel RMSNorm: **48x** vs PyTorch (0.01ms vs 0.44ms)
 - autokernel fused_bias_silu: **2.0x** vs PyTorch (0.19ms vs 0.38ms)
 
-### Part 2: rocBLAS per-problem tuning — AVAILABLE, NOT YET RUN
+### Part 2: rocBLAS per-problem tuning — BLOCKED (ABI mismatch)
 
-`rocblas-gemm-tune` is available at `/home/joelwang-ai-2/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/` (built from rocBLAS source). The `tune_rocblas_gemm.sh` script has been updated with this path. Tuning has not yet been run — expected 2-5% gain on specific GEMM shapes.
+`rocblas-gemm-tune` exists at `~/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/` but crashes with "Could not initialize Tensile host" — the binary was built against a different rocBLAS version than the system `/opt/rocm/core-7.12/lib/librocblas.so.5`. The 151 gfx1151 Tensile kernel objects in `/opt/rocm/core-7.12/lib/rocblas/library/` don't match the client's expected ABI.
+
+**To fix:** Rebuild rocblas-clients against the exact same rocBLAS version as the system install, or install matching `rocblas-clients` package for ROCm 7.12.
 
 ### Part 3: hipBLASLt env vars — NO EFFECT
 

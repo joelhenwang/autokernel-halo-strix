@@ -422,7 +422,7 @@ All transformer layers have identical GEMM shapes → capture once, replay per l
 
 Tensile scalar FMA is already near-optimal for these shapes on gfx1151. The env vars target CDNA/MFMA workloads.
 
-**rocblas-gemm-tune: AVAILABLE** at `/home/joelwang-ai-2/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/`. Built from rocBLAS source (not from the `rocblas-clients` package). The base ROCm 7.12 install only includes the library at `/opt/rocm/core-7.12/lib/rocblas/library/`.
+**rocblas-gemm-tune: AVAILABLE but ABI-INCOMPATIBLE.** Binary at `~/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/rocblas-gemm-tune` was built from source against a different rocBLAS version than the system `/opt/rocm/core-7.12/lib/librocblas.so.5`. Fails with "Could not initialize Tensile host" — the Tensile kernel objects at `/opt/rocm/core-7.12/lib/rocblas/library/` (151 gfx1151 .hsaco files) don't match the client binary's expected ABI. Would need to rebuild the client against the exact same rocBLAS version, or install matching `rocblas-clients` package.
 
 ---
 
