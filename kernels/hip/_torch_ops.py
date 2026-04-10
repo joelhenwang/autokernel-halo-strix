@@ -12,8 +12,12 @@ Usage:
     # Then call via torch.ops.autokernel.<op_name>(...)
 """
 
+import os
 import torch
 from typing import Tuple
+
+# Set AUTOKERNEL_NO_BWD_HIP=1 to disable fused backward HIP kernels (for A/B testing)
+_USE_BWD_HIP = os.environ.get("AUTOKERNEL_NO_BWD_HIP", "0") != "1"
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +46,7 @@ def _rmsnorm_backward(ctx, grad_output):
     x, weight = ctx.saved_tensors
 
     # Use fused HIP backward kernel for fp16 inputs
-    if x.dtype == torch.float16 and x.is_cuda:
+    if _USE_BWD_HIP and x.dtype == torch.float16 and x.is_cuda:
         from kernels.hip.rmsnorm_backward import kernel_fn as rmsnorm_bwd_fn
         grad_x, grad_weight = rmsnorm_bwd_fn(x, weight, grad_output)
         return grad_x, grad_weight.to(weight.dtype)
@@ -98,7 +102,7 @@ def _rotary_backward(ctx, grad_output):
     cos, sin = ctx.saved_tensors
 
     # Use fused HIP backward kernel for fp16 4D inputs
-    if (grad_output.dtype == torch.float16 and grad_output.is_cuda
+    if (_USE_BWD_HIP and grad_output.dtype == torch.float16 and grad_output.is_cuda
             and grad_output.dim() == 4):
         from kernels.hip.rotary_embedding_backward import kernel_fn as rotary_bwd_fn
         grad_x = rotary_bwd_fn(grad_output, cos, sin)
@@ -148,7 +152,7 @@ def _silu_gate_mul_backward(ctx, grad_output):
     gate, up = ctx.saved_tensors
 
     # Use fused HIP backward kernel for fp16 inputs
-    if gate.dtype == torch.float16 and gate.is_cuda:
+    if _USE_BWD_HIP and gate.dtype == torch.float16 and gate.is_cuda:
         from kernels.hip.silu_gate_mul_backward import kernel_fn as silu_bwd_fn
         return silu_bwd_fn(gate, up, grad_output)
 
@@ -201,7 +205,7 @@ def _fused_res_rmsnorm_backward(ctx, grad_hidden, grad_normed):
     hidden, weight = ctx.saved_tensors
 
     # Use fused HIP backward kernel for fp16 inputs
-    if hidden.dtype == torch.float16 and hidden.is_cuda:
+    if _USE_BWD_HIP and hidden.dtype == torch.float16 and hidden.is_cuda:
         from kernels.hip.fused_residual_rmsnorm_backward import kernel_fn as fused_bwd_fn
         grad_x, grad_residual, grad_weight = fused_bwd_fn(
             hidden, weight, grad_hidden, grad_normed
@@ -266,7 +270,7 @@ def _selective_scan_backward(ctx, grad_y):
     dA, dBx, C, D, x, y = ctx.saved_tensors
 
     # Use parallel HIP backward kernel for fp32 GPU inputs
-    if dA.is_cuda and dA.dtype == torch.float32:
+    if _USE_BWD_HIP and dA.is_cuda and dA.dtype == torch.float32:
         from kernels.hip.selective_scan_backward import kernel_fn as scan_bwd_fn
         gy = grad_y.float()
         grad_dA, grad_dBx, grad_C, grad_D, grad_x = scan_bwd_fn(
