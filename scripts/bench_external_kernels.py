@@ -111,7 +111,7 @@ def test_scan():
     try:
         from mamba_ssm.ops.selective_scan_interface import selective_scan_fn, selective_scan_ref
     except ImportError:
-        print("  SKIP: mamba-ssm not installed (pip install mamba-ssm --no-build-isolation)")
+        print("  SKIP: mamba-ssm not installed (run ./scripts/install_mamba_ssm_rocm.sh)")
         return
 
     B, D, L, N = 8, 384, 512, 64
@@ -173,7 +173,7 @@ def test_conv():
     try:
         from causal_conv1d import causal_conv1d_fn
     except ImportError:
-        print("  SKIP: causal-conv1d not installed (pip install causal-conv1d --no-build-isolation)")
+        print("  SKIP: causal-conv1d not installed (run ./scripts/install_causal_conv1d_rocm.sh)")
         return
 
     B, D, L, K = 8, 640, 512, 3

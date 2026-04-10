@@ -49,6 +49,30 @@ uv run extract.py --top 5
 uv run bench.py
 ```
 
+### Patched external kernels on ROCm 7.12
+
+This repo now vendors the patched local source trees and reproducible install helpers for the two Strix Halo fixes that were needed in this workspace:
+
+- `causal-conv1d`: [install_causal_conv1d_rocm.sh](/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/autokernel-halo-strix/scripts/install_causal_conv1d_rocm.sh)
+- `mamba-ssm`: [install_mamba_ssm_rocm.sh](/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/autokernel-halo-strix/scripts/install_mamba_ssm_rocm.sh)
+
+Procedure notes are included at:
+
+- [INSTALL_CAUSAL_CONV1D.md](/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/autokernel-halo-strix/INSTALL_CAUSAL_CONV1D.md)
+- [INSTALL_MAMBA_SSM.md](/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/autokernel-halo-strix/INSTALL_MAMBA_SSM.md)
+
+The patched upstream source checkouts live in:
+
+- [external/causal-conv1d](/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/autokernel-halo-strix/external/causal-conv1d)
+- [external/mamba](/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/autokernel-halo-strix/external/mamba)
+
+Run the helpers from the repo root after your project venv is active:
+
+```bash
+./scripts/install_causal_conv1d_rocm.sh
+./scripts/install_mamba_ssm_rocm.sh
+```
+
 ## Running the Agent
 
 Spin up Claude, Codex, or any coding agent in this directory:
