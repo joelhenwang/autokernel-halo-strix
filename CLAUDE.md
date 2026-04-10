@@ -127,9 +127,13 @@ rocBLAS uses Tensile scalar FMA on gfx1151. Can't beat it — shape workloads to
 - **Fewer, larger GEMMs.** Fuse QKV into `Linear(d, (nq+2nkv)*hd)`. Fuse gate+up in SwiGLU into `Linear(d, 2*ffn)`.
 - **Pad dims to multiples of 128.** Tensile tiles: 64×64, 128×64, 128×128.
 - **Strided batched > pointer-batched** for multi-head ops (less overhead on LPDDR5X).
-- hipBLASLt: epilogue fusion (bias+activation in GEMM), grouped GEMM for MoE, Stream-K (`TENSILE_SOLUTION_SELECTION_METHOD=2`).
-- Key env vars: `ROCBLAS_USE_HIPBLASLT=1`, `ROCBLAS_TENSILE_GEMM_OVERRIDE_PATH=<file>`, `ROCBLAS_CHECK_NUMERICS=2`.
+- hipBLASLt env vars (`ROCBLAS_USE_HIPBLASLT=1`, `TENSILE_SOLUTION_SELECTION_METHOD=2`): **tested, no effect on gfx1151**. Tensile scalar FMA is already near-optimal.
+- `rocblas-bench`/`rocblas-gemm-tune`: not installed (requires `rocblas-clients` package, separate from base ROCm).
 - See `knowledge/amd_rdna35_strix_halo.md` §6 for full rocBLAS/hipBLAS/hipBLASLt reference.
+
+### aiter HIP Ops on gfx1151
+
+aiter's CK/HIP ops (RMSNorm, RoPE, activation, quantization) **do not build on gfx1151** — their "opus" framework depends on `mfma_adaptor` (CDNA-only). Only aiter's **Triton-based ops** work (flash_attn). Our autokernel HIP kernels remain the best option for fused ops.
 
 ## DeepSpeed CPUAdam on ROCm
 

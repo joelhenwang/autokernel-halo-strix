@@ -1,7 +1,7 @@
 # Training Pipeline Optimization
 
 **Date:** 2026-04-10
-**Status:** Design approved, pending implementation
+**Status:** Scripts implemented and tested — see Preliminary Results
 **Workstream:** D (of A/B/C/D optimization roadmap)
 **Depends on:** Workstreams A+C (need model-level optimizations settled first)
 
@@ -109,6 +109,43 @@ Unlike discrete GPUs, Strix Halo shares LPDDR5X between CPU and GPU:
 | Inductor GEMM tuning | 1-5% | Medium |
 | Batch size tuning | 2-8% | High (almost always helps) |
 | Unified memory scheduling | 0-3% | Low (hard to control) |
+
+## Preliminary Results (2026-04-10)
+
+### Profile: AMADEUS 243.8M (batch=4, seq=256, eager, no compile)
+
+| Phase | Time (ms) | % of Step |
+|-------|-----------|-----------|
+| **backward** | 102.6 | **53.1%** |
+| **forward** | 37.9 | 19.6% |
+| **optimizer_step** | 35.8 | 18.5% |
+| grad_clip | 13.6 | 7.0% |
+| loss | 2.5 | 1.3% |
+| data_load | 0.8 | 0.4% |
+| **Total** | **193.2** | |
+
+**Throughput:** 5,300 tok/s (batch=4, seq=256)
+
+**Top bottlenecks:** backward (53%), forward (20%), optimizer (19%). Data loading is negligible (0.4%) — unified memory eliminates PCIe transfer overhead as expected.
+
+### Batch size tuning: AMADEUS (seq=256, eager)
+
+| batch_size | tokens/step | tok/s |
+|-----------|-------------|-------|
+| 4 | 1,024 | 5,374 |
+| 8 | 2,048 | 7,220 |
+| **16** | **4,096** | **7,539** |
+| 32 | 8,192 | 7,518 |
+| 64 | 16,384 | 7,517 |
+
+**Peak at batch=16**, diminishing returns beyond. The L2 cache (6 MB) fits activations well at batch=16; larger batches spill to DRAM without gaining more parallelism.
+
+### Remaining tests (not yet run)
+
+- DataLoader num_workers/pin_memory/prefetch configs (script ready)
+- torch.compile mode comparison (default vs reduce-overhead vs max-autotune)
+- Inductor coordinate_descent_tuning
+- Full 15-min before/after comparison
 
 ## Verification
 

@@ -42,6 +42,8 @@ PyTorch `nn.Linear` calls rocBLAS (Tensile scalar FMA on gfx1151). You cannot be
 | LM head | Single `Linear(d, vocab)` | Tiered/adaptive softmax |
 | MoE experts | Grouped GEMM or few large experts | Many tiny experts |
 | Hidden dim | Multiples of 128 (1024, 1536, 2048) | Odd sizes (768, 513, 640) |
+
+> **Tested:** hipBLASLt env vars (`ROCBLAS_USE_HIPBLASLT=1`, Stream-K) have **no effect** on gfx1151. Tensile scalar FMA is already near-optimal. aiter HIP ops (RMSNorm, RoPE, activation) **do not build** on gfx1151 (CDNA `mfma_adaptor` dependency). Only aiter's Triton path works (flash_attn).
 | Attention | GQA (8Q:2KV) | Full MHA or single-head |
 
 ---

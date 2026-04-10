@@ -1,7 +1,7 @@
 # Explore aiter Ops + rocBLAS Tuning for gfx1151
 
 **Date:** 2026-04-10
-**Status:** Design approved, pending implementation
+**Status:** Implemented and tested — see Results section
 **Workstream:** C (of A/B/C/D optimization roadmap)
 **Depends on:** Workstream A (need baselines to measure improvement)
 
@@ -78,6 +78,41 @@ Test if any of the above compose with `torch.compile(mode="default")`. Some rocB
 | rocBLAS tuning | 2-5% (GEMM-specific) | Low (tooling) |
 | Stream-K | 1-3% (CU utilization) | Trivial (env var) |
 | hipBLASLt epilogue | 1-5% (fewer kernel launches) | Trivial (env var) |
+
+## Results (2026-04-10)
+
+### Part 1: aiter HIP ops — BLOCKED on gfx1151
+
+aiter's CK/HIP ops (RMSNorm, RoPE, activation, quantization) **do not build on gfx1151**. Root causes:
+- **`mfma_adaptor` undefined**: aiter's "opus" framework (`csrc/include/opus/opus.hpp:2827`) references MFMA (Matrix FMA) instructions that don't exist on RDNA 3.5. This is a fundamental CDNA-only dependency, not a patchable issue.
+- **Bare math functions** (`fabsf` in `activation_kernels.cu:370`): Same ROCm 7.12 issue we patched for CK headers, but spread across `csrc/` files too.
+- **`module_rmsnorm` / `module_activation` JIT build fails**: Both modules fail to compile for gfx1151.
+
+Only aiter's **Triton-based ops** work (flash_attn via `FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE`). The CK/HIP ops are CDNA-targeted.
+
+**Conclusion:** Our autokernel HIP kernels remain the best option for fused ops on gfx1151. Benchmarked:
+- autokernel RMSNorm: **48x** vs PyTorch (0.01ms vs 0.44ms)
+- autokernel fused_bias_silu: **2.0x** vs PyTorch (0.19ms vs 0.38ms)
+
+### Part 2: rocBLAS per-problem tuning — NOT AVAILABLE
+
+`rocblas-bench` and `rocblas-gemm-tune` are not installed. They require the `rocblas-clients` package which is separate from the base ROCm install. Only the rocBLAS library itself is present at `/opt/rocm/core-7.12/lib/rocblas/library/`.
+
+To install: `sudo apt install rocblas-clients` (if available for ROCm 7.12), or build from source.
+
+### Part 3: hipBLASLt env vars — NO EFFECT
+
+Tested on a (4096, 2560) × (2560, 1024) GEMM (SwiGLU shape):
+- **Baseline**: 0.61ms
+- **Stream-K** (`TENSILE_SOLUTION_SELECTION_METHOD=2`): 0.62ms (0.98x) — no improvement
+- **hipBLASLt** (`ROCBLAS_USE_HIPBLASLT=1`): 0.63ms (0.98x) — no improvement
+- **Both**: 0.63ms (0.97x) — no improvement
+
+Tensile scalar FMA on gfx1151 is already near-optimal for these shapes. The env vars target CDNA/MFMA workloads.
+
+### Part 4: torch.compile interaction — N/A
+
+No aiter ops or rocBLAS tuning to compose with torch.compile.
 
 ## Verification
 
