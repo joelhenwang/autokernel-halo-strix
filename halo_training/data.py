@@ -36,12 +36,15 @@ class BabyLMDataset(Dataset):
         enc = tiktoken.get_encoding(tokenizer_name)
         self.vocab_size = enc.n_vocab
 
+        eos_token = enc.n_vocab - 1  # 50256 for GPT-2 (<|endoftext|>)
+
         if pre_tokens is not None:
             tokens = pre_tokens
         else:
             tokens = []
             for text in texts:
                 tokens.extend(enc.encode_ordinary(text))
+                tokens.append(eos_token)  # EOS between documents
         self.tokens = torch.tensor(tokens, dtype=torch.long)
 
         # Chunk into block_size sequences
@@ -68,6 +71,7 @@ class BabyLMDataset(Dataset):
                     all_tokens = []
                     for row in table["input_ids"].to_pylist():
                         all_tokens.extend(row)
+                        all_tokens.append(50256)  # EOS between documents
                     return all_tokens, None
 
                 # Raw text format: text column with strings
@@ -83,6 +87,7 @@ class BabyLMDataset(Dataset):
                     all_tokens = []
                     for row in data:
                         all_tokens.extend(row)
+                        all_tokens.append(50256)  # EOS between documents
                     return all_tokens, None
 
         # Plain text files

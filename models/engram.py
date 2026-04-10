@@ -21,6 +21,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Optional
 
+try:
+    from kernels.hip.fused_engram_gate_conv import kernel_fn as _fused_engram_gate_conv_fn
+    _HAS_FUSED_ENGRAM = True
+except ImportError:
+    _HAS_FUSED_ENGRAM = False
+
 
 class NgramHashMapping(nn.Module):
     """XOR-based n-gram hash mapping with layer-specific multipliers.
@@ -194,6 +200,16 @@ class EngramLayer(nn.Module):
         # 3. Query from hidden state
         query = self.query_norm(hidden_states)              # (B, T, d_model)
 
+        # 4-5. Fused gate + gated value + conv (7.4x speedup)
+        if _HAS_FUSED_ENGRAM and hidden_states.dtype == torch.float16:
+            conv_w = self.short_conv.weight.squeeze(1)      # (D, 1, K) -> (D, K)
+            conv_b = self.short_conv.bias                   # (D,)
+            return _fused_engram_gate_conv_fn(
+                query.reshape(-1, D), key.reshape(-1, D), value.reshape(-1, D),
+                conv_w, conv_b, T,
+            ).reshape(B, T, D)
+
+        # Fallback: PyTorch ops
         # 4. Gate computation (DeepSeek style: magnitude-preserving)
         gate_raw = (query * key).sum(dim=-1, keepdim=True) / (D ** 0.5)
         gate = gate_raw.abs().clamp(min=1e-6).sqrt() * gate_raw.sign()

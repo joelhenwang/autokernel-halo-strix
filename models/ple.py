@@ -24,6 +24,12 @@ import torch.nn.functional as F
 
 from models.tempest import RMSNorm
 
+try:
+    from kernels.hip.fused_ple_gate import kernel_fn as _fused_ple_gate_fn
+    _HAS_FUSED_PLE = True
+except ImportError:
+    _HAS_FUSED_PLE = False
+
 
 @dataclass
 class PLEConfig:
@@ -114,6 +120,15 @@ class PLEModule(nn.Module):
 
         # Path A: context-aware
         if self.use_a:
+            # Fused HIP kernel: Linear->GELU->Linear->RMSNorm in one pass.
+            # Only used in Path-A-only mode (fused kernel includes RMSNorm).
+            if _HAS_FUSED_PLE and h.dtype == torch.float16 and not self.use_b:
+                return _fused_ple_gate_fn(
+                    h,
+                    self.context_down[layer_idx].weight,
+                    self.context_up[layer_idx].weight,
+                    self.ple_norm[layer_idx].weight,
+                )
             ctx = F.gelu(self.context_down[layer_idx](h))
             a_out = self.context_up[layer_idx](ctx)
             out = a_out if out is None else out + a_out
