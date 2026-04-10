@@ -220,3 +220,195 @@ rocm-smi --showuse --showmemuse
 
 5. **Unified memory**: No need for explicit host-device transfers. Tensors are
    already in shared LPDDR5X accessible by both CPU and GPU.
+
+---
+
+## 6. rocBLAS / hipBLAS / hipBLASLt Reference for gfx1151
+
+> All `nn.Linear` layers in PyTorch call rocBLAS under the hood. Understanding
+> rocBLAS behavior on gfx1151 is critical for architecture-level throughput
+> optimization — you cannot beat rocBLAS with custom HIP matmuls on this hardware,
+> but you CAN shape your workloads to make rocBLAS faster.
+
+### 6.1 How rocBLAS Works on gfx1151
+
+rocBLAS uses **Tensile** (auto-generated GEMM kernels) as its backend. On CDNA
+GPUs (MI300X), Tensile selects MFMA-based kernels. On RDNA 3.5 (gfx1151),
+**there are no MFMA instructions**, so Tensile falls back to **scalar FMA kernels**.
+This is why custom matmul kernels cannot beat rocBLAS — they use the same scalar
+FMA pipeline, but Tensile's generated code is already highly optimized for tiling,
+register allocation, and memory access patterns.
+
+**Backend selection:**
+- **Tensile** (default): auto-generated GEMM kernels, always available
+- **hipBLASLt**: higher-level library with epilogue fusion, grouped GEMM, Stream-K.
+  Default for gfx12; availability on gfx1151 should be tested with `ROCBLAS_USE_HIPBLASLT=1`
+- Control via env vars:
+  - `ROCBLAS_USE_HIPBLASLT=0` → force Tensile
+  - `ROCBLAS_USE_HIPBLASLT=1` → prefer hipBLASLt, Tensile fallback
+  - `ROCBLAS_USE_HIPBLASLT_BATCHED=0` → Tensile for batched GEMM only
+
+### 6.2 Available Mixed-Precision GEMM Types
+
+Operation: `D = alpha * op(A) * op(B) + beta * C` (op = none, transpose, or conjugate transpose)
+
+| Shorthand | A/B Type | C/D Type | Compute | Use Case |
+|-----------|----------|----------|---------|----------|
+| **HHS** | fp16 | fp16 | **fp32** | Training default (PyTorch autocast) |
+| HSS | fp16 | fp32 | fp32 | Higher output precision |
+| **BBS** | bf16 | bf16 | **fp32** | BF16 training |
+| BSS | bf16 | fp32 | fp32 | BF16 with fp32 output |
+| HHH | fp16 | fp16 | fp16 | Low-precision inference |
+| SSS | fp32 | fp32 | fp32 | Full precision |
+| I8II | int8 | int32 | int32 | Quantized inference |
+
+**NOT available on gfx1151:**
+- FP8 GEMM of any kind (requires gfx942/MI300X or gfx950/gfx12)
+- FP4/FP6 GEMM (gfx950+ only)
+- `rocblas_gemm_flags_fp16_alt_impl` (MI200-specific BF16 instruction path)
+- XDL math mode (`rocblas_xf32_xdl_math_op`) — CDNA matrix core feature
+
+### 6.3 GEMM Variants (Batched and Strided)
+
+Three variants, in order of preference for multi-head operations:
+
+1. **`gemm_strided_batched`** — All batches contiguous with fixed stride. Single base
+   pointer + stride offsets. **Preferred for multi-head attention** (Q*K^T, attn*V)
+   because memory access is sequential and predictable.
+
+2. **`gemm_batched`** — Array of pointers to independent matrices. More flexible but
+   adds pointer indirection overhead. Use when matrices are non-contiguous.
+
+3. **`gemm`** — Single matrix multiply. Use for large fused projections (fused QKV).
+
+**Why strided > pointer-batched on gfx1151:** With only ~240 GB/s LPDDR5X, every
+byte of overhead matters. Strided batched avoids reading an array of pointers from
+global memory, keeping the memory access pattern predictable for the prefetcher.
+
+### 6.4 Matmul Shaping Rules for gfx1151
+
+Since all GEMM on gfx1151 is memory-bound (no MFMA), the key optimization is
+**reducing the number of GEMM calls and maximizing each call's size:**
+
+1. **Fewer, larger GEMMs always win.** One GEMM of (M, N=3K, K) is faster than
+   three GEMMs of (M, N=K, K). This is why fused QKV (concatenating wq/wk/wv
+   projections) gives measurable speedup, and why adaptive softmax (3 tier
+   matmuls) is 4% slower than one large LM head matmul.
+
+2. **Column-major is native.** rocBLAS inherits BLAS column-major convention.
+   PyTorch tensors are row-major by default. rocBLAS handles this via transpose
+   flags, but be aware that `A @ B` in PyTorch becomes `B^T @ A^T` in rocBLAS
+   column-major terms.
+
+3. **Alignment matters.** Tensile's generated kernels prefer M, N, K dimensions
+   that are multiples of the tile size. Common Tensile tiles on scalar FMA:
+   - 64×64, 128×64, 64×128, 128×128
+   - Padding d_model, head_dim, ffn_inner to multiples of 64 or 128 avoids
+     tail-handling overhead
+
+4. **The `use_cu_efficiency` flag.** `rocblas_gemm_flags_use_cu_efficiency` selects
+   kernels optimized for fewer CUs — designed exactly for chips like gfx1151 (40 CUs).
+   PyTorch does not set this by default. For direct rocBLAS calls or hipBLASLt, enable it.
+
+5. **Stochastic rounding.** `rocblas_gemm_flags_stochastic_rounding` is available
+   for bf16 training — may improve convergence for BF16 models on this hardware.
+
+### 6.5 hipBLASLt Advanced Features
+
+hipBLASLt wraps Tensile with a higher-level API. Key features beyond rocBLAS:
+
+**Epilogue fusion (bias + activation in one launch):**
+hipBLASLt can fuse post-GEMM operations into the matmul kernel:
+- `D = activation(alpha * A * B + beta * C + bias)`
+- Supported activations: ReLU, GELU, Swish/SiLU, Sigmoid, Clamp
+- Supported epilogues: bias add, gradient computations (DGELU, bias grad)
+- **Impact on gfx1151:** Eliminates a separate kernel launch for bias+activation
+  after linear layers. For memory-bound hardware, fewer launches = less overhead.
+
+**Grouped GEMM (MoE routing):**
+Multiple GEMMs with different dimensions in a single launch:
+- All problems must share same types and transpose operations
+- Only M, N, K can vary across the group
+- "Fixed MK" mode: M and K constant, only N varies (common in MoE)
+- **Use case:** MoE expert routing — instead of launching N expert matmuls
+  sequentially, group them into one dispatch
+
+**Stream-K (work-centric decomposition):**
+- Enable: `TENSILE_SOLUTION_SELECTION_METHOD=2`
+- Distributes work evenly across CUs for non-square GEMM shapes
+- Relevant for gfx1151: with only 40 CUs, load imbalance from tile-centric
+  decomposition hurts more than on 304-CU MI300X
+- Tuning: `TENSILE_STREAMK_DYNAMIC_GRID=6` (auto), `TENSILE_STREAMK_MAX_CUS`
+
+### 6.6 Performance Tuning
+
+**Kernel selection tuning (offline):**
+```bash
+# Step 1: Collect profile data
+ROCBLAS_LAYER=4 python -c "import torch; a=torch.randn(1024,1024,device='cuda',dtype=torch.float16); torch.mm(a,a)"
+
+# Step 2: Run the tuner on collected data
+rocblas-gemm-tune --input profile_data.yaml --output tuned_solutions.yaml
+
+# Step 3: Apply tuned solutions
+export ROCBLAS_TENSILE_GEMM_OVERRIDE_PATH=tuned_solutions.yaml
+```
+
+**Solution index API (runtime tuning):**
+```c
+// Get all solutions for a specific problem
+rocblas_gemm_ex_get_solutions(handle, transA, transB, m, n, k,
+    alpha, a, a_type, lda, b, b_type, ldb,
+    beta, c, c_type, ldc, d, d_type, ldd,
+    compute_type, flags, solution_list, &num_solutions);
+
+// Benchmark each, use the fastest
+rocblas_gemm_ex(..., rocblas_gemm_algo_solution_index, best_solution_id, flags);
+```
+**Note:** Solution indices are architecture-specific and rocBLAS-version-specific.
+Cannot reuse across different GPUs or library versions.
+
+**Startup optimization:**
+```c
+// Call once at program start to pre-load Tensile kernels
+// Avoids 100-500ms latency spike on first GEMM call
+rocblas_initialize();
+```
+
+**HIP Graph capture for repeated GEMMs:**
+```c
+// Capture a GEMM into a HIP graph, replay it with zero launch overhead
+hipStreamBeginCapture(stream, hipStreamCaptureModeGlobal);
+rocblas_gemm_ex(handle, ...);  // recorded, not executed
+hipStreamEndCapture(stream, &graph);
+hipGraphInstantiate(&graph_exec, graph, NULL, NULL, 0);
+// Replay 1000x with no CPU-side overhead:
+for (int i = 0; i < 1000; i++) hipGraphLaunch(graph_exec, stream);
+```
+All transformer layers have identical GEMM shapes → capture once, replay per layer.
+
+### 6.7 Environment Variables Summary
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `ROCBLAS_USE_HIPBLASLT` | Backend: 0=Tensile, 1=hipBLASLt | auto |
+| `ROCBLAS_USE_HIPBLASLT_BATCHED` | Backend for batched: 0=Tensile | auto |
+| `ROCBLAS_TENSILE_GEMM_OVERRIDE_PATH` | Tuned kernel selection file | none |
+| `ROCBLAS_LAYER` | Logging: 2=args, 4=profile | 0 |
+| `ROCBLAS_DEFAULT_ATOMICS_MODE` | 0=deterministic, 1=allow atomics | 0 |
+| `ROCBLAS_CHECK_NUMERICS` | NaN/inf detection (1=full, 2=report, 4=error) | 0 |
+| `TENSILE_SOLUTION_SELECTION_METHOD` | 2=Stream-K for better CU utilization | 0 |
+| `TENSILE_STREAMK_DYNAMIC_GRID` | Stream-K workgroup count (6=auto) | 6 |
+
+### 6.8 Practical Implications for Architecture Design
+
+| Design Decision | Why | Example |
+|----------------|-----|---------|
+| **Fuse QKV into one projection** | 1 large GEMM > 3 small GEMMs | wqkv = Linear(d, (nq+2nkv)*hd) |
+| **Fuse gate+up in SwiGLU** | 1 GEMM for [gate; up] > 2 separate | w_gate_up = Linear(d, 2*ffn) |
+| **Pad dims to multiples of 128** | Aligns with Tensile tile sizes | d_model=1024, head_dim=128, ffn=2560 |
+| **Prefer GQA over MHA** | Fewer KV heads = smaller batched GEMM for KV proj | 8 Q heads, 2 KV heads |
+| **Single LM head > tiered softmax** | One large (B*T, V) GEMM is faster | Avoid adaptive softmax for training |
+| **Use strided batched for attention** | Less overhead than pointer-batched | PyTorch SDPA already does this |
+| **Consider hipBLASLt epilogue fusion** | Avoids separate bias+activation kernel | Linear + SiLU in one launch |
+| **MoE: use grouped GEMM** | One dispatch for all experts | hipBLASLt GroupedGemm API |

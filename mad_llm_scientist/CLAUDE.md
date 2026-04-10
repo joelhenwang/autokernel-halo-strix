@@ -40,6 +40,37 @@ This means:
 - **Fewer, larger matmuls** hit higher rocBLAS utilization than many small ones.
 - **Element-wise ops (sigmoid, tanh, multiply, add) are effectively free** — they're hidden behind memory latency.
 
+### rocBLAS Reality: How Matmuls Actually Work on This Hardware
+
+PyTorch's `nn.Linear` calls rocBLAS under the hood. rocBLAS uses Tensile-generated scalar FMA kernels on gfx1151 (no MFMA path). This has direct implications for architecture design:
+
+**The matmul shaping rules:**
+1. **Fewer, larger GEMMs always win.** Fused QKV (`Linear(d, (nq+2nkv)*hd)`) is faster than 3 separate projections. Fused gate+up in SwiGLU (`Linear(d, 2*ffn)`) is faster than 2 separate. The adaptive softmax experiment proved this: 3 tier matmuls was 4% slower than 1 large matmul.
+2. **Pad dimensions to multiples of 128.** Tensile's common tile sizes on scalar FMA: 64×64, 128×64, 128×128. d_model=1024, head_dim=128, ffn_inner=2560 all align well. Odd dimensions (e.g., d=768, d=513) waste tile edges.
+3. **Strided batched GEMM for multi-head ops.** Less overhead than pointer-batched. Contiguous memory layout lets the prefetcher work efficiently on 240 GB/s LPDDR5X.
+4. **GQA is architecture-optimal.** Fewer KV heads = smaller KV projection GEMM but Q projection stays large = better GEMM shape balance. 4:1 ratio (8Q:2KV) is proven.
+
+**hipBLASLt opportunities (advanced, test availability with `ROCBLAS_USE_HIPBLASLT=1`):**
+- **Epilogue fusion:** Fuses `Linear + bias + activation` into one GEMM launch. Supports SiLU, GELU, ReLU, Sigmoid. If available on gfx1151, this eliminates a kernel launch for every FFN activation.
+- **Grouped GEMM for MoE:** Dispatches all expert matmuls in one launch instead of sequentially. Critical for MoE architectures (Caveman routing, expert parallelism).
+- **Stream-K decomposition:** `TENSILE_SOLUTION_SELECTION_METHOD=2` distributes GEMM work evenly across all 40 CUs. Helps for non-square shapes where tile-centric decomposition leaves CUs idle.
+
+**What's NOT available on gfx1151:**
+- FP8 GEMM (requires MI300X or gfx12) — don't design for FP8 quantization
+- FP4/FP6 GEMM (gfx950+ only)
+- XDL/MFMA math modes (CDNA only)
+- Custom HIP matmul kernels cannot beat rocBLAS — don't propose them
+
+**Architecture design implications:**
+| Design Choice | Good (rocBLAS-friendly) | Bad (rocBLAS-hostile) |
+|--------------|------------------------|----------------------|
+| QKV projection | Fused `Linear(d, (nq+2nkv)*hd)` | 3 separate Linear layers |
+| FFN gate+up | Fused `Linear(d, 2*ffn_inner)` | 2 separate Linear layers |
+| LM head | Single `Linear(d, vocab)` | Tiered/adaptive softmax |
+| MoE experts | Grouped GEMM (hipBLASLt) or few large experts | Many tiny experts |
+| Hidden dim | Multiples of 128 (1024, 1536, 2048) | Odd sizes (768, 513, 640) |
+| Attention | GQA (8Q:2KV) | Full MHA or single-head |
+
 ---
 
 ## What Actually Works (Verified on gfx1151)
@@ -149,10 +180,12 @@ The best hypotheses exploit what this hardware does uniquely well:
 - **Novel fusion opportunities** — Find 3 ops that always occur together and propose a fused kernel. The existing kernels (fused_residual_add_rmsnorm, silu_gate_mul) came from exactly this thinking.
 
 **Don't waste creativity on:**
-- Attention mechanisms (0.05x, no MFMA — this ship has sailed)
-- Novel matmul algorithms (rocBLAS is already optimal for scalar FMA)
+- Novel matmul algorithms (rocBLAS Tensile is already optimal for scalar FMA — you cannot beat it)
 - Very deep architectures (serial weight reads kill throughput)
 - Architectures with many tiny scattered ops (kernel launch overhead dominates)
+- MoE with many small experts (many small GEMMs < fewer large GEMMs on this hardware)
+- FP8/FP4 quantization schemes (hardware doesn't support FP8/FP4 GEMM — design for int4/int8 instead)
+- Odd hidden dimensions (non-power-of-2 / non-multiple-of-128 dims waste Tensile tile edges)
 
 ---
 
@@ -172,7 +205,9 @@ The `halo_training/` package handles training. Your job is architecture design �
 1. A PyTorch `nn.Module` with `forward(input_ids) → logits` (shape: B, T, vocab_size)
 2. Standard components (RMSNorm, SwiGLU) so autokernel patterns match
 3. Chunked linear recurrence for any scan/recurrence (not sequential loops)
-4. A "Hardware Optimization Notes" section with realistic throughput estimates
+4. **BLAS-friendly dimensions:** d_model, head_dim, ffn_inner as multiples of 128. Fused QKV and gate+up projections (single Linear, not multiple).
+5. **Single LM head** (`Linear(d_model, vocab_size)`) — no tiered/adaptive softmax for training
+6. A "Hardware Optimization Notes" section with realistic throughput estimates
 
 ---
 

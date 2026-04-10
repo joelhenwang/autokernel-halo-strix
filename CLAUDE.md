@@ -214,6 +214,50 @@ Compiled at runtime via `kernels/hip/_compile.py` which uses `torch.utils.cpp_ex
 - **Adaptive softmax / tiered LM head for training**: Splitting the vocab into frequency tiers (8K full-rank + 16K/26K low-rank) with chunked cross-entropy saves memory (9.7 vs 12.7 GB) but is **4% slower** than a single large matmul for training. On memory-bound hardware without MFMA, rocBLAS handles one large matmul more efficiently than three smaller ones — the tier routing + masked gather overhead dominates. May still help decode (early exit skips weight reads) but not training throughput.
 - **SSM state explosion from bad init**: Mamba-style SSMs need careful initialization: A_log=log(arange(1,N+1)), dt_proj bias=-4.0 (softplus(-4)≈0.018), dt clamped to [1e-4, 0.5], B/C normalized by max(norm, 1.0). Without this, state norms grow → NaN within 100 steps.
 
+### rocBLAS / BLAS Optimization on gfx1151
+
+rocBLAS uses Tensile-generated scalar FMA kernels on gfx1151 (no MFMA). You cannot beat rocBLAS with custom HIP matmuls — but you CAN make rocBLAS faster by shaping workloads correctly.
+
+**Matmul shaping rules (architecture-level):**
+- **Fewer, larger GEMMs always win.** Fuse QKV projections into `Linear(d, (nq+2nkv)*hd)`. Fuse gate+up in SwiGLU into `Linear(d, 2*ffn)`. One large GEMM > multiple small ones because Tensile tiles better.
+- **Pad dimensions to multiples of 128.** Tensile's common tiles on scalar FMA: 64×64, 128×64, 128×128. Dimensions like d_model=1024, head_dim=128, ffn_inner=2560 avoid tail-handling overhead.
+- **Use strided batched GEMM for multi-head ops.** Less overhead than pointer-batched (avoids global memory reads for pointer arrays). PyTorch's `F.scaled_dot_product_attention` already does this.
+
+**rocBLAS flags relevant to gfx1151:**
+- `rocblas_gemm_flags_use_cu_efficiency` — selects kernels optimized for low-CU chips (40 CUs). PyTorch doesn't set this by default.
+- `rocblas_gemm_flags_stochastic_rounding` — available for bf16 training, may improve convergence.
+
+**hipBLASLt epilogue fusion:**
+hipBLASLt can fuse bias + activation (ReLU, GELU, SiLU, Sigmoid) into the GEMM kernel, eliminating a separate launch. Test availability with `ROCBLAS_USE_HIPBLASLT=1`. For MoE: hipBLASLt GroupedGemm dispatches all expert matmuls in one launch.
+
+**Stream-K for better CU utilization:**
+`TENSILE_SOLUTION_SELECTION_METHOD=2` enables work-centric decomposition that distributes GEMM work evenly across CUs. Helps when tile-centric decomposition leaves CUs idle for non-square shapes. More impactful on 40-CU gfx1151 than 304-CU MI300X.
+
+**Kernel tuning (per-problem-size):**
+```bash
+# Collect profile data for GEMM shapes used in your model
+ROCBLAS_LAYER=4 python -m halo_training --model models/prometheus.py --smoke
+# Tune with rocblas-gemm-tune, apply with:
+export ROCBLAS_TENSILE_GEMM_OVERRIDE_PATH=tuned_solutions.yaml
+```
+
+**HIP Graph capture for repeated GEMMs:**
+All transformer layers share identical GEMM shapes. `hipStreamBeginCapture` → record GEMM → `hipGraphInstantiate` → replay with zero CPU launch overhead. torch.compile with `mode="reduce-overhead"` does this automatically via CUDAGraphs.
+
+**Mixed precision on gfx1151 (what's available):**
+- HHS (fp16 in, fp16 out, fp32 accumulate) — default under `torch.autocast`
+- BBS (bf16 in, bf16 out, fp32 accumulate) — available for bf16 training
+- I8II (int8 in, int32 out) — quantized inference
+- **NOT available:** FP8 (requires MI300X/gfx942), FP4/FP6 (gfx950+), XDL math mode (CDNA)
+
+**Environment variables:**
+- `ROCBLAS_USE_HIPBLASLT=1` — try hipBLASLt backend (epilogue fusion, grouped GEMM)
+- `ROCBLAS_TENSILE_GEMM_OVERRIDE_PATH=<file>` — apply tuned kernel selections
+- `TENSILE_SOLUTION_SELECTION_METHOD=2` — enable Stream-K
+- `ROCBLAS_CHECK_NUMERICS=2` — debug NaN/inf in GEMM operations (perf hit)
+
+See `knowledge/amd_rdna35_strix_halo.md` §6 for full rocBLAS/hipBLAS/hipBLASLt reference.
+
 ## DeepSpeed CPUAdam on ROCm (gfx1151)
 
 DeepSpeed CPUAdam offloads optimizer state to CPU using AVX-512. Useful for Mode B (>2B models) where GPU memory is tight. On Strix Halo's unified memory, it trades GPU compute for CPU SIMD.
@@ -256,7 +300,7 @@ Most ROCm optimization guides target CDNA (MI300X). Here's what's different for 
 | Memory | HBM3 (5.3 TB/s) | **LPDDR5X (~240 GB/s)** | 22x less bandwidth — nearly everything is memory-bound |
 | L2 cache | 256 MB | **6 MB** | L2 serves repeated reads for data < 4MB; LDS caching only helps beyond this |
 | LDS per CU | 64 KB | **64 KB** | Same — LDS caching patterns transfer |
-| CU count | 304 | **20** | Much less parallelism — avoid persistent kernels, prefer fewer blocks |
+| CU count | 304 | **40** | Much less parallelism — avoid persistent kernels, prefer fewer blocks |
 | `__shfl_xor`/`__shfl_down` | 64-lane shuffles | **32-lane shuffles** | Same API, different width |
 | Tensor core intrinsics | `__builtin_amdgcn_mfma_*` | **Not available** | Cannot use MFMA; use scalar FMA only |
 
