@@ -210,3 +210,22 @@ The conductor/PLE additions are element-wise ops (linear projections, sigmoid, m
 - **AMADEUS measured:** 6,400 tok/s, 15.9% MFU, 12.7 GB memory (eager, 243M params)
 - This variant adds <5M params → expect similar throughput
 - **Token budget:** 15 min = ~5.8M | 45 min = ~17M | 120 min = ~46M
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~6,000 tok/s eager (15% MFU) — AMADEUS base + full 4-signal conductor
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +60% MFU (same as AMADEUS base) | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup | Available |
+| `mamba-ssm` selective_scan_fn | 5.6x scan speedup (0.32ms) | Available |
+| 4-signal conductor adds ~2% overhead | Most expressive conductor variant | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~11,500 tok/s (28% MFU)
+**Tokens in 45 min:** ~31.1M (1.9 BabyLM epochs)
+**Ranking:** #13 of 22 architectures

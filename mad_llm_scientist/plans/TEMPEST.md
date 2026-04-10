@@ -227,3 +227,22 @@ AMADEUS component profiling (batch=8, seq=512):
 - **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — `try/except` import in `models/tempest.py`, auto-used if installed. Shared with PROMETHEUS (imports from tempest).
 - **Griffin scan:** Chunked linear recurrence remains the primary scan backend. FLA HGRN (0.40ms) is an alternative per-dim recurrence if Griffin scan proves slow.
 - **Expected throughput with causal-conv1d:** 12-16K tok/s (vs estimated 8-10K eager baseline)
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~8,000 tok/s eager (20% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +125% MFU — all ops element-wise, compile fuses beautifully | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup, saves ~0.2ms/layer | **Wired in** |
+| FLA HGRN for Griffin scan | 0.40ms Triton kernel, alternative to chunked recurrence | Available |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+| Momentum residual simplification | If beta converges to constant, replace with fixed scalar | Not tested |
+
+**Estimated optimized throughput (50 steps):** ~18,000 tok/s (45% MFU)
+**Tokens in 45 min:** ~48.6M (3.0 BabyLM epochs)
+**Ranking:** #3 of 22 architectures

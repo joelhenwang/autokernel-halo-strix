@@ -230,3 +230,22 @@ SCORE damping is a simple lerp: `(1-d)*h + d*block(h)`. The depthwise conv1d (k=
 - Previous estimates (526/1299) were too conservative — LM head latency was overestimated
 
 ### MFU: 70-80% training (high due to L2 caching after first iteration)
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~10,000 tok/s eager (17% MFU, based on 168M effective params)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +120% MFU — shared block benefits from compile loop optimization | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| L2 weight reuse (iterations 2-3) | Individual layer weights may partially fit L2 (6 MB); 2nd/3rd iteration faster | By design |
+| ACT halting early exit | Skip iterations when converged; saves 20-40% compute on easy tokens | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~22,000 tok/s (37% MFU)
+**Tokens in 45 min:** ~59.4M (3.7 BabyLM epochs)
+**Ranking:** #1 of 22 architectures (highest tok/s due to fewest unique params)
+**Caveat:** Quality depends on whether shared-block iteration converges well.

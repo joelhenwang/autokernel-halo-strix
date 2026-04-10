@@ -272,3 +272,22 @@ Complex arithmetic doubles the FLOPs vs real. Budget accordingly.
 
 - **DHO recurrence:** FLA DeltaNet (1.60ms) as alternative to custom DHO implementation
 - **GatedConv (if used):** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~4,500 tok/s eager (11% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +100% MFU — DHO is element-wise but 2nd-order adds complexity | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| Complex DHO scan | Needs complex-valued chunked scan; no off-the-shelf kernel | Needs custom |
+| Dynamic scratchpad cross-attention | 32 queries × d_model adds ~3ms/layer; heavy if many layers | By design |
+| MTP (2 heads) overhead | ~3% additional training compute | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~9,000 tok/s (22% MFU)
+**Tokens in 45 min:** ~24.3M (1.5 BabyLM epochs)
+**Ranking:** #19 of 22 architectures

@@ -286,3 +286,23 @@ The Griffin operator `(a₂·a₁, a₂·b₁+b₂)` is the same associative sca
 - **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed, try/except fallback
 - **SSM scan (if Mamba path used):** mamba-ssm selective_scan_fn (5.6x, 0.32ms) — drop-in upgrade
 - **Griffin scan:** Chunked linear recurrence remains primary. FLA HGRN (0.40ms) as alternative.
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~5,500 tok/s eager (14% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +80% MFU — LFM2-style hybrid compiles reasonably | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup (10 conv layers) | Available |
+| FLA HGRN for Griffin recurrence | 0.40ms Triton kernel (6 Griffin layers) | Available |
+| Engram lookup optimization | Pre-hash N-gram indices | Possible |
+| Caveman routing overhead | ~3% compute for routing decisions | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~10,000 tok/s (25% MFU)
+**Tokens in 45 min:** ~27.0M (1.7 BabyLM epochs)
+**Ranking:** #16 of 22 architectures

@@ -165,3 +165,22 @@ Parallel hybrid runs conv and recurrence on the same input — no extra serial c
 - **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed, try/except fallback
 - **SSM scan (if Mamba path used):** mamba-ssm selective_scan_fn (5.6x, 0.32ms) — drop-in upgrade
 - **Griffin scan:** Chunked linear recurrence remains primary. FLA HGRN (0.40ms) as alternative.
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~5,000 tok/s eager (13% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +85% MFU — parallel hybrid compiles well per-path | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup (12ch conv per layer) | Available |
+| Engram + meta token overhead | 128 meta tokens + Engram add ~5% compute | By design |
+| Caveman routing | ~3% compute for routing | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~9,500 tok/s (24% MFU)
+**Tokens in 45 min:** ~25.7M (1.6 BabyLM epochs)
+**Ranking:** #17 of 22 architectures

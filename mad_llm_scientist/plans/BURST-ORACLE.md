@@ -336,3 +336,22 @@ Backbone uses Griffin recurrence → same chunked scan. Reference: `models/amade
 
 - **Speculative decode verification:** flash_attn forward (4.2x faster than SDPA, 0.25ms) for decode-time verification
 - **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~5,000 tok/s eager (13% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +85% MFU — Caveman backbone + MTP heads | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup | Available |
+| MTP head chain | 3 adapter heads add ~5% training compute | By design |
+| Engram verification | O(1) N-gram lookup for burst validation | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~9,500 tok/s (24% MFU)
+**Tokens in 45 min:** ~25.7M (1.6 BabyLM epochs)
+**Ranking:** #18 of 22 architectures

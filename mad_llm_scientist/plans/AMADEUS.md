@@ -254,3 +254,22 @@ h = gamma.unsqueeze(1) * h + beta.unsqueeze(1)  # FiLM: channel-wise affine
 - **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — `try/except` import in `models/amadeus.py`, auto-used if installed
 - **SSM scan:** mamba-ssm `selective_scan_fn` (5.6x vs HIP kernel, 0.32ms) — highest priority in `_scan_dispatch()`, replaces HIP and chunked fallbacks
 - **Expected throughput with external kernels:** 12-15K tok/s (vs 10.4K baseline)
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (verified):** 6,400 tok/s eager (16% MFU), 10,400 tok/s with autokernel+compile+HIP scan (26% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +60% MFU (16% → 26%) | **Verified** |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | **Verified** |
+| `causal-conv1d` in GatedConv | 10x conv speedup, saves ~0.2ms/layer | **Wired in** |
+| `mamba-ssm` selective_scan_fn | 5.6x vs HIP scan (0.32ms), saves ~1ms/layer | **Wired in** |
+| Batch=16, seq=256 | L2 sweet spot (vs batch=4: +40% tok/s) | **Verified** |
+| FiLM removal (layers 9-16) | Eliminates fingerprint compute; ~2% speedup | Not tested |
+
+**Estimated optimized throughput (50 steps):** ~13,000 tok/s (32% MFU)
+**Tokens in 45 min:** ~35.1M (2.2 BabyLM epochs)
+**Ranking:** #8 of 22 architectures

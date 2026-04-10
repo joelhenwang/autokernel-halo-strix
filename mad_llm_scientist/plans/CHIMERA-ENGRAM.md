@@ -271,3 +271,23 @@ Sinkhorn normalization (20 iterations) must run in fp32. This is a known precisi
 If using sparse MoE routing, expert selection on GPU requires careful implementation. PyTorch's `torch.topk` for expert routing is adequate but the expert dispatch (gathering tokens per expert) can be slow if experts have unbalanced loads.
 
 ### Throughput: ~5-7K tok/s (complex SSM + MoE overhead), MFU: 60-70%
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~4,500 tok/s eager (11% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +90% MFU — MoE scatter/gather may break fusion | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, moe_gating 3.5x, cross_entropy 1.8x | Available |
+| `mamba-ssm` for Mamba-3 SISO | 5.6x scan speedup | Available |
+| mHC 4-branch + complex scan | Custom complex associative scan needed | Needs custom |
+| MoE expert routing | Scatter/gather hurts locality on unified memory | By design |
+| Engram hash tables | ~2% lookup overhead | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~8,500 tok/s (21% MFU)
+**Tokens in 45 min:** ~23.0M (1.4 BabyLM epochs)
+**Ranking:** #21 of 22 architectures

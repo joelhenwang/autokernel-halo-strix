@@ -299,3 +299,22 @@ If System-2 rarely activates (>80% System-1), throughput approaches Caveman LFM 
 
 - **Slow path attention:** hybrid_flash_sdpa_attention (8.9% faster than SDPA) — from kernels/hip/hybrid_attention.py
 - **GatedConv (if used):** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~6,000 tok/s eager (14% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +100% MFU — two independent paths compile separately | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| Fast path (d=320, 8L) L2 partial fit | Smaller hidden dim → some weights approach L2 size | By design |
+| FLA HGRN for Griffin recurrence | 0.40ms Triton kernel for both paths | Available |
+| Entropy gating fusion | Fuse entropy compute + routing into single kernel | Possible |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~12,000 tok/s (28% MFU)
+**Tokens in 45 min:** ~32.4M (2.0 BabyLM epochs)
+**Ranking:** #11 of 22 architectures

@@ -204,3 +204,22 @@ Straight-Through Estimator for ternary weights requires very conservative traini
 - **Training (eager):** ~5-7K tok/s (reflex is fast, genius is Caveman-speed)
 - **Token budget:** 15 min = 4.5-6.3M | 45 min = 13.5-18.9M | 120 min = 36-50M
 - **Decode (int4):** ~1800-2200 tok/s realistic (2500 only if genius path rarely activates)
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~7,000 tok/s eager (16% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +100% MFU — dual-path compiles independently | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| Ternary reflex path L2 residence | Ternary weights (1.58-bit) fit more in L2; 5-10x effective BW for reflex path | By design |
+| `dequantize_int4` for ternary weights | 16.3x dequantization kernel at inference | Available |
+| FLA HGRN for Griffin scan | 0.40ms Triton kernel for genius path recurrence | Available |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~14,000 tok/s (32% MFU)
+**Tokens in 45 min:** ~37.8M (2.4 BabyLM epochs)
+**Ranking:** #6 of 22 architectures

@@ -185,3 +185,23 @@ The serial depth is the main throughput limiter. Consider reducing to 32 layers 
 
 - **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — critical for 48 layers of conv
 - **Throughput estimates updated:** With causal-conv1d, conv overhead drops significantly across all 48 layers
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~4,000 tok/s eager (9% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +100% MFU — 48 sequential layers limit compile benefits | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup (critical: 48 layers × conv) | Available |
+| Serial depth bottleneck | 48 sequential kernel launches dominate wall-clock | Fundamental |
+| Engram + MTP + meta tokens | ~8% combined overhead | By design |
+| d=512 half-sized GEMMs | Each GEMM is 4x smaller than d=1024 → lower rocBLAS utilization | Fundamental |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~8,000 tok/s (19% MFU)
+**Tokens in 45 min:** ~21.6M (1.4 BabyLM epochs)
+**Ranking:** #22 of 22 architectures (lowest — serial depth kills throughput)

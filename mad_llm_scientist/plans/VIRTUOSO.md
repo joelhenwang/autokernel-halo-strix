@@ -223,3 +223,22 @@ The conductor/PLE additions are element-wise ops (linear projections, sigmoid, m
 - **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed, try/except fallback
 - **Mamba-3 scan:** mamba-ssm selective_scan_fn (5.6x, 0.32ms) — drop-in upgrade for AMADEUS base
 - **Conductor/PLE ops:** Element-wise, no external kernel needed
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~7,500 tok/s eager (19% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +115% MFU — TEMPEST base compiles well | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup | **Wired in** (via TEMPEST) |
+| PLE zero-FLOP optimization | PLE adds 26.2M params but 0 FLOPs — pure embedding lookup | By design |
+| MatFormer elastic width | Train once, extract sub-models at inference (0.125x-1.0x width) | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~16,000 tok/s (41% MFU)
+**Tokens in 45 min:** ~43.2M (2.7 BabyLM epochs)
+**Ranking:** #4 of 22 architectures

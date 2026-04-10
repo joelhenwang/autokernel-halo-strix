@@ -375,3 +375,23 @@ At inference: hard routing (skip genius path entirely for glue tokens).
 
 ### MFU: 65-75% training
 FFN dominates compute (weight-bandwidth-bound). Recurrence is element-wise (~95% MFU). Engram lookups are memory-bound but small.
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~5,500 tok/s eager (13% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +90% MFU — dual-path + routing may limit fusion | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x, moe_gating 3.5x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup | Available |
+| `mamba-ssm` for Genius path | 5.6x scan speedup in Mamba layers | Available |
+| Reflex path L2 partial fit | Tiny recurrence + Engram in reflex path | By design |
+| mHC routing overhead | 4-branch routing adds ~2% compute | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~10,500 tok/s (25% MFU)
+**Tokens in 45 min:** ~28.4M (1.8 BabyLM epochs)
+**Ranking:** #15 of 22 architectures

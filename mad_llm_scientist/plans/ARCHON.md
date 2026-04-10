@@ -344,3 +344,24 @@ The question isn't whether each piece works. It's whether they **compose** at 25
 
 ### MFU: 65-75% training
 FFN dominates compute (weight-bandwidth-bound). Recurrence is element-wise (~95% MFU). Engram lookups are memory-bound but small.
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~4,500 tok/s eager (11% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +100% MFU — many components may cause graph breaks | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup | Available |
+| mHC 4-branch routing | Complex routing adds ~4% overhead | By design |
+| Engram + meta tokens | ~5% overhead from knowledge components | By design |
+| MTP heads | Additional training compute (~4%) | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~8,500 tok/s (22% MFU)
+**Tokens in 45 min:** ~23.0M (1.4 BabyLM epochs)
+**Ranking:** #20 of 22 architectures
+**Note:** Lowest throughput tier but designed for maximum quality. Worth testing if quality gap justifies 2x slower training.

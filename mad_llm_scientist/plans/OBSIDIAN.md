@@ -268,3 +268,22 @@ fp16: ~775 tok/s weighted average.
 
 ### MFU: 65-75% training
 FFN dominates compute (weight-bandwidth-bound). Recurrence is element-wise (~95% MFU). Engram lookups are memory-bound but small.
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~7,000 tok/s eager (16% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +100% MFU — BitNet ternary ops compile to efficient element-wise | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| BitNet ternary weights L2 residence | 1.58-bit weights: 8L × d=320 reflex path ≈ 5.2M params ≈ 1.3 MB → fits L2 | By design |
+| `dequantize_int4` kernel | 16.3x for inference-time ternary dequantization | Available |
+| Graduated vocab training | Smaller effective vocab early → faster initial training steps | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~14,000 tok/s (32% MFU)
+**Tokens in 45 min:** ~37.8M (2.4 BabyLM epochs)
+**Ranking:** #7 of 22 architectures

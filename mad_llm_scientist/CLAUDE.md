@@ -52,6 +52,18 @@ PyTorch `nn.Linear` calls rocBLAS (Tensile scalar FMA on gfx1151). You cannot be
 
 **Fast ops** (use freely): RMSNorm (3.3x), fused residual+RMSNorm (6.6x), SwiGLU (1.6x), RoPE (3.7x), cross_entropy (1.8x), int4 dequant (16.3x), prefix scan (8.4x), element-wise ops (~free). All have autograd. Apply via `autokernel.optimize(model, training=True)`. See root CLAUDE.md for full speedup table.
 
+### New Fused Kernels (2026-04-10)
+
+| Kernel | Speedup | What It Fuses | Used By |
+|--------|---------|---------------|---------|
+| **fused_mhc_sinkhorn** | **28.5x** | 3 projections + sigmoid/exp + 20-iter Sinkhorn 4×4 (all in registers) | ARCHON, GENIUS-CAVEMAN, CHIMERA-ENGRAM |
+| **fused_engram_gate_conv** | **7.4x** | Dot-product gate + DeepSeek gating + gated multiply + depthwise conv1d | All Engram architectures |
+| **fused_ple_gate** | ~3-5x | Linear→GELU→Linear→RMSNorm (PLE Path A) | VIRTUOSO, any PLE architecture |
+| **chunked_linear_cross_entropy** | Memory: 2-12 GB saved | Chunked LM head matmul + CE loss (never materializes full logits tensor) | All architectures (training) |
+| **scattermoe** (external) | TBD vs baseline | Fused MoE dispatch + expert forward + gather (pure Triton) | CHIMERA-ENGRAM, GENIUS-CAVEMAN |
+
+**Anti-pattern (confirmed 2026-04-10):** Never put matmuls inside HIP kernels on gfx1151. Engram Variants A (hash+gather+gate, 0.2x) and C (full fusion, 0.1x) were 5-7x SLOWER than PyTorch because they compute matmuls element-by-element instead of using rocBLAS Tensile. Only fuse element-wise ops.
+
 ### External Libraries (verified on gfx1151, all have training backward)
 
 | Package | Op | Speedup | Notes |
@@ -60,6 +72,8 @@ PyTorch `nn.Linear` calls rocBLAS (Tensile scalar FMA on gfx1151). You cannot be
 | **mamba-ssm** | selective scan | **5.6x** vs our HIP kernel | Drop-in upgrade for AMADEUS |
 | **FLA** (Triton) | GLA, Retention, HGRN, DeltaNet | 0.4-1.6ms | Griffin/Mamba alternatives with full backward |
 | **flash_attn** (aiter) | attention forward | **4.2x** vs SDPA | **Inference only** — fwd+bwd 15% slower than SDPA |
+| **scattermoe** 0.3.0 | fused MoE | fwd+bwd OK | `scattermoe.mlp.MLP(d, ffn, n_experts, top_k, activation=F.silu)` |
+| **Liger-Kernel** 0.7.0 | various | **BROKEN on gfx1151** | FusedLinearCE crashes, RMSNorm API mismatch. Only SwiGLU works (our HIP beats it). |
 
 **Attention for training:** Use **hybrid_flash_sdpa_attention** (`kernels/hip/hybrid_attention.py`) — flash_attn forward + SDPA backward with shared logsumexp. **8.9% faster than pure SDPA** (3.50ms vs 3.84ms fwd+bwd). This makes attention layers viable in hybrid architectures (e.g., PROMETHEUS).
 **Attention for inference/decode:** Use **flash_attn** directly (4.2x forward speedup).
@@ -92,8 +106,24 @@ For ANY recurrence/SSM (Griffin, Mamba, DHO, LRU, GRU):
 | LlamaModel (transformer) | 124.7M | eager | 14,500 | 17% |
 | AMADEUS (SSM hybrid) | 243.8M | autokernel + compile + HIP scan | **10,400** | **26%** |
 | AMADEUS (SSM hybrid) | 243.8M | eager, chunked scan | 6,400 | 16% |
+| Tempest (Griffin) | 244.5M | compile + autokernel | **8,152** | **20.1%** |
+| Tempest + MatFormer | 244.5M | compile + autokernel | **8,166** | **20.2%** |
+| Tempest + PLE(a) | 246.6M | compile + autokernel | 7,936 | 19.7% |
 
 BabyLM: ~16M tokens. At 6.4K tok/s, 2 epochs ≈ 80 min.
+
+### PLE + MatFormer Ablation (2026-04-10, Tempest base)
+
+| Config | Params | tok/s | Best Loss | BPB | vs Base |
+|--------|--------|-------|-----------|-----|---------|
+| Tempest (base) | 244.5M | 8,152 | 22.99 | 9.22 | -- |
+| PLE Path A | 246.6M | 7,936 | **22.65** | **9.08** | **-1.5%** |
+| PLE Path B | 247.2M | 8,031 | 23.14 | 9.28 | +0.7% |
+| PLE A+B | 249.3M | 7,158 | 23.52 | 9.42 | +2.3% |
+| MatFormer | 244.5M | **8,166** | 23.16 | 9.28 | +0.7% |
+| Full (A+B + MF) | 249.3M | 7,153 | 23.00 | 9.22 | 0.0% |
+
+**Conclusions:** MatFormer is always-on (free throughput + elastic inference). PLE Path A is the quality winner. Drop Path B and A+B.
 
 ### External Kernels Wired Into Models (2026-04-10)
 
@@ -154,6 +184,7 @@ If a package isn't installed, models fall back gracefully to nn.Conv1d / HIP sca
 - hipBLASLt/Stream-K tuning — tested, no effect on gfx1151 scalar FMA
 
 **ROCm source build warning:** Any new CUDA/HIP package needs math function patching (`expf` → `__builtin_expf`, etc.) for ROCm 7.12 on gfx1151. See `knowledge/amd_rdna35_strix_halo.md` §7 for the pattern. Expect 1-2 hours per package to install from source.
+- **HIP kernel compat:** `kernels/hip/_compile.py` auto-prepends ROCm 7.12 compat layer (`__builtin_expf`, `rsqrtf`, `sqrtf→__builtin_sqrtf`, `fmaxf`, `__fdividef`, `std::min/max`). All kernels compile cleanly on gfx1151. No manual patching needed.
 
 ---
 
@@ -172,12 +203,42 @@ Training handled by `halo_training/`. CLI: `python -m halo_training --model mode
 - 250M fp16 ≈ 2.1 ms/tok (~480 tok/s). 250M int4 ≈ 0.5 ms/tok (~2000 tok/s).
 - 250M int4 + L2-cached hot path → 1500-7000 tok/s.
 
+### Training Evolution Funnel (5 stages)
+
+Architecture screening pipeline with increasing investment:
+- **Stage 0:** 10-min smoke test (smoke-test-dataset). Gate: tok/s > 20K + loss decreasing.
+- **Stage 1:** 1 epoch BabyLM (~16M tokens). Gate: manual judgment on loss/BPB.
+- **Stage 2:** 1 epoch GPT-training-small + eval v1 (per-domain perplexity).
+- **Stage 3:** 2 epochs Dolma Mix 10B + eval v2 (benchmark harness).
+- **Stage 4:** 2 epochs Dolma Mix 100B + eval v2. Final model.
+
+Target: beat LFM2.5-350M on HellaSwag, ARC, MMLU, then instruction-tune for on-device Strix Halo.
+See `docs/superpowers/specs/2026-04-10-training-evolution-design.md` for full spec.
+
+### Backward Pass Optimization Research (2026-04-10)
+
+The backward pass is 53% of training step time. Key findings from research:
+
+| Approach | Status on gfx1151 | Impact |
+|----------|-------------------|--------|
+| **IO-aware fused kernels** (what we do) | **ACTIVE** — our fused kernels | Best practical approach |
+| **FP8 backward GEMMs** | **BLOCKED** — no FP8 on RDNA 3.5 | Would be biggest win if hardware supported |
+| **Sampled softmax** (LM head only) | Available — no hardware dependency | 16x smaller LM head GEMMs, slight quality cost |
+| **INSTANT** (low-rank backward) | Research — not yet implemented | Approximates largest backward GEMM |
+| **Monarch/butterfly matrices** | Architecture change | O(N log N) forward AND backward |
+| **Chunked CE Approach D** (save grad_logits) | **TODO** — eliminates recompute GEMM | Makes chunked CE match standard backward speed |
+
+**Key insight:** Nobody has eliminated matmuls from the backward pass at scale. Even MatMul-Free LM and BitNet b1.58 keep full-precision matmuls in backward. The best practical path is IO-aware kernel fusion + lower precision (when hardware supports it).
+
+See `docs/possible_techniques_bwd_improv.md` for full survey.
+
 ## Constraints
 - Model < 250M parameters
 - Training budget: **45 minutes** (120-min timeout)
 - Tokenizer: tiktoken GPT2 (vocab_size=50257)
 - All scans MUST use chunked linear recurrence
 - All plans MUST include "Hardware Optimization Notes"
+- **EOS tokens:** `<|endoftext|>` (token 50256) inserted between documents in `halo_training/data.py`. Critical for document boundary learning.
 
 ## Skills
 

@@ -62,17 +62,15 @@ def attention_layer_forward(self, h, velocity):
     k = self.wk(h_norm).view(B, T, 2, 128).transpose(1, 2)
     v = self.wv(h_norm).view(B, T, 2, 128).transpose(1, 2)
 
-    # Attention backend priority:
-    # 1. aule-attention (Triton, hardware-agnostic, GQA native, pip install)
-    #    `from aule_attention import flash_attention`
-    #    attn_out = flash_attention(q, k, v, causal=True)  # handles GQA natively
-    # 2. F.scaled_dot_product_attention (PyTorch SDPA, Inductor backend)
-    # 3. flash-attn ROCm (0.05x on gfx1151 — LAST resort)
+    # Attention backend priority (verified on gfx1151):
+    # 1. hybrid_flash_sdpa_attention — flash_attn forward (0.25ms) + SDPA backward (2.92ms)
+    #    = 3.50ms fwd+bwd, 8.9% faster than pure SDPA. Input: (B, T, H, D).
+    #    `from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention`
+    # 2. F.scaled_dot_product_attention (PyTorch SDPA, CK backend) — 3.84ms fallback
     #
-    # Aule-Attention uses Triton kernels → generates code for gfx1151 directly.
-    # MIT license, pip install aule-attention, head_dim<=128, full backward.
-    # github.com/AuleTechnologies/Aule-Attention
-    k = k.repeat_interleave(4, dim=1)  # only if using SDPA; aule handles GQA natively
+    # AVOID pure flash_attn for training: Triton backward is 66% slower than SDPA on gfx11.
+    # CK attention backward is fundamentally not supported on gfx11 architecture.
+    k = k.repeat_interleave(4, dim=1)  # GQA expansion for SDPA path
     v = v.repeat_interleave(4, dim=1)
     attn_out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
     attn_out = self.wo(attn_out.transpose(1, 2).reshape(B, T, 1024))
@@ -217,9 +215,9 @@ Expected ~0.5ms per Griffin layer (vs 1.8ms for Mamba-3 with HIP kernel).
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Attention backend performance | **HIGH** | Try Aule-Attention first (`pip install aule-attention`). If fast on gfx1151 → attention is ~free. If not → fall back to SDPA (~10ms/layer). Do NOT use standard flash-attn (0.05x). |
-| 2 attn layers dominate wall-clock (SDPA scenario) | **MEDIUM** | Only applies if Aule-Attention doesn't work. At ~10ms SDPA each, they're ~15% of forward. If >25% wall-clock, reduce to 1 attn layer (at layer 8 only). |
-| Throughput slower than TEMPEST (SDPA scenario) | **MEDIUM** | ~10-15% penalty with SDPA. If quality gain < 5% vs TEMPEST, drop attention → become TEMPEST. With Aule-Attention this risk disappears. |
+| Attention backend performance | **RESOLVED** | hybrid_flash_sdpa_attention verified: 3.50ms fwd+bwd (8.9% faster than SDPA). 2 layers = ~7ms total = <5% of wall-clock. Attention is near-free. |
+| 2 attn layers dominate wall-clock | **LOW** | At ~3.5ms each, 2 layers cost ~7ms vs ~100ms for 14 Griffin layers. Negligible. |
+| Throughput slower than TEMPEST | **LOW** | ~7ms attention overhead on ~130ms total = ~5% penalty vs pure Griffin. Quality gain from global context should easily justify this. |
 | Momentum destabilizes training | LOW | beta init 0.5, learned via sigmoid(log_beta). If loss spikes, set beta→0 (= standard residual). |
 | Griffin quality < Mamba-3 | MEDIUM | At comparable throughput (~11K vs 10.4K), data exposure is similar. Quality comparison is fair: architecture vs architecture, not throughput vs throughput. |
 
@@ -250,3 +248,23 @@ Expected ~0.5ms per Griffin layer (vs 1.8ms for Mamba-3 with HIP kernel).
 - **Attention:** hybrid_flash_sdpa_attention (8.9% faster than SDPA) — auto-detected in `_detect_attn_backend()`, combines flash_attn forward + SDPA backward
 - **Griffin scan:** FLA HGRN (0.40ms) available as alternative per-dim recurrence
 - **Expected throughput with external kernels:** 10-14K tok/s eager, 14-16K with autokernel+compile
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~9,000 tok/s eager (20% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +100% MFU — Griffin ops fuse well, attention layers fixed cost | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup, saves ~0.2ms/layer (14 Griffin layers) | **Wired in** |
+| `hybrid_flash_sdpa_attention` | 8.9% faster than SDPA (3.50ms vs 3.84ms fwd+bwd per attn layer) | **Wired in** |
+| FLA HGRN for Griffin scan | 0.40ms Triton kernel | Available |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~19,000 tok/s (42% MFU)
+**Tokens in 45 min:** ~51.3M (3.2 BabyLM epochs)
+**Ranking:** #2 of 22 architectures
+**Note:** Smallest param count (216M) gives highest tok/s despite 2 attention layers.

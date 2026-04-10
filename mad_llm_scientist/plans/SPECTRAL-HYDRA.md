@@ -243,3 +243,22 @@ After training, plot histogram of α = sigmoid(linear + decay_bias) per dimensio
 - **GatedConv:** causal-conv1d (10x vs nn.Conv1d) — auto-used if installed
 - **Element-wise recurrence:** FLA HGRN (0.40ms) as alternative to custom per-dim recurrence
 - **Griffin scan:** Chunked linear recurrence or FLA chunk_hgrn
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~7,500 tok/s eager (19% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +113% MFU — all element-wise recurrence, highly fusable | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` for Conv1d(k=4) | 10x conv speedup (16 layers x 1024 channels) | Available |
+| FLA HGRN for per-dim recurrence | 0.40ms Triton kernel matches Griffin shape | Available |
+| Cross-head mixer fusion | Fuse 16-head concat + linear into single GEMM | With compile |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~16,000 tok/s (40% MFU)
+**Tokens in 45 min:** ~43.2M (2.7 BabyLM epochs)
+**Ranking:** #5 of 22 architectures

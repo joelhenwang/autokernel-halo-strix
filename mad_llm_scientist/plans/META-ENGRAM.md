@@ -208,3 +208,22 @@ loss = 0.7 * CE(student, targets) + 0.3 * KL(student, teacher, T=2.0)
 
 ### MFU: 65-75% training
 FFN dominates compute (weight-bandwidth-bound). Recurrence is element-wise (~95% MFU). Engram lookups are memory-bound but small.
+
+---
+
+## Possible Optimizations & Throughput Estimate
+
+**Baseline (estimated):** ~5,500 tok/s eager (13% MFU)
+
+| Optimization | Expected Impact | Status |
+|-------------|----------------|--------|
+| `torch.compile(mode="default")` | +90% MFU — Engram lookups may cause graph breaks | Not tested |
+| `autokernel.optimize(model, training=True)` | RMSNorm 6.6x, SwiGLU 1.6x, cross_entropy 1.8x | Available |
+| `causal-conv1d` in GatedConv | 10x conv speedup | Available |
+| Engram hash table optimization | Pre-compute hash indices; fuse lookup + gate | Possible |
+| Meta token overhead | 128 meta tokens add ~3% to sequence length | By design |
+| Batch=16, seq=256 | L2 sweet spot | Expected |
+
+**Estimated optimized throughput (50 steps):** ~10,500 tok/s (25% MFU)
+**Tokens in 45 min:** ~28.4M (1.8 BabyLM epochs)
+**Ranking:** #14 of 22 architectures
