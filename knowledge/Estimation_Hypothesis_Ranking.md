@@ -131,6 +131,53 @@
 
 ---
 
+## Backward Pass Optimization Impact (2026-04-10)
+
+Measured backward kernel speedups on gfx1151. See `knowledge/backward_pass_optimization_results.md` for full details.
+
+### Measured Backward Kernel Speedups
+
+| Kernel | Speedup | Applicable To |
+|--------|---------|---------------|
+| rmsnorm_backward | **12.51x** | All architectures (32 calls/step for 16L) |
+| silu_gate_mul_backward | **10.74x** | All with SwiGLU FFN (16 calls/step) |
+| rotary_embedding_backward | **4.67x** | Models with attention (LLaMA, PROMETHEUS) |
+| fused_residual_rmsnorm_backward | **~13x** (est.) | All architectures (16 calls/step) |
+| selective_scan_backward | **21.15x** | SSM models (AMADEUS, MAESTRO variants) |
+
+### Reranked Throughput with Backward Optimizations
+
+Formula: `new_tok_s = old_tok_s / (1 - bwd_frac × (1 - 1/bwd_speedup))`
+where bwd_frac = 0.53 (backward portion of step) and bwd_speedup is the weighted average across all backward ops.
+
+| Rank | Hypothesis | Previous tok/s | Bwd Speedup (est.) | **New tok/s** | Change |
+|------|-----------|---------------|-------------------|-------------|--------|
+| **1** | **AMADEUS** | 13,000 | **~5x** (scan dominates) | **~26,000** | **+100%** |
+| **2** | **RESONANT-LOOP** | 22,000 | ~2x (norm/activation) | **~33,000** | +50% |
+| **3** | **PROMETHEUS** | 19,000 | ~2.5x (norm/rotary/attn) | **~31,000** | +63% |
+| **4** | **TEMPEST** | 18,000 | ~2x (norm/activation) | **~27,000** | +50% |
+| **5** | **VIRTUOSO** | 16,000 | ~2x (norm/activation) | **~24,000** | +50% |
+| **6** | **SPECTRAL-HYDRA** | 16,000 | ~2x (norm/activation) | **~24,000** | +50% |
+| **7** | **MAESTRO-PRIMA** | 12,000 | ~4x (scan + norm) | **~22,000** | +83% |
+| **8** | **TERNARY-REFLEX** | 14,000 | ~2x (norm/activation) | **~21,000** | +50% |
+| **9** | **OBSIDIAN** | 14,000 | ~2x (norm/activation) | **~21,000** | +50% |
+| **10** | **MAESTRO-FORTE** | 12,000 | ~4x (scan + norm) | **~22,000** | +83% |
+
+**Key shift:** AMADEUS jumps from rank 8 to rank 1-2 tier because the selective scan backward (21x) is so dominant in its backward pass. All MAESTRO variants similarly benefit from the scan speedup.
+
+**Caveat:** These are extrapolated from isolated kernel benchmarks. Combined training speedup will be less than kernel speedup due to matmul backward (unchanged), optimizer step, and memory allocation overhead. The actual Tempest baseline shows estimates are ~2.2x too optimistic. Apply the same correction factor to these projections.
+
+### Realistic Projections (÷2.2 correction)
+
+| Hypothesis | Optimistic tok/s | **Realistic tok/s** |
+|-----------|-----------------|-------------------|
+| AMADEUS + bwd opt | 26,000 | **~12,000** |
+| RESONANT-LOOP + bwd opt | 33,000 | **~15,000** |
+| PROMETHEUS + bwd opt | 31,000 | **~14,000** |
+| TEMPEST + bwd opt | 27,000 | **~12,300** |
+
+---
+
 ## Key Insights
 
 1. **Parameter count is the #1 throughput lever.** RESONANT-LOOP (168M effective) and PROMETHEUS (216M) lead because fewer params = fewer bytes/step. At our memory bandwidth (240 GB/s), every MB of weights costs ~4μs per pass.
