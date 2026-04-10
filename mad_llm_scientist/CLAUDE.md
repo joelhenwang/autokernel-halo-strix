@@ -59,8 +59,8 @@ PyTorch `nn.Linear` calls rocBLAS (Tensile scalar FMA on gfx1151). You cannot be
 | **FLA** (Triton) | GLA, Retention, HGRN, DeltaNet | 0.4-1.6ms | Griffin/Mamba alternatives with full backward |
 | **flash_attn** (aiter) | attention forward | **4.2x** vs SDPA | **Inference only** — fwd+bwd 15% slower than SDPA |
 
-**Attention for training:** Use **SDPA** (PyTorch built-in). flash_attn's Triton backward is slower on gfx11.
-**Attention for inference/decode:** Use **flash_attn** (4.2x forward speedup).
+**Attention for training:** Use **hybrid_flash_sdpa_attention** (`kernels/hip/hybrid_attention.py`) — flash_attn forward + SDPA backward with shared logsumexp. **8.9% faster than pure SDPA** (3.50ms vs 3.84ms fwd+bwd). This makes attention layers viable in hybrid architectures (e.g., PROMETHEUS).
+**Attention for inference/decode:** Use **flash_attn** directly (4.2x forward speedup).
 
 ### Slow Operations (design around these)
 

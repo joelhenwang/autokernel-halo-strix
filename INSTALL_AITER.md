@@ -85,16 +85,21 @@ SDPA fwd+bwd: 4.14ms
 
 ## 6. Performance findings
 
-| Path | Forward | Fwd+Bwd | Notes |
-|------|---------|---------|-------|
-| flash_attn (aiter Triton) | **0.25ms** | 4.81ms | 4.2x forward, but fwd+bwd 15% slower |
-| SDPA (PyTorch built-in) | 1.06ms | **4.14ms** | Better for training |
-| flash_attn (AOTriton, no aiter) | **0.17ms** | N/A | Fastest forward, no backward on gfx11 |
+| Path | Forward | Backward | Fwd+Bwd | vs SDPA |
+|------|---------|----------|---------|---------|
+| **hybrid_attention** (flash fwd + SDPA bwd) | **0.25ms** | **2.92ms** | **3.50ms** | **8.9% faster** |
+| SDPA (PyTorch built-in) | 1.07ms | 2.64ms | 3.84ms | baseline |
+| flash_attn (aiter Triton) | 0.25ms | 4.39ms | 4.84ms | 26% slower |
+| flash_attn (AOTriton, no aiter) | **0.17ms** | N/A | N/A | fwd-only, no bwd on gfx11 |
 
 **Recommendation:**
-- **Training:** Use SDPA (fwd+bwd is faster)
+- **Training:** Use `hybrid_flash_sdpa_attention` from `kernels/hip/hybrid_attention.py` — combines flash_attn's fast forward with SDPA's fast backward by passing softmax logsumexp directly to `torch.ops.aten._flash_attention_backward`. **8.9% faster than pure SDPA.**
 - **Inference/decode:** Use flash_attn with `FLASH_ATTENTION_TRITON_AMD_ENABLE=FALSE` for fastest forward (0.17ms via AOTriton)
-- **If backward needed:** Use flash_attn with `FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE` (aiter Triton path)
+- **Avoid for training:** Pure flash_attn — its Triton backward is 66% slower than SDPA on gfx11
+
+### Why the hybrid works
+
+flash_attn and SDPA both compute a `softmax_lse` (log-sum-exp) tensor of shape `(B, H, T)` in float32 during the forward pass. The backward uses this logsumexp to recompute the attention probability matrix without storing the full N×N attention matrix. By passing flash_attn's logsumexp directly to PyTorch's aten-level `_flash_attention_backward`, we skip the forward recompute entirely. Gradient accuracy: max_diff=0.002 (within fp16 tolerance).
 
 ## 7. Known issues
 

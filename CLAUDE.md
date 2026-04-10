@@ -71,14 +71,17 @@ GPU: Radeon 8060S (gfx1151), 40 CUs, wave32, **no MFMA**, ~59.4 TFLOPS FP16. Mem
 |---------|-----|------|------------|----------|----------|
 | **causal-conv1d** 1.6.1 | depthwise conv1d | **0.02ms** | 10x vs nn.Conv1d | Yes | All GatedConv in all architectures |
 | **mamba-ssm** 2.3.0 | selective scan | **0.32ms** | 5.6x vs our HIP kernel | Yes | Drop-in upgrade for AMADEUS |
-| **flash_attn** 2.8.4 (aiter) | attention fwd | **0.25ms** | 4.2x vs SDPA | **No** (Triton bwd slower) | **Inference/decode only** |
-| **flash_attn** 2.8.4 (aiter) | attention fwd+bwd | 4.81ms | 0.86x vs SDPA | Yes | Training: use SDPA instead |
+| **hybrid_attention** | flash fwd + SDPA bwd | **3.50ms** fwd+bwd | **8.9% faster** than SDPA | Yes | **Best for training** |
+| **flash_attn** 2.8.4 (aiter) | attention fwd only | **0.25ms** | 4.2x vs SDPA | Triton bwd slower | Inference/decode |
 | **FLA** 0.4.2 | GLA | **1.28ms** | — | Yes | Griffin alternative (Triton) |
 | **FLA** 0.4.2 | Retention | **0.77ms** | — | Yes | Fastest FLA recurrence |
 | **FLA** 0.4.2 | HGRN | **0.40ms** | — | Yes | Per-dim recurrence (B,T,D) |
 | **FLA** 0.4.2 | DeltaNet | **1.60ms** | — | Yes | Most expressive, slowest |
 
-**Key finding:** flash_attn forward is 4.2x faster than SDPA, but fwd+bwd is 15% *slower*. Use SDPA for training, flash_attn for inference. CK backward is not supported on gfx11 — aiter uses Triton backward which is slower.
+**Attention backend selection (gfx1151):**
+- **Training:** Use `hybrid_flash_sdpa_attention` from `kernels/hip/hybrid_attention.py` — flash_attn forward (0.25ms) + SDPA aten backward with shared logsumexp (2.92ms) = **3.50ms**, 8.9% faster than pure SDPA (3.84ms). Gradient accuracy: max_diff=0.002 (fp16 tolerance).
+- **Inference/decode:** Use flash_attn directly (0.25ms forward, 4.2x faster than SDPA).
+- **Avoid:** Pure flash_attn for training (Triton backward is 66% slower than SDPA on gfx11).
 
 **Installation:** All packages require source builds with ROCm patches. See `INSTALL_CAUSAL_CONV1D.md`, `INSTALL_MAMBA_SSM.md`, `INSTALL_AITER.md`. Key: replace bare `expf`/`exp2f`/`powf`/`__logf` with `__builtin_` equivalents in device code. Scripts: `scripts/install_causal_conv1d_rocm.sh`, `scripts/install_mamba_ssm_rocm.sh`, `scripts/patch_aiter_ck_rocm.sh`.
 
