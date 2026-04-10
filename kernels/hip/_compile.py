@@ -46,6 +46,43 @@ _DEFAULT_HIP_FLAGS = [
 if _ROCM_INCLUDE:
     _DEFAULT_HIP_FLAGS.append(f"-I{_ROCM_INCLUDE}")
 
+# ROCm 7.12 on gfx1151: bare math intrinsics (__expf, __logf, etc.) and
+# C-style min/max are not available in device code. This preamble provides
+# compatibility defines that get prepended to every HIP source.
+_ROCM_COMPAT_PREAMBLE = r"""
+// --- ROCm 7.12 / gfx1151 compatibility ---
+// Bare math intrinsics and C-style min/max are not available in HIP device
+// code on this platform. Provide __builtin_ wrappers and std::min/max.
+#ifndef __AUTOKERNEL_COMPAT__
+#define __AUTOKERNEL_COMPAT__
+#include <algorithm>
+#include <cmath>
+using std::min;
+using std::max;
+// Fast math intrinsics → __builtin_ equivalents
+#ifndef __expf
+#define __expf(x) __builtin_expf(x)
+#endif
+#ifndef __logf
+#define __logf(x) __builtin_logf(x)
+#endif
+#ifndef __powf
+#define __powf(x,y) __builtin_powf(x,y)
+#endif
+#ifndef __fabsf
+#define __fabsf(x) __builtin_fabsf(x)
+#endif
+// Standard math functions that may not resolve in device code
+__device__ __forceinline__ float rsqrtf(float x) { return 1.0f / __builtin_sqrtf(x); }
+__device__ __forceinline__ float sqrtf(float x) { return __builtin_sqrtf(x); }
+__device__ __forceinline__ float fmaxf(float a, float b) { return (a > b) ? a : b; }
+__device__ __forceinline__ float fminf(float a, float b) { return (a < b) ? a : b; }
+#ifndef __fdividef
+__device__ __forceinline__ float __fdividef(float a, float b) { return a / b; }
+#endif
+#endif // __AUTOKERNEL_COMPAT__
+"""
+
 # Module-level cache: {hash -> compiled module}
 _module_cache: dict = {}
 _compile_lock = threading.Lock()
@@ -213,6 +250,9 @@ def compile_hip(
         extra_hip_cflags = []
     if extra_cflags is None:
         extra_cflags = []
+
+    # Prepend ROCm compatibility preamble to HIP source
+    hip_src = _ROCM_COMPAT_PREAMBLE + hip_src
 
     # Build the full flag set
     hip_flags = list(_DEFAULT_HIP_FLAGS) + _get_arch_flags() + extra_hip_cflags

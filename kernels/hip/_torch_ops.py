@@ -311,3 +311,88 @@ def _selective_scan_backward(ctx, grad_y):
 selective_scan_op.register_autograd(
     _selective_scan_backward, setup_context=_selective_scan_setup
 )
+
+
+# ---------------------------------------------------------------------------
+# Fused PLE Gate (Per-Layer Embeddings Path A)
+# forward: GELU(h @ W_down^T) @ W_up^T, then RMSNorm
+# ---------------------------------------------------------------------------
+
+@torch.library.custom_op("autokernel::fused_ple_gate", mutates_args=())
+def fused_ple_gate_op(
+    h: torch.Tensor, w_down: torch.Tensor,
+    w_up: torch.Tensor, norm_weight: torch.Tensor,
+) -> torch.Tensor:
+    from kernels.hip.fused_ple_gate import kernel_fn
+    return kernel_fn(h, w_down, w_up, norm_weight)
+
+
+@fused_ple_gate_op.register_fake
+def _(
+    h: torch.Tensor, w_down: torch.Tensor,
+    w_up: torch.Tensor, norm_weight: torch.Tensor,
+) -> torch.Tensor:
+    return h.new_empty(h.shape)
+
+
+def _fused_ple_gate_setup(ctx, inputs, output):
+    h, w_down, w_up, norm_weight = inputs
+    ctx.save_for_backward(h, w_down, w_up, norm_weight, output)
+    ctx.eps = 1e-6
+
+
+def _fused_ple_gate_backward(ctx, grad_output):
+    h, w_down, w_up, norm_weight, out = ctx.saved_tensors
+    eps = ctx.eps
+
+    # Recompute forward in fp32 for stable gradients
+    h_f = h.float()
+    wd_f = w_down.float()
+    wu_f = w_up.float()
+    nw_f = norm_weight.float()
+    g_f = grad_output.float()
+
+    # Forward recompute
+    bottleneck_pre = h_f @ wd_f.t()                          # (M, P)
+    bottleneck = torch.nn.functional.gelu(bottleneck_pre)     # (M, P)
+    raw = bottleneck @ wu_f.t()                               # (M, D)
+
+    # RMSNorm forward
+    rms_sq = raw.pow(2).mean(-1, keepdim=True) + eps
+    rms_inv = rms_sq.rsqrt()
+    normed = raw * rms_inv
+
+    # RMSNorm backward
+    D = raw.shape[-1]
+    grad_normed = g_f * nw_f
+    grad_raw = grad_normed * rms_inv - normed * (grad_normed * normed).sum(-1, keepdim=True) / D
+    grad_norm_weight = (g_f * normed).sum(dim=tuple(range(g_f.ndim - 1)))
+
+    # Linear backward: raw = bottleneck @ W_up^T
+    grad_bottleneck = grad_raw @ wu_f                         # (M, P)
+    grad_w_up = grad_raw.t() @ bottleneck                     # (D, P)
+
+    # GELU backward
+    # d/dx GELU(x) ≈ 0.5*(1+tanh(k)) + 0.5*x*(1-tanh(k)^2)*k'
+    # Use PyTorch's autograd for exact GELU gradient
+    bp = bottleneck_pre.requires_grad_(True)
+    with torch.enable_grad():
+        gelu_out = torch.nn.functional.gelu(bp)
+        gelu_out.backward(grad_bottleneck)
+    grad_bp = bp.grad                                         # (M, P)
+
+    # Linear backward: bottleneck_pre = h @ W_down^T
+    grad_h = grad_bp @ wd_f                                   # (M, D)
+    grad_w_down = grad_bp.t() @ h_f                           # (P, D)
+
+    return (
+        grad_h.to(h.dtype),
+        grad_w_down.to(w_down.dtype),
+        grad_w_up.to(w_up.dtype),
+        grad_norm_weight.to(norm_weight.dtype),
+    )
+
+
+fused_ple_gate_op.register_autograd(
+    _fused_ple_gate_backward, setup_context=_fused_ple_gate_setup
+)
