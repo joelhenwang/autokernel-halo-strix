@@ -94,11 +94,9 @@ Only aiter's **Triton-based ops** work (flash_attn via `FLASH_ATTENTION_TRITON_A
 - autokernel RMSNorm: **48x** vs PyTorch (0.01ms vs 0.44ms)
 - autokernel fused_bias_silu: **2.0x** vs PyTorch (0.19ms vs 0.38ms)
 
-### Part 2: rocBLAS per-problem tuning — NOT AVAILABLE
+### Part 2: rocBLAS per-problem tuning — AVAILABLE, NOT YET RUN
 
-`rocblas-bench` and `rocblas-gemm-tune` are not installed. They require the `rocblas-clients` package which is separate from the base ROCm install. Only the rocBLAS library itself is present at `/opt/rocm/core-7.12/lib/rocblas/library/`.
-
-To install: `sudo apt install rocblas-clients` (if available for ROCm 7.12), or build from source.
+`rocblas-gemm-tune` is available at `/home/joelwang-ai-2/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/` (built from rocBLAS source). The `tune_rocblas_gemm.sh` script has been updated with this path. Tuning has not yet been run — expected 2-5% gain on specific GEMM shapes.
 
 ### Part 3: hipBLASLt env vars — NO EFFECT
 

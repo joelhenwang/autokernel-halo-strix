@@ -128,7 +128,7 @@ rocBLAS uses Tensile scalar FMA on gfx1151. Can't beat it — shape workloads to
 - **Pad dims to multiples of 128.** Tensile tiles: 64×64, 128×64, 128×128.
 - **Strided batched > pointer-batched** for multi-head ops (less overhead on LPDDR5X).
 - hipBLASLt env vars (`ROCBLAS_USE_HIPBLASLT=1`, `TENSILE_SOLUTION_SELECTION_METHOD=2`): **tested, no effect on gfx1151**. Tensile scalar FMA is already near-optimal.
-- `rocblas-bench`/`rocblas-gemm-tune`: not installed (requires `rocblas-clients` package, separate from base ROCm).
+- `rocblas-gemm-tune`: available at `~/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/` (built from source). Use `scripts/tune_rocblas_gemm.sh`.
 - See `knowledge/amd_rdna35_strix_halo.md` §6 for full rocBLAS/hipBLAS/hipBLASLt reference.
 
 ### aiter HIP Ops on gfx1151

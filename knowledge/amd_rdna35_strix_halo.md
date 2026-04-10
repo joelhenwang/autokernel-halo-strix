@@ -412,3 +412,144 @@ All transformer layers have identical GEMM shapes → capture once, replay per l
 | **Use strided batched for attention** | Less overhead than pointer-batched | PyTorch SDPA already does this |
 | **Consider hipBLASLt epilogue fusion** | Avoids separate bias+activation kernel | Linear + SiLU in one launch |
 | **MoE: use grouped GEMM** | One dispatch for all experts | hipBLASLt GroupedGemm API |
+
+### 6.9 Tested Results on gfx1151 (2026-04-10)
+
+**hipBLASLt/Stream-K env vars: NO EFFECT.** Tested on SwiGLU-shaped GEMM (4096×2560)×(2560×1024):
+- `ROCBLAS_USE_HIPBLASLT=1`: 0.98x (no change)
+- `TENSILE_SOLUTION_SELECTION_METHOD=2` (Stream-K): 0.98x (no change)
+- Both combined: 0.97x (no change)
+
+Tensile scalar FMA is already near-optimal for these shapes on gfx1151. The env vars target CDNA/MFMA workloads.
+
+**rocblas-gemm-tune: AVAILABLE** at `/home/joelwang-ai-2/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging/`. Built from rocBLAS source (not from the `rocblas-clients` package). The base ROCm 7.12 install only includes the library at `/opt/rocm/core-7.12/lib/rocblas/library/`.
+
+---
+
+## 7. ROCm 7.12 Source Build Patching (gfx1151)
+
+> Every external CUDA/HIP package that compiles device code needs patching for ROCm 7.12 on gfx1151. This section documents the systematic issue and fix pattern.
+
+### 7.1 The Problem: Bare Math Functions in Device Code
+
+ROCm 7.12's HIP compiler rejects bare C math functions (`expf`, `exp2f`, `powf`, `__logf`, `expm1f`, `sincosf`, `log1pf`, `fabsf`) in device code on gfx1151. These are treated as host-only functions. The fix: replace with `__builtin_` equivalents.
+
+**Affected packages (verified):**
+- **causal-conv1d** 1.6.1 — `csrc/` files. Script: `scripts/install_causal_conv1d_rocm.sh`
+- **mamba-ssm** 2.3.0 — `csrc/` files. Script: `scripts/install_mamba_ssm_rocm.sh`
+- **aiter** (CK headers) — 24 files in `3rdparty/composable_kernel/include/` and `csrc/`. Script: `scripts/patch_aiter_ck_rocm.sh`
+
+### 7.2 The Patch Pattern
+
+```bash
+# Replace bare math functions with __builtin_ equivalents
+# Use negative lookbehind to avoid double-patching (__builtin_amdgcn_exp2f etc.)
+sed -i -E 's/(?<!builtin_)(?<!amdgcn_)\bexp2f\(/__builtin_exp2f(/g' "$file"
+sed -i -E 's/(?<!builtin_)(?<!amdgcn_)\bexpf\(/__builtin_expf(/g' "$file"
+sed -i -E 's/(?<!builtin_)\bpowf\(/__builtin_powf(/g' "$file"
+sed -i -E 's/(?<!builtin_)\b__logf\(/__builtin___logf(/g' "$file"
+sed -i -E 's/(?<!builtin_)\bexpm1f\(/__builtin_expm1f(/g' "$file"
+sed -i -E 's/(?<!builtin_)\bsincosf\(/__builtin_sincosf(/g' "$file"
+sed -i -E 's/(?<!builtin_)\blog1pf\(/__builtin_log1pf(/g' "$file"
+```
+
+**Also handle `std::expf(` → `__builtin_expf(`** (some CK headers use `std::` prefix).
+
+After patching, always clear JIT build caches:
+```bash
+rm -rf ~/.triton/cache/
+rm -rf aiter/aiter/jit/build/*/  # aiter JIT cache
+```
+
+### 7.3 hipcc Location
+
+ROCm 7.12 installs hipcc at `/opt/rocm/core-7.12/bin/hipcc`, not `/opt/rocm/bin/hipcc`. Many packages hardcode the latter. Fix:
+```bash
+sudo ln -sf /opt/rocm/core-7.12/bin/hipcc /opt/rocm/bin/hipcc
+```
+
+### 7.4 Required Environment Variables
+
+Add to `.venv/bin/activate` for all ROCm source builds:
+```bash
+export ROCM_HOME=/opt/rocm
+export ROCM_PATH=/opt/rocm/core-7.12
+export HIP_PATH=/opt/rocm/core-7.12
+export HIP_PLATFORM=amd
+export CPLUS_INCLUDE_PATH=/opt/rocm/core-7.12/include:${CPLUS_INCLUDE_PATH:-}
+export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib:/opt/rocm/core-7.12/lib64:${LD_LIBRARY_PATH:-}
+export LIBRARY_PATH=/opt/rocm/core-7.12/lib:/opt/rocm/core-7.12/lib64:${LIBRARY_PATH:-}
+```
+
+**Critical:** `CPLUS_INCLUDE_PATH` must include `/opt/rocm/core-7.12/include` — aiter's JIT build needs `rocprim/rocprim.hpp` from this path.
+
+---
+
+## 8. aiter (AMD AI Tensor Engine Runtime) on gfx1151
+
+### 8.1 What Works
+
+- **Triton-based flash_attn forward** (0.25ms, 4.2x vs SDPA) — via `FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE`
+- **Triton-based flash_attn backward** — works but 66% slower than SDPA backward on gfx11
+- **`module_aiter_core`** — CK JIT builds successfully (after math builtin patching)
+
+### 8.2 What Does NOT Work
+
+- **CK attention backward** — fundamentally not supported on gfx11 architecture. aiter correctly falls back to Triton.
+- **HIP ops (RMSNorm, RoPE, activation, quantization)** — `module_rmsnorm`, `module_activation` JIT build fails. Root cause: aiter's "opus" framework (`csrc/include/opus/opus.hpp`) references `mfma_adaptor` — a CDNA-only type. This is a fundamental architecture dependency, not a patchable issue.
+- **`silu_and_mul`, `rms_norm`** etc via CK path — all depend on modules that fail to build.
+
+### 8.3 The Hybrid Attention Breakthrough
+
+Pure flash_attn fwd+bwd is 26% slower than SDPA for training. But we can combine the best of both:
+
+| Backend | Forward | Backward | Fwd+Bwd | vs SDPA |
+|---------|---------|----------|---------|---------|
+| **hybrid_attention** | 0.25ms (flash) | 2.92ms (SDPA) | **3.50ms** | **8.9% faster** |
+| SDPA | 1.07ms | 2.64ms | 3.84ms | baseline |
+| flash_attn (Triton) | 0.25ms | 4.39ms | 4.84ms | 26% slower |
+
+**How it works:** `kernels/hip/hybrid_attention.py` uses `_flash_attn_forward` for the fast forward pass, then passes the softmax logsumexp (`softmax_lse`) directly to `torch.ops.aten._flash_attention_backward` (SDPA's CK-based backward). The logsumexp tensor (B, H, T, float32) is the shared interface — both flash_attn and SDPA compute it identically, enabling zero-recompute backward.
+
+**Gradient accuracy:** max_diff=0.002 (within fp16 tolerance).
+
+**Triton backward is optimal at 32x32:** Exhaustive autotune tested 4 configs (32x32, 32x64, 64x64, 32x128). The original 32x32x32x32 RDNA config is optimal — RDNA 3.5 without MFMA can't exploit larger tiles. Split backward mode (3 kernel launches) is catastrophically slower (15.39ms). The `exp2` trick is already in use.
+
+---
+
+## 9. Unified Memory Training Characteristics
+
+### 9.1 Data Loading is Negligible
+
+On gfx1151, CPU and GPU share LPDDR5X. There is no PCIe transfer. Profiling shows data loading is **0.4% of training step time**. `pin_memory=True` is effectively a no-op (memory is already shared).
+
+### 9.2 CPU/GPU Bandwidth Competition
+
+Unlike discrete GPUs, heavy CPU activity during GPU compute steals memory bandwidth. This is a theoretical concern but hard to measure in practice. The profiler shows backward pass dominates (53% of step), with no visible data loading stalls.
+
+### 9.3 Batch Size Sweet Spot
+
+Tested on AMADEUS 243.8M (seq=256, eager):
+
+| batch_size | tok/s | Notes |
+|-----------|-------|-------|
+| 4 | 5,374 | Low GPU utilization |
+| 8 | 7,220 | Good scaling |
+| **16** | **7,539** | **Peak** — L2 cache fits activations |
+| 32 | 7,518 | Plateau — spilling to DRAM |
+| 64 | 7,517 | No further gain |
+
+Peak at batch=16 suggests L2 cache (6 MB) is the bottleneck: activations for batch=16 fit well, larger batches spill without gaining more parallelism from the 40 CUs.
+
+### 9.4 Training Step Breakdown (AMADEUS 243.8M, eager)
+
+| Phase | Time (ms) | % |
+|-------|-----------|---|
+| backward | 102.6 | 53% |
+| forward | 37.9 | 20% |
+| optimizer_step (fused AdamW) | 35.8 | 19% |
+| grad_clip | 13.6 | 7% |
+| loss (cross_entropy) | 2.5 | 1% |
+| data_load | 0.8 | 0.4% |
+
+**Key insight:** Backward dominates. The optimizer step is surprisingly expensive (19%) — fused AdamW still reads/writes all parameters. For >2B models, CPUAdam offloading (DeepSpeed) moves this to CPU AVX-512.

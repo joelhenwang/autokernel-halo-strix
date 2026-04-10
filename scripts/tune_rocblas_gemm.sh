@@ -24,6 +24,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TUNE_DIR="${PROJECT_DIR}/rocblas_tuning"
 
+# rocBLAS client tools (built from source)
+ROCBLAS_CLIENTS="${HOME}/Desktop/ai_lab/rocm-libraries/projects/rocblas/build/release/clients/staging"
+
 mkdir -p "$TUNE_DIR"
 
 # Common GEMM shapes for our ~250M models (d=1024, ffn=2560, vocab=50257)
@@ -67,11 +70,18 @@ profile_gemms() {
 tune_gemms() {
     echo "=== Step 2: Tune GEMM kernels ==="
 
-    if ! command -v rocblas-gemm-tune &>/dev/null; then
-        echo "ERROR: rocblas-gemm-tune not found. Install from ROCm rocBLAS package."
-        echo "Try: /opt/rocm/bin/rocblas-gemm-tune or install via apt."
-        exit 1
+    TUNE_BIN="${ROCBLAS_CLIENTS}/rocblas-gemm-tune"
+    if [ ! -x "$TUNE_BIN" ]; then
+        # Fallback to PATH
+        TUNE_BIN="$(command -v rocblas-gemm-tune 2>/dev/null || true)"
+        if [ -z "$TUNE_BIN" ]; then
+            echo "ERROR: rocblas-gemm-tune not found."
+            echo "Expected at: ${ROCBLAS_CLIENTS}/rocblas-gemm-tune"
+            echo "Or install rocblas-clients package."
+            exit 1
+        fi
     fi
+    echo "Using: $TUNE_BIN"
 
     INPUT="${TUNE_DIR}/gemm_shapes.yaml"
     OUTPUT="${TUNE_DIR}/tuned_gemms.yaml"
@@ -82,7 +92,7 @@ tune_gemms() {
     fi
 
     echo "Running rocblas-gemm-tune (this may take 10-30 minutes)..."
-    rocblas-gemm-tune \
+    "$TUNE_BIN" \
         --input "$INPUT" \
         --output "$OUTPUT" \
         --precision h \
