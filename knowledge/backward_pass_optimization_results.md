@@ -62,11 +62,36 @@
 | rotary_embedding_backward | 4.67x | <1% of backward | Only used in attention models |
 | selective_scan_backward | 21.15x | **0% (not wired)** | AMADEUS uses own scan path |
 
-### What Would Unlock Full Potential
+### After Integration Fix (2026-04-11)
 
-1. **Wire scan backward into AMADEUS's scan path** — the 21x kernel sits unused because AMADEUS calls `mamba_ssm.selective_scan_fn` which has its own backward
-2. **torch.compile integration** — would route all ops through custom ops more aggressively, letting backward kernels fire for more operations
-3. **Target attention backward** — for LlamaModel, attention backward is the dominant cost (not norm/activation)
+Wired parallel scan backward into AMADEUS's `_scan_dispatch()` as Priority 0,
+routing through `torch.ops.autokernel.selective_scan` instead of `mamba_ssm`.
+
+### AMADEUS 243.8M — After Integration
+
+| Metric | Before (PyTorch bwd) | After (HIP bwd) | Change |
+|--------|---------------------|-----------------|--------|
+| Step (ms) | 388.76 | 234.26 | **1.66x** |
+| Forward (ms) | 70.37 | 72.31 | — |
+| Backward (ms) | 277.11 | 120.15 | **2.31x** |
+| Backward % of step | 71.3% | 51.3% | -20% |
+| Throughput (tok/s) | 5,268 | 8,742 | **1.66x** |
+| MFU | 13.0% | 21.5% | **+8.5%** |
+
+### LlamaModel 124.7M — After Integration
+
+| Metric | Before | After | Change |
+|--------|--------|-------|--------|
+| Step (ms) | 43.27 | 43.26 | 1.00x |
+| Throughput (tok/s) | 47,326 | 47,339 | 1.00x |
+
+LlamaModel unchanged — backward is only 24% of step, dominated by attention matmuls.
+
+### Key Lessons
+
+1. **Integration matters more than isolated speedup.** The 21x scan kernel was useless until wired into AMADEUS's actual code path.
+2. **Selective scan backward was the real bottleneck.** It went from 71% to 51% of the step — the single biggest training bottleneck for SSM models.
+3. **Attention backward (LlamaModel) is hard to beat.** SDPA backward is already highly optimized; our norm/activation backward fusion has minimal impact when backward is only 24% of the step.
 
 ## Correctness Notes
 
