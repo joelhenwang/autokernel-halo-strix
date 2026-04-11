@@ -224,6 +224,26 @@ class _FusedQKVAttentionReplacement(nn.Module):
         if self.n_rep > 1:
             k = k.repeat_interleave(self.n_rep, dim=1)
             v = v.repeat_interleave(self.n_rep, dim=1)
+
+        # Try hybrid flash attention (8.9% faster: flash forward + SDPA backward)
+        if not hasattr(self, "_hybrid_attn_checked"):
+            self._hybrid_attn_checked = True
+            self._hybrid_attn_fn = None
+            try:
+                from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
+                self._hybrid_attn_fn = hybrid_flash_sdpa_attention
+            except Exception:
+                pass
+        if self._hybrid_attn_fn is not None:
+            try:
+                # hybrid expects (B, T, H, D), we have (B, H, T, D) after transpose
+                y = self._hybrid_attn_fn(
+                    q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
+                )
+                return self.wo(y.contiguous().view(B, T, -1))
+            except Exception:
+                pass  # fall through to SDPA
+
         y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
 

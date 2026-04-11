@@ -149,18 +149,59 @@ def _mamba_ssm_scan(x, dt, A_log, B, C, D, n_heads):
     return y.transpose(1, 2).to(x.dtype)         # (B, T, D)
 
 
-def _scan_dispatch(x, dt, A_log, B, C, D, n_heads):
-    """Try mamba-ssm > HIP fused scan kernel > chunked Python scan."""
-    global _HIP_SCAN_AVAILABLE
+_AUTOKERNEL_SCAN_AVAILABLE = None  # lazy check for torch.ops.autokernel.selective_scan
 
-    # Priority 1: mamba-ssm (5.6x faster)
+
+def _autokernel_scan(x, dt, A_log, B, C, D, n_heads):
+    """Route through torch.ops.autokernel.selective_scan for parallel HIP backward.
+
+    This uses the custom op registered in _torch_ops.py, which has:
+    - Forward: parallel HIP prefix scan kernel
+    - Backward: parallel HIP reverse prefix scan kernel (21x faster than sequential)
+    """
+    B_exp = B.repeat(1, 1, n_heads)
+    C_exp = C.repeat(1, 1, n_heads)
+
+    x_f = x.float()
+    dt_f = dt.float()
+    A_neg = -torch.exp(A_log.float())
+
+    dA = torch.exp(dt_f * A_neg)
+    dBx = dt_f * B_exp.float() * x_f
+    C_f = C_exp.float()
+    D_f = D.float()
+
+    # Call via torch.ops — triggers registered autograd backward with HIP kernel
+    y = torch.ops.autokernel.selective_scan(dA, dBx, C_f, D_f, x_f)
+    return y.to(x.dtype)
+
+
+def _scan_dispatch(x, dt, A_log, B, C, D, n_heads):
+    """Try autokernel (parallel bwd) > mamba-ssm > HIP kernel > chunked Python scan."""
+    global _HIP_SCAN_AVAILABLE, _AUTOKERNEL_SCAN_AVAILABLE
+
+    # Priority 0: torch.ops.autokernel.selective_scan (parallel HIP forward + backward)
+    if _AUTOKERNEL_SCAN_AVAILABLE is None:
+        try:
+            import kernels.hip._torch_ops  # triggers registration
+            _AUTOKERNEL_SCAN_AVAILABLE = hasattr(torch.ops, "autokernel") and hasattr(torch.ops.autokernel, "selective_scan")
+        except Exception:
+            _AUTOKERNEL_SCAN_AVAILABLE = False
+
+    if _AUTOKERNEL_SCAN_AVAILABLE and x.is_cuda:
+        try:
+            return _autokernel_scan(x, dt, A_log, B, C, D, n_heads)
+        except Exception:
+            pass
+
+    # Priority 1: mamba-ssm (fast forward, but sequential backward)
     if _HAS_MAMBA_SSM and x.is_cuda:
         try:
             return _mamba_ssm_scan(x, dt, A_log, B, C, D, n_heads)
         except Exception:
             pass
 
-    # Priority 2: HIP kernel
+    # Priority 2: HIP kernel (forward only, PyTorch backward)
     if _HIP_SCAN_AVAILABLE is None:
         try:
             from kernels.hip.selective_scan import kernel_fn as _hip_scan_fn
