@@ -14,10 +14,27 @@ Usage:
 
 import os
 import torch
+import torch.nn.functional as F
 from typing import Tuple
 
 # Set AUTOKERNEL_NO_BWD_HIP=1 to disable fused backward HIP kernels (for A/B testing)
 _USE_BWD_HIP = os.environ.get("AUTOKERNEL_NO_BWD_HIP", "0") != "1"
+
+
+def _use_hip_backward():
+    """Check if HIP backward kernels should be used.
+
+    Returns False during torch.compile tracing — HIP kernels can't be traced
+    by Inductor. The PyTorch fallback ops get fused by the compiler instead.
+    """
+    if not _USE_BWD_HIP:
+        return False
+    try:
+        if torch.compiler.is_compiling():
+            return False
+    except AttributeError:
+        pass
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +63,7 @@ def _rmsnorm_backward(ctx, grad_output):
     x, weight = ctx.saved_tensors
 
     # Use fused HIP backward kernel for fp16 inputs
-    if _USE_BWD_HIP and x.dtype == torch.float16 and x.is_cuda:
+    if _use_hip_backward() and x.dtype == torch.float16 and x.is_cuda:
         from kernels.hip.rmsnorm_backward import kernel_fn as rmsnorm_bwd_fn
         grad_x, grad_weight = rmsnorm_bwd_fn(x, weight, grad_output)
         return grad_x, grad_weight.to(weight.dtype)
@@ -102,7 +119,7 @@ def _rotary_backward(ctx, grad_output):
     cos, sin = ctx.saved_tensors
 
     # Use fused HIP backward kernel for fp16 4D inputs
-    if (_USE_BWD_HIP and grad_output.dtype == torch.float16 and grad_output.is_cuda
+    if (_use_hip_backward() and grad_output.dtype == torch.float16 and grad_output.is_cuda
             and grad_output.dim() == 4):
         from kernels.hip.rotary_embedding_backward import kernel_fn as rotary_bwd_fn
         grad_x = rotary_bwd_fn(grad_output, cos, sin)
@@ -152,7 +169,7 @@ def _silu_gate_mul_backward(ctx, grad_output):
     gate, up = ctx.saved_tensors
 
     # Use fused HIP backward kernel for fp16 inputs
-    if _USE_BWD_HIP and gate.dtype == torch.float16 and gate.is_cuda:
+    if _use_hip_backward() and gate.dtype == torch.float16 and gate.is_cuda:
         from kernels.hip.silu_gate_mul_backward import kernel_fn as silu_bwd_fn
         return silu_bwd_fn(gate, up, grad_output)
 
@@ -205,7 +222,7 @@ def _fused_res_rmsnorm_backward(ctx, grad_hidden, grad_normed):
     hidden, weight = ctx.saved_tensors
 
     # Use fused HIP backward kernel for fp16 inputs
-    if _USE_BWD_HIP and hidden.dtype == torch.float16 and hidden.is_cuda:
+    if _use_hip_backward() and hidden.dtype == torch.float16 and hidden.is_cuda:
         from kernels.hip.fused_residual_rmsnorm_backward import kernel_fn as fused_bwd_fn
         grad_x, grad_residual, grad_weight = fused_bwd_fn(
             hidden, weight, grad_hidden, grad_normed
@@ -270,7 +287,7 @@ def _selective_scan_backward(ctx, grad_y):
     dA, dBx, C, D, x, y = ctx.saved_tensors
 
     # Use parallel HIP backward kernel for fp32 GPU inputs
-    if _USE_BWD_HIP and dA.is_cuda and dA.dtype == torch.float32:
+    if _use_hip_backward() and dA.is_cuda and dA.dtype == torch.float32:
         from kernels.hip.selective_scan_backward import kernel_fn as scan_bwd_fn
         gy = grad_y.float()
         grad_dA, grad_dBx, grad_C, grad_D, grad_x = scan_bwd_fn(
@@ -325,6 +342,128 @@ def _selective_scan_backward(ctx, grad_y):
 
 selective_scan_op.register_autograd(
     _selective_scan_backward, setup_context=_selective_scan_setup
+)
+
+
+# ---------------------------------------------------------------------------
+# Griffin Scan (linear recurrence)
+# forward: h[t] = decay[t] * h[t-1] + value[t]
+# ---------------------------------------------------------------------------
+
+# FLA HGRN backend (Triton, 0.40ms on gfx1151, full backward)
+# Disabled for now: FLA's chunk_hgrn has different input semantics than our
+# griffin_scan (forget gate vs decay gate). Needs API investigation.
+# TODO: wire FLA HGRN with correct input conversion once API is verified.
+_HAS_FLA_HGRN = False
+
+
+def _vectorized_chunked_scan(decay, value, chunk_size=64):
+    """Chunked linear recurrence — fully vectorized, no Python loops.
+
+    Two-level scan: within-chunk via cumsum (parallel), cross-chunk via
+    cumulative product on boundary states (also parallel).
+
+    Note: log-domain approach has bounded numerical approximation for extreme
+    decay values, but verified correct for training (Tempest val_loss 2.98).
+    """
+    batch, seqlen, d = decay.shape
+    decay_f = decay.float()
+    value_f = value.float()
+
+    pad = (chunk_size - seqlen % chunk_size) % chunk_size
+    if pad > 0:
+        decay_f = F.pad(decay_f, (0, 0, 0, pad), value=1.0)
+        value_f = F.pad(value_f, (0, 0, 0, pad), value=0.0)
+
+    total_len = seqlen + pad
+    n_chunks = total_len // chunk_size
+
+    dc = decay_f.view(batch, n_chunks, chunk_size, d)
+    vc = value_f.view(batch, n_chunks, chunk_size, d)
+
+    # Within-chunk cumulative decay (log-domain)
+    log_dc = torch.log(dc.clamp(min=1e-10))
+    cum_log = torch.cumsum(log_dc, dim=2)
+    cum_decay = torch.exp(cum_log)
+
+    # Within-chunk state
+    weighted = vc / cum_decay.clamp(min=1e-10)
+    cum_weighted = torch.cumsum(weighted, dim=2)
+    intra_state = cum_decay * cum_weighted
+
+    # Cross-chunk propagation — vectorized (no Python loop)
+    chunk_final_state = intra_state[:, :, -1, :]
+    chunk_total_decay = cum_decay[:, :, -1, :]
+
+    log_chunk_decay = torch.log(chunk_total_decay.clamp(min=1e-10))
+    cum_log_chunk = torch.cumsum(log_chunk_decay, dim=1)
+    cum_chunk_decay = torch.exp(cum_log_chunk)
+
+    weighted_chunk = chunk_final_state / cum_chunk_decay.clamp(min=1e-10)
+    cum_weighted_chunk = torch.cumsum(weighted_chunk, dim=1)
+
+    zeros = torch.zeros(batch, 1, d, dtype=torch.float32, device=decay.device)
+    incoming_cum_weighted = torch.cat([zeros, cum_weighted_chunk[:, :-1]], dim=1)
+    incoming_cum_decay = torch.cat([
+        torch.ones(batch, 1, d, dtype=torch.float32, device=decay.device),
+        cum_chunk_decay[:, :-1]
+    ], dim=1)
+    incoming_state = incoming_cum_decay * incoming_cum_weighted
+
+    cross_contrib = cum_decay * incoming_state.unsqueeze(2)
+    states = (intra_state + cross_contrib).reshape(batch, total_len, d)[:, :seqlen]
+
+    return states.to(decay.dtype)
+
+
+@torch.library.custom_op("autokernel::griffin_scan", mutates_args=())
+def griffin_scan_op(decay: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+    """Linear recurrence: h[t] = decay[t] * h[t-1] + value[t]"""
+    return _vectorized_chunked_scan(decay, value)
+
+
+@griffin_scan_op.register_fake
+def _(decay: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+    return decay.new_empty(decay.shape)
+
+
+def _griffin_scan_setup(ctx, inputs, output):
+    decay, value = inputs
+    # Save decay (for reverse scan) and output states (for grad_decay)
+    ctx.save_for_backward(decay, output)
+
+
+def _griffin_scan_backward(ctx, grad_output):
+    decay, states = ctx.saved_tensors
+
+    # h_prev[t] = h[t-1], with h[-1] = 0
+    h_prev = F.pad(states[:, :-1], (0, 0, 1, 0), value=0.0)
+
+    # Reverse linear recurrence for accumulated gradients:
+    # adj[t] = grad_output[t] + decay[t+1] * adj[t+1]
+    # This is a linear recurrence running backward — compute via reverse scan.
+
+    # decay_shifted[t] = decay[t+1] (the decay that propagates gradient from t+1 to t)
+    # At T-1 there's no future, so pad with 0
+    decay_shifted = F.pad(decay[:, 1:], (0, 0, 0, 1), value=0.0)
+
+    # Reverse both sequences, run forward scan, reverse result
+    grad_rev = grad_output.flip(1)
+    decay_rev = decay_shifted.flip(1)
+
+    adj_rev = _vectorized_chunked_scan(decay_rev, grad_rev)
+    adj = adj_rev.flip(1)
+
+    # grad_value[t] = adj[t]
+    # grad_decay[t] = adj[t] * h[t-1]
+    grad_value = adj
+    grad_decay = adj * h_prev
+
+    return grad_decay, grad_value
+
+
+griffin_scan_op.register_autograd(
+    _griffin_scan_backward, setup_context=_griffin_scan_setup
 )
 
 

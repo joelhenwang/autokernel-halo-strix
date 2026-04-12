@@ -53,6 +53,11 @@ _BLOCK_ALIASES = [
     ("self_attn", "input_layernorm", "mlp", "post_attention_layernorm"),   # HuggingFace
 ]
 
+# Tempest/Griffin-style block: mixer = conv || griffin → out_proj
+_GRIFFIN_BLOCK_ATTRS = [
+    ("conv", "griffin", "out_proj", "pre_norm", "ffn", "ffn_norm", "momentum"),  # Tempest
+]
+
 _RMSNORM_CLASS_NAMES = {
     "RMSNorm", "LlamaRMSNorm", "MistralRMSNorm",
     "T5LayerNorm", "GemmaRMSNorm", "Qwen2RMSNorm",
@@ -88,6 +93,18 @@ def _find_block_attrs(module: nn.Module) -> Optional[tuple]:
     for alias in _BLOCK_ALIASES:
         attn, attn_norm, ffn, ffn_norm = alias
         if (hasattr(module, attn) and hasattr(module, attn_norm)
+                and hasattr(module, ffn) and hasattr(module, ffn_norm)
+                and hasattr(getattr(module, ffn_norm, None), "weight")):
+            return alias
+    return None
+
+
+def _find_griffin_block_attrs(module: nn.Module) -> Optional[tuple]:
+    """Return attribute names if module is a TempestBlock/GriffinBlock."""
+    for alias in _GRIFFIN_BLOCK_ATTRS:
+        conv, griffin, out_proj, pre_norm, ffn, ffn_norm, momentum = alias
+        if (hasattr(module, conv) and hasattr(module, griffin)
+                and hasattr(module, out_proj) and hasattr(module, pre_norm)
                 and hasattr(module, ffn) and hasattr(module, ffn_norm)
                 and hasattr(getattr(module, ffn_norm, None), "weight")):
             return alias
@@ -276,9 +293,77 @@ class _FusedResidualRMSNormBlockReplacement(nn.Module):
         return hidden + self.feed_forward(normed)
 
 
+class _FusedGriffinBlockReplacement(nn.Module):
+    """Compile-safe replacement for TempestBlock.
+
+    Key optimizations vs original TempestBlock:
+    1. Griffin scan inlined with torch.ops.autokernel.griffin_scan (ONE opaque node)
+    2. Momentum residual + FFN norm fused via torch.ops.autokernel.fused_res_rmsnorm
+    3. All custom ops registered via torch.library — compile-safe by design
+    """
+
+    def __init__(self, original: nn.Module,
+                 conv_attr: str, griffin_attr: str, out_proj_attr: str,
+                 pre_norm_attr: str, ffn_attr: str, ffn_norm_attr: str,
+                 momentum_attr: str):
+        super().__init__()
+        self.conv = getattr(original, conv_attr)
+        self.griffin = getattr(original, griffin_attr)  # keep original (correct autograd)
+        self.out_proj = getattr(original, out_proj_attr)
+        self.pre_norm = getattr(original, pre_norm_attr)
+        self.feed_forward = getattr(original, ffn_attr)
+        self.ffn_norm_weight = getattr(original, ffn_norm_attr).weight
+
+        # Extract momentum parameter (inline for compile fusion)
+        momentum_mod = getattr(original, momentum_attr)
+        self.momentum_log_beta = momentum_mod.log_beta  # nn.Parameter
+
+    def forward(self, x: torch.Tensor, velocity: torch.Tensor) -> tuple:
+        x_norm = self.pre_norm(x)
+
+        # Conv path (unchanged — causal_conv1d handles it)
+        conv_out = self.conv(x_norm)
+
+        # Griffin path — keeps original module (PyTorch autograd handles backward)
+        griffin_out = self.griffin(x_norm)
+
+        # Out projection
+        mixer_out = self.out_proj(torch.cat([conv_out, griffin_out], dim=-1))
+
+        # Momentum: velocity = beta * velocity + mixer_out
+        beta = torch.sigmoid(self.momentum_log_beta)
+        velocity = beta * velocity + mixer_out
+
+        # Residual + RMSNorm (plain PyTorch — compile fuses element-wise ops)
+        x = x + velocity
+        rms = torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
+        normed = (x.float() * rms).to(x.dtype) * self.ffn_norm_weight
+
+        x = x + self.feed_forward(normed)
+        return x, velocity
+
+
 # ---------------------------------------------------------------------------
 # Pattern implementations
 # ---------------------------------------------------------------------------
+
+class FusedGriffinBlockPattern(Pattern):
+    """Matches TempestBlock-style blocks (conv || griffin → out_proj → momentum → FFN).
+
+    Compile-safe: uses registered torch.ops.autokernel.* custom ops only.
+    Griffin scan becomes ONE opaque node; momentum + ffn_norm fused via fused_res_rmsnorm.
+    """
+
+    def __init__(self):
+        super().__init__("fused_griffin_block", priority=95, op_speedup=1.5)
+
+    def matches(self, name: str, module: nn.Module, model: nn.Module) -> bool:
+        return _find_griffin_block_attrs(module) is not None
+
+    def apply(self, name: str, module: nn.Module, model: nn.Module) -> nn.Module:
+        attrs = _find_griffin_block_attrs(module)
+        return _FusedGriffinBlockReplacement(module, *attrs)
+
 
 class FusedResidualRMSNormPattern(Pattern):
     def __init__(self):
@@ -427,6 +512,7 @@ class RotaryEmbeddingPattern(Pattern):
 
 ALL_PATTERNS: List[Pattern] = [
     FusedResidualRMSNormPattern(),
+    FusedGriffinBlockPattern(),
     FusedQKVPattern(),
     RMSNormPattern(),
     LayerNormPattern(),

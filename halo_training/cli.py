@@ -19,6 +19,9 @@ def load_model_from_file(model_path: str, class_name: str, **kwargs):
         raise ImportError(f"Cannot import model from: {model_path}")
 
     mod = importlib.util.module_from_spec(spec)
+    # Register in sys.modules so torch.compile/dynamo can resolve the module
+    import sys
+    sys.modules["user_model"] = mod
     spec.loader.exec_module(mod)
 
     if not hasattr(mod, class_name):
