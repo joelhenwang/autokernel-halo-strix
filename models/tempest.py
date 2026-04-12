@@ -102,9 +102,8 @@ class GriffinRecurrence(nn.Module):
     def __init__(self, d_model: int, d_rec: int = 384):
         super().__init__()
         self.d_rec = d_rec
-        self.w_a = nn.Linear(d_model, d_rec, bias=False)
-        self.w_i = nn.Linear(d_model, d_rec, bias=False)
-        self.w_v = nn.Linear(d_model, d_rec, bias=False)
+        # Fused projection: single GEMM instead of 3 separate ones
+        self.w_aiv = nn.Linear(d_model, 3 * d_rec, bias=False)
 
         # Decay bias spectrum: multi-scale temporal dynamics
         self.decay_bias = nn.Parameter(torch.zeros(d_rec))
@@ -115,9 +114,10 @@ class GriffinRecurrence(nn.Module):
             self.decay_bias[3 * quarter:].fill_(4.6)        # slow: topic tracking
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        a = torch.sigmoid(self.w_a(x) + self.decay_bias)
-        i = torch.sigmoid(self.w_i(x))
-        v = self.w_v(x)
+        aiv = self.w_aiv(x)
+        a_proj, i_proj, v = aiv.split(self.d_rec, dim=-1)
+        a = torch.sigmoid(a_proj + self.decay_bias)
+        i = torch.sigmoid(i_proj)
 
         # Bounded input signal (Griffin coupling)
         input_signal = torch.sqrt((1 - a * a).clamp(min=1e-8)) * (i * v)
@@ -127,12 +127,15 @@ class GriffinRecurrence(nn.Module):
         return y
 
     def _chunked_scan(self, decay, value, chunk_size=64):
-        """Chunked linear recurrence for training. Real-valued (simpler than Mamba)."""
+        """Chunked linear recurrence — fully vectorized, no Python loops.
+
+        Two-level scan: within-chunk via cumsum (parallel), cross-chunk via
+        cumulative product on boundary states (also parallel).
+        """
         batch, seqlen, d = decay.shape
         decay_f = decay.float()
         value_f = value.float()
 
-        # Pad to multiple of chunk_size
         pad = (chunk_size - seqlen % chunk_size) % chunk_size
         if pad > 0:
             decay_f = F.pad(decay_f, (0, 0, 0, pad), value=1.0)
@@ -149,21 +152,51 @@ class GriffinRecurrence(nn.Module):
         cum_log = torch.cumsum(log_dc, dim=2)
         cum_decay = torch.exp(cum_log)
 
-        # Within-chunk state
+        # Within-chunk state (intra_state[c, t] = state from positions within chunk c up to t)
         weighted = vc / cum_decay.clamp(min=1e-10)
         cum_weighted = torch.cumsum(weighted, dim=2)
-        intra_state = cum_decay * cum_weighted
+        intra_state = cum_decay * cum_weighted  # (batch, n_chunks, chunk_size, d)
 
-        # Cross-chunk propagation (only n_chunks serial steps)
-        state = torch.zeros(batch, d, dtype=torch.float32, device=decay.device)
-        all_states = []
-        for c in range(n_chunks):
-            prev_contrib = cum_decay[:, c] * state.unsqueeze(1)
-            chunk_states = intra_state[:, c] + prev_contrib
-            all_states.append(chunk_states)
-            state = chunk_states[:, -1]
+        # Cross-chunk propagation — vectorized (no Python loop)
+        # Each chunk's final state: intra_state[:, c, -1] (contribution from within chunk c)
+        # Each chunk's total decay: cum_decay[:, c, -1] (total decay across chunk c)
+        chunk_final_state = intra_state[:, :, -1, :]   # (batch, n_chunks, d)
+        chunk_total_decay = cum_decay[:, :, -1, :]      # (batch, n_chunks, d)
 
-        states = torch.cat(all_states, dim=1)[:, :seqlen]
+        # Cross-chunk scan: state[c] = sum_{j<c} (prod_{k=j+1}^{c-1} total_decay[k]) * final_state[j]
+        # This is another linear recurrence on the chunk boundaries.
+        # With n_chunks typically 4-16, a cumulative product approach works.
+        log_chunk_decay = torch.log(chunk_total_decay.clamp(min=1e-10))  # (batch, n_chunks, d)
+        cum_log_chunk = torch.cumsum(log_chunk_decay, dim=1)              # (batch, n_chunks, d)
+        cum_chunk_decay = torch.exp(cum_log_chunk)                        # (batch, n_chunks, d)
+
+        # Weighted chunk states for cross-chunk propagation
+        weighted_chunk = chunk_final_state / cum_chunk_decay.clamp(min=1e-10)
+        cum_weighted_chunk = torch.cumsum(weighted_chunk, dim=1)
+
+        # cross_state[c] = state entering chunk c from previous chunks
+        # Shift right by 1: chunk 0 gets 0, chunk c gets cum up to c-1
+        cross_state_at_boundary = cum_chunk_decay * cum_weighted_chunk  # (batch, n_chunks, d)
+        # But this includes the current chunk's own contribution — subtract it
+        cross_state_at_boundary = cross_state_at_boundary - chunk_final_state
+        # Shift: chunk c's incoming state = cross_state_at_boundary[c-1]'s outgoing
+        # Actually, let's compute it properly:
+        # incoming_state[0] = 0
+        # incoming_state[c] = total_decay[c-1] * incoming_state[c-1] + final_state[c-1]
+        # This is: cum_chunk_decay shifted right by 1 * cum_weighted shifted right by 1
+        zeros = torch.zeros(batch, 1, d, dtype=torch.float32, device=decay.device)
+        incoming_cum_weighted = torch.cat([zeros, cum_weighted_chunk[:, :-1]], dim=1)
+        incoming_cum_decay = torch.cat([
+            torch.ones(batch, 1, d, dtype=torch.float32, device=decay.device),
+            cum_chunk_decay[:, :-1]
+        ], dim=1)
+        incoming_state = incoming_cum_decay * incoming_cum_weighted  # (batch, n_chunks, d)
+
+        # Apply cross-chunk state to each position within each chunk
+        # position t in chunk c: total_state = intra_state[c,t] + cum_decay[c,t] * incoming_state[c]
+        cross_contrib = cum_decay * incoming_state.unsqueeze(2)  # (batch, n_chunks, chunk_size, d)
+        states = (intra_state + cross_contrib).reshape(batch, total_len, d)[:, :seqlen]
+
         return states.to(decay.dtype)
 
 

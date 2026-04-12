@@ -94,7 +94,10 @@ For ANY recurrence/SSM (Griffin, Mamba, DHO, LRU, GRU):
 - **NEVER**: `for t in range(seq_len)` or `torch.associative_scan` → 1.3K tok/s
 - **BEST**: mamba-ssm `selective_scan_fn` (0.32ms, 5.6x vs HIP kernel) — **already wired into amadeus.py as priority 1**
 - **GOOD**: Chunked linear recurrence (chunk_size=64) → 6.4K tok/s (5x faster than sequential). Ref: `models/amadeus.py:selective_scan_chunked`
+- **GOOD**: Vectorized chunked scan (no Python loops) — enables torch.compile fusion. Ref: `models/tempest.py:_chunked_scan`
+- **UPCOMING**: `torch.ops.autokernel.griffin_scan` custom op — makes scan opaque to compile, enabling large fused regions around it
 - **FLA alternatives**: HGRN (0.40ms), Retention (0.77ms), GLA (1.28ms) — all pure Triton, full backward
+- **CRITICAL**: Register scans as `torch.library` custom ops for torch.compile. Without this, scan ops fragment the compile graph and lose 1.5-2x throughput vs transformers.
 
 ---
 
@@ -111,6 +114,26 @@ For ANY recurrence/SSM (Griffin, Mamba, DHO, LRU, GRU):
 | Tempest + PLE(a) | 246.6M | compile + autokernel | 7,936 | 19.7% |
 
 BabyLM: ~16M tokens. At 6.4K tok/s, 2 epochs ≈ 80 min.
+
+### Hypothesis Build-Out Results (2026-04-12, ~170M params, BabyLM 2 epochs)
+
+| Architecture | Params | Val Loss | tok/s | Status |
+|-------------|--------|----------|-------|--------|
+| **Amadeus** | 157.7M | **2.90** | 13,203 | Best quality — SSM hybrid wins |
+| **MaestroPrima** | 157.8M | **2.90** | 12,896 | Conductor adds 0.15% (negligible) |
+| Tempest | 176.8M | 2.98 | 12,952 | Best pure Griffin |
+| Virtuoso | 180.8M | 2.99 | 11,165 | PLE+MatFormer no quality benefit here |
+| Prometheus | 174.3M | 3.00 | 13,066 | 2 attention layers don't differentiate |
+| SpectralHydra | 176.8M | 3.19 | 10,323 | Decay spectrum needs tuning |
+| ResonantLoop | 50.7M | 3.42 | **15,907** | Throughput champion, quality-limited |
+| DualCortex | 125.2M | 5.44 | 32,426 | FAILED — autokernel breaks d=256 |
+| Obsidian | 124.0M | 5.71 | 34,115 | FAILED — autokernel breaks d=256 |
+
+**Key lesson:** Dual-path architectures with small hidden dims (d≤256) fail under autokernel HIP kernel replacement. Don't design fast paths with d < 512. Confirmed: both DualCortex (val 3.19) and Obsidian (val 3.49) train normally in eager — autokernel is the sole problem.
+
+### Compile Gap Analysis (2026-04-12)
+
+LlamaModel gets **3.2x** from torch.compile vs Tempest's **1.7x**. In eager mode the gap is only 1.27x. Root cause: LlamaModel's TransformerBlock matches `FusedResidualRMSNormPattern` for block-level fusion, SDPA is one kernel call. Griffin's chunked scan fragments into ~15 ops compile can't fuse. Fix in progress: register Griffin scan as `torch.library` custom op (like selective_scan), add compile-safe block pattern. Expected: 30-50% throughput improvement.
 
 ### PLE + MatFormer Ablation (2026-04-10, Tempest base)
 

@@ -85,6 +85,23 @@
 | Tempest + MatFormer | 244.5M | compile + autokernel | **8,166** | **20.2%** | Verified |
 | Tempest + PLE(a) | 246.6M | compile + autokernel | 7,936 | 19.7% | Verified |
 
+### New Verified Baselines (2026-04-11 Hypothesis Build-Out)
+
+| Architecture | Params | Config | tok/s | MFU | Status |
+|-------------|--------|--------|-------|-----|--------|
+| **RESONANT-LOOP** | 58.8M unique | eager | 10,056 | 6.0% | Verified |
+| **RESONANT-LOOP** | 58.8M unique | autokernel | **13,344** | **7.9%** | Verified — **highest throughput** |
+| **RESONANT-LOOP** | 58.8M unique | autokernel + compile | 13,076 | 7.8% | Compile no effect (graph breaks from 16-iter loop) |
+| **MAESTRO-PRIMA** | 243.9M | eager | 6,648 | 16.4% | Verified |
+| **MAESTRO-PRIMA** | 243.9M | autokernel | **8,848** | **21.8%** | Verified |
+| **SPECTRAL-HYDRA** | 244.5M | eager | 5,976 | 14.8% | Verified |
+| **SPECTRAL-HYDRA** | 244.5M | autokernel + compile | **10,204** | **25.2%** | Verified |
+| **OBSIDIAN** | 169.3M | eager | **8,669** | **14.8%** | Verified — autokernel breaks loss |
+| **DUAL-CORTEX v1** | 262.7M | eager | 5,837 | 15.5% | v1: exceeds 250M budget |
+| **DUAL-CORTEX v2** | 154.3M | eager | **9,267** | **14.4%** | v2: reduced dims, fits budget |
+
+**Note:** DualCortex v1 param count (262.7M) exceeded the 250M constraint. v2 reduced to 154.3M (d_fast=256, d_slow=1024, 8L slow). The slow path (d=1280, 10L) is larger than estimated. OBSIDIAN's autokernel optimization causes loss divergence — investigate before using. MAESTRO-PRIMA compile fails due to HIP scan backward incompatibility with torch.compile tracing.
+
 **Note:** Estimated optimized throughput for Tempest was 18,000 tok/s (45% MFU). Actual measured is 8,152 tok/s (20.1% MFU). The formula's compile boost factor (2.25x for element-wise) was too optimistic — actual boost is ~1.28x (from 6,363 eager to 8,152 with autokernel). This means ALL estimates in the ranking above should be treated as upper bounds. Divide estimated "optimized tok/s" by ~2.2 for more realistic projections.
 
 ---
@@ -167,14 +184,20 @@ where bwd_frac = 0.53 (backward portion of step) and bwd_speedup is the weighted
 
 **Caveat:** These are extrapolated from isolated kernel benchmarks. Combined training speedup will be less than kernel speedup due to matmul backward (unchanged), optimizer step, and memory allocation overhead. The actual Tempest baseline shows estimates are ~2.2x too optimistic. Apply the same correction factor to these projections.
 
-### Realistic Projections (÷2.2 correction)
+### Realistic Projections (÷2.2 correction) → Now Verified
 
-| Hypothesis | Optimistic tok/s | **Realistic tok/s** |
-|-----------|-----------------|-------------------|
-| AMADEUS + bwd opt | 26,000 | **~12,000** |
-| RESONANT-LOOP + bwd opt | 33,000 | **~15,000** |
-| PROMETHEUS + bwd opt | 31,000 | **~14,000** |
-| TEMPEST + bwd opt | 27,000 | **~12,300** |
+| Hypothesis | Estimated tok/s | **Measured tok/s** | Config | Status |
+|-----------|----------------|-------------------|--------|--------|
+| RESONANT-LOOP | 22,000 | **13,344** | autokernel | ✓ #1 throughput |
+| AMADEUS | 13,000 | **8,742** | autokernel + HIP bwd scan | ✓ 1.66x from scan bwd |
+| SPECTRAL-HYDRA | 16,000 | **10,204** | autokernel + compile | ✓ |
+| MAESTRO-PRIMA | 12,000 | **8,848** | autokernel | ✓ |
+| OBSIDIAN | 14,000 | **8,669** | eager only | ✓ autokernel breaks loss |
+| TEMPEST | 18,000 | **8,152** | autokernel + compile | ✓ baseline |
+| PROMETHEUS | 19,000 | **11,087** | autokernel + compile | ✓ Fastest 240M+ model |
+| DUAL-CORTEX v2 | 12,000 | **9,267** | eager | ✓ v2 reduced to 154.3M |
+
+**Correction factor**: estimated ÷ measured ≈ 1.5-2.2x. Estimates are consistently optimistic.
 
 ---
 
@@ -212,3 +235,118 @@ where bwd_frac = 0.53 (backward portion of step) and bwd_speedup is the weighted
 - **All estimates assume** batch=16, seq=256 (L2 sweet spot), warm compile cache (no JIT overhead in 50 steps)
 - **Not estimated:** inference tok/s, int4 quantized tok/s (would change ranking significantly — L2-resident architectures like RESONANT-LOOP and TERNARY-REFLEX would dominate)
 - **Disclaimer:** These are engineering estimates, not measurements. Actual throughput depends on implementation quality, kernel fusion patterns, and compile graph breaks. Verify with smoke tests.
+
+---
+
+## ACTUAL MEASURED RANKING (2026-04-11)
+
+All measurements on gfx1151, batch=8, seq=256, median of 30 steps after 5 warmup.
+
+### By Throughput (Best Config)
+
+| Rank | Architecture | Params | Best Config | tok/s | MFU | Peak Mem | Notes |
+|------|-------------|--------|-------------|-------|-----|----------|-------|
+| **1** | **LlamaModel** | 124.7M | compile + autokernel | **43,000** | **54%** | ~4 GB | Transformer baseline, not SSM |
+| **2** | **RESONANT-LOOP** | 58.8M | autokernel | **13,344** | 7.9% | 3.1 GB | Lowest params, highest throughput |
+| **3** | **PROMETHEUS** | 241.3M | autokernel + compile | **11,087** | **27.0%** | 5.1 GB | **Fastest 240M+ model** |
+| **4** | **SPECTRAL-HYDRA** | 244.5M | autokernel + compile | **10,204** | 25.2% | 5.2 GB | Multi-scale Griffin, compile helps |
+| **5** | **DUAL-CORTEX v2** | 154.3M | eager | **9,267** | 14.4% | 5.6 GB | Reduced dims, fits budget |
+| **6** | **MAESTRO-PRIMA** | 243.9M | autokernel | **8,848** | 21.8% | 5.8 GB | AMADEUS + Conductor |
+| **7** | **AMADEUS** | 243.8M | autokernel + HIP bwd | **8,742** | 21.5% | ~7 GB | After scan backward integration |
+| **8** | **OBSIDIAN** | 169.3M | eager | **8,669** | 14.8% | 6.0 GB | BitNet + Caveman, autokernel breaks loss |
+| **9** | **TEMPEST** | 244.5M | autokernel + compile | **8,152** | 20.1% | ~5 GB | Pure Griffin baseline |
+
+### Sorted by MFU (Efficiency)
+
+| Rank | Architecture | MFU | Notes |
+|------|-------------|-----|-------|
+| 1 | LlamaModel | 54% | compile + autokernel |
+| 2 | SPECTRAL-HYDRA | 25.2% | autokernel + compile |
+| 3 | MAESTRO-PRIMA | 21.8% | autokernel |
+| 4 | AMADEUS | 21.5% | autokernel + HIP bwd |
+| 5 | TEMPEST | 20.1% | autokernel + compile |
+| 6 | DUAL-CORTEX | 15.5% | eager |
+| 7 | OBSIDIAN | 14.8% | eager |
+| 8 | RESONANT-LOOP | 7.9% | Low MFU because 58.8M unique params → formula underweights |
+
+### Key Findings (2026-04-11)
+
+1. **RESONANT-LOOP is the throughput champion** at 13.3K tok/s. Only 58.8M unique params means minimal memory traffic per pass. The iterative shared block design pays off as hypothesized. torch.compile doesn't help (graph breaks from the 16-iteration loop).
+
+2. **PROMETHEUS is the fastest 240M+ model** at 11.1K tok/s. The 14 Griffin + 2 attention hybrid design benefits from both autokernel (RMSNorm, SwiGLU, RoPE) and compile (element-wise fusion). Estimated 19K, measured 11.1K — 1.71x overestimate.
+
+3. **SPECTRAL-HYDRA benefits most from compile** — 5,976 → 10,204 (1.71x). The pure element-wise architecture fuses well. This validates the "maximum MFU" design thesis.
+
+4. **MAESTRO-PRIMA and AMADEUS are neck-and-neck** — the Conductor adds only 137K params overhead. The question is whether Conductor provides quality improvement (needs longer training to evaluate).
+
+5. **OBSIDIAN is fast for its complexity** at 8.7K eager. The BitNet reflex path is lightweight. But autokernel.optimize breaks training stability — the ternary quantization doesn't play well with HIP kernel replacements. Needs investigation.
+
+6. **DUAL-CORTEX v2** (154.3M) now fits budget after reducing d_slow from 1280→1024, d_fast from 320→256, and n_slow_layers from 10→8. Eager 9.3K tok/s.
+
+7. **Estimated ÷ Measured correction factors:**
+   - RESONANT-LOOP: 22K/13.3K = 1.65x
+   - SPECTRAL-HYDRA: 16K/10.2K = 1.57x
+   - MAESTRO-PRIMA: 12K/8.8K = 1.36x
+   - OBSIDIAN: 14K/8.7K = 1.61x
+   - DUAL-CORTEX: 12K/5.8K = 2.07x
+   - Average: ~1.65x overestimate. Dual-path architectures are most overestimated.
+
+### Tokens in 45-min Budget (Measured)
+
+| Architecture | tok/s | Tokens/45min | BabyLM Epochs |
+|-------------|-------|-------------|---------------|
+| RESONANT-LOOP | 13,344 | 36.0M | 2.25 |
+| PROMETHEUS | 11,087 | 29.9M | 1.87 |
+| SPECTRAL-HYDRA | 10,204 | 27.6M | 1.72 |
+| DUAL-CORTEX v2 | 9,267 | 25.0M | 1.56 |
+| MAESTRO-PRIMA | 8,848 | 23.9M | 1.49 |
+| AMADEUS | 8,742 | 23.6M | 1.48 |
+| OBSIDIAN | 8,669 | 23.4M | 1.46 |
+| TEMPEST | 8,152 | 22.0M | 1.38 |
+
+---
+
+## ACTUAL TRAINING RESULTS (2026-04-12)
+
+BabyLM 16.5M tokens, 2 epochs, ~170M params, batch=16, seq=256, autokernel.optimize()
+
+### By Quality (Val Loss, lower = better)
+
+| Rank | Architecture | Params | Val Loss | Train Loss | tok/s | steps/s | Time |
+|------|-------------|--------|----------|------------|-------|---------|------|
+| **1** | **Amadeus** | 157.7M | **2.9015** | 2.7510 | 13,203 | 3.2 | 38 min |
+| **2** | **MaestroPrima** | 157.8M | **2.9017** | 2.7393 | 12,896 | 3.1 | 39 min |
+| 3 | Tempest | 176.8M | 2.9796 | 2.7688 | 12,952 | 3.2 | 39 min |
+| 4 | Virtuoso | 180.8M | 2.9936 | 2.8189 | 11,165 | 2.7 | 45 min |
+| 5 | Prometheus | 174.3M | 2.9951 | 2.8379 | 13,066 | 3.2 | 39 min |
+| 6 | SpectralHydra | 176.8M | 3.1940 | 3.1182 | 10,323 | 2.5 | 49 min |
+| 7 | ResonantLoop | 50.7M | 3.4176 | 3.2680 | 15,907 | 3.9 | 32 min |
+| 8 | DualCortex | 125.2M | 5.4352 | 5.4433 | 32,426 | 7.9 | FAILED |
+| 9 | Obsidian | 124.0M | 5.7074 | 5.6637 | 34,115 | 8.3 | FAILED |
+
+### Conductor A/B Test (Amadeus vs MaestroPrima)
+
+Head-to-head with identical data split, seed, hyperparameters:
+- Amadeus final val: 2.9038
+- MaestroPrima final val: 2.9023
+- Difference: **-0.0015 (negligible)**
+- Conductor consistently ~0.002 better in epoch 2, but statistically indistinguishable
+
+### Dual-Path Eager Diagnostic (2026-04-12)
+
+| Model | Eager (no AK) | With Autokernel | Diagnosis |
+|-------|--------------|-----------------|-----------|
+| DualCortex d=256 | **val=3.1909** (works) | val=5.4352 (failed) | autokernel is the problem |
+| Obsidian d=256 | **val=3.4924** (ep1, works) | val=5.7074 (failed) | autokernel is the problem |
+
+Both architectures learn normally in eager mode. DualCortex eager (3.19) is competitive with SpectralHydra.
+
+### Key Training Insights
+
+1. **SSM hybrids (Amadeus) win quality** — Mamba-3 SISO + gated conv + FiLM learns best at 16M tokens
+2. **Conductor is a non-factor** at 16M tokens — 0.15% improvement, within noise
+3. **Pure Griffin (Tempest) is the #3** — competitive quality, simpler architecture
+4. **Dual-path models work in eager, fail with autokernel** — HIP kernels at d=256 cause divergence, not architecture
+5. **ResonantLoop is throughput-optimal** (15.9K tok/s) but quality-limited at 50.7M params
+6. **SpectralHydra underperforms** — heterogeneous decay spectrum initialization needs tuning
+7. **torch.compile effectiveness is the #1 throughput lever** — 3.2x for LlamaModel vs 1.7x for Tempest. Closing this gap requires custom ops for scan + block-level fusion patterns

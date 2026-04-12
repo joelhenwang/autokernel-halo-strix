@@ -48,7 +48,7 @@ python -m halo_training --model models/llama_7b.py --class-name LlamaModel --smo
 ## Key Directories
 
 - `kernels/hip/` — 20+ HIP kernel types + `_compile.py` (compilation) + `_torch_ops.py` (torch.library custom ops)
-- `models/` — Self-contained model definitions (LLaMA, GPT-2, AMADEUS, TEMPEST, PROMETHEUS)
+- `models/` — Self-contained model definitions (LLaMA, GPT-2, AMADEUS, TEMPEST, PROMETHEUS, SPECTRAL-HYDRA, RESONANT-LOOP, MAESTRO-PRIMA, DUAL-CORTEX, OBSIDIAN, VIRTUOSO)
 - `halo_training/` — Composable training stack (Mode A/B), CLI: `python -m halo_training`
 - `autokernel/` — Library API (`autokernel.optimize()`) with pattern matching + kernel replacement
 - `knowledge/` — Hardware reference docs (RDNA 3.5 architecture, rocBLAS/hipBLAS reference)
@@ -113,10 +113,29 @@ GPU: Radeon 8060S (gfx1151), 40 CUs, wave32, **no MFMA**, ~59.4 TFLOPS FP16. Mem
 | AMADEUS 243.8M | autokernel + compile + HIP scan | **10.4K** | **26%** |
 | AMADEUS 243.8M | eager, chunked scan | 6.5K | 16% |
 | AMADEUS 243.8M | sequential scan | 1.3K | 4% |
-| Tempest 244.5M | compile + autokernel | **8,152** | **20.1%** |
+| Tempest 244.5M | compile + autokernel | **11,049** | **27.3%** |
 | Tempest + MatFormer 244.5M | compile + autokernel | **8,166** | **20.2%** |
 
 AMADEUS best loss: 12.18 (BPB 4.88) after 2 epochs on BabyLM (30.8M tokens, 79 min).
+
+### Hypothesis Architecture Training (2026-04-12, ~170M params, BabyLM 2 epochs)
+
+| Model | Params | Val Loss | tok/s | Notes |
+|-------|--------|----------|-------|-------|
+| **Amadeus** | 157.7M | **2.90** | 13,203 | Best quality |
+| **MaestroPrima** | 157.8M | **2.90** | 12,896 | Conductor adds negligible benefit |
+| Tempest | 176.8M | 2.98 | 12,952 | Best pure Griffin |
+| Virtuoso | 180.8M | 2.99 | 11,165 | PLE+MatFormer no quality benefit at this scale |
+| Prometheus | 174.3M | 3.00 | 13,066 | 2 attention layers don't help |
+| SpectralHydra | 176.8M | 3.19 | 10,323 | Decay spectrum needs tuning |
+| ResonantLoop | 50.7M | 3.42 | **15,907** | Throughput champion, quality-limited by params |
+| DualCortex | 125.2M | 5.44 | 32,426 | **FAILED** — autokernel breaks small dims |
+| Obsidian | 124.0M | 5.71 | 34,115 | **FAILED** — autokernel breaks small dims |
+
+See `knowledge/hypothesis_buildout_results.md` for full analysis.
+
+### Compile Gap: LlamaModel vs Griffin (124M fair comparison)
+LlamaModel gets **3.2x** from torch.compile (49K tok/s) vs Tempest's **1.7x** (20K tok/s). In eager mode, the gap is only 1.27x. The difference comes from: (1) FusedResidualRMSNorm block pattern matches TransformerBlock but not TempestBlock, (2) SDPA is one kernel vs chunked scan's ~15 ops, (3) larger compile regions. Fix: register Griffin scan as `torch.library` custom op + compile-safe fused block pattern. See `docs/superpowers/specs/2026-04-12-compile-optimized-griffin-design.md`.
 
 ### PLE + MatFormer Ablation (Tempest base, 10-min runs)
 - **PLE Path A:** Best quality (loss 22.65, -1.5% vs base) at 3% throughput cost
@@ -132,6 +151,8 @@ AMADEUS best loss: 12.18 (BPB 4.88) after 2 epochs on BabyLM (30.8M tokens, 79 m
 2. **Eliminate cast/allocation overhead** (8x): Fuse multi-dtype ops (int8→float→sub→mul→half) into single kernel.
 3. **Online algorithms** (1.8x): Fused max+sum with rescaling eliminates a memory pass.
 4. **Native fp16 intrinsics** (3.7x): `__hadd2`/`__hmul` match PyTorch rounding. fp32 intermediates + cast-back does not.
+5. **Fused GEMM projections** (Griffin w_a+w_i+w_v → single Linear): Saves 2 kernel launches/layer.
+6. **Vectorized chunked scan** (no Python loops): Enables torch.compile fusion, +17% on Tempest.
 
 ### Anti-Patterns (don't repeat)
 - **LDS caching for 2-pass ops**: L2 (6MB) already serves the second read. LDS only helps replacing a *separate kernel launch*.
@@ -143,6 +164,8 @@ AMADEUS best loss: 12.18 (BPB 4.88) after 2 epochs on BabyLM (30.8M tokens, 79 m
 - **fp32 topk on fp16 softmax**: Use `__hgt` (fp16 comparison) to match PyTorch tie-breaking.
 - **`model.to(float16)` destroys complex buffers**: Casts complex64 `freqs_cis` to real. Save/restore complex buffers around dtype casts.
 - **Sequential SSM scans**: Use chunked linear recurrence (chunk_size=64), not Python loops or `torch.associative_scan`. 5x faster. See `models/amadeus.py`.
+- **autokernel on small hidden dims (d≤256)**: HIP kernel replacements cause training divergence for dual-path models with d_fast=256. Confirmed: both DualCortex and Obsidian train normally in eager mode (val 3.19, 3.49) but diverge completely with autokernel (val >5.4). Run without `--optimize-kernels` or increase to d≥512.
+- **Python for-loops in chunked scan**: Causes torch.compile graph breaks. Use vectorized cross-chunk propagation via cumulative products instead (see `models/tempest.py`).
 - **Adaptive softmax for training**: 3 tier matmuls is 4% slower than 1 large matmul on memory-bound hardware. Single LM head for training.
 - **SSM state explosion**: Init: A_log=log(arange(1,N+1)), dt_proj bias=-4.0, dt clamped [1e-4, 0.5], B/C normalized by max(norm, 1.0).
 

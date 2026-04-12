@@ -367,6 +367,54 @@ class MomentumResidual(nn.Module):
 
 **Why it works:** Standard residuals are memoryless — each layer adds independently. Momentum gives the residual stream INERTIA. If layers 1-5 all push in the same direction, the accumulated velocity carries that signal further. This is Newtonian mechanics applied to the depth dimension.
 
+### 1.15 TTT Fast Weights (Living SwiGLU)
+
+| Field | Value |
+|-------|-------|
+| Interface | `LivingSwiGLU(d_model, ffn_inner, ttt_enabled)`, forward: `(B,C,d), v_hat, ΔW → (B,C,d), ΔW_new` |
+| Init | W_target: Xavier. Conv1D weights: **zero-init** (starts as identity — no TTT contribution). log_gamma: 0.0 (γ=0.5). log_eta: -2.0 (η≈0.13). |
+| Optimizer | W_target: 1x LR, 0.1 WD. log_gamma, log_eta: 1x LR, 0 WD. Conv1D: 1x LR, 0 WD. |
+| Source | In-Place TTT (arXiv 2604.06169, 2026) — adapted with damped accumulation. |
+| Used by | LAZARUS (both -A and -G variants). Can be added to ANY architecture as FFN replacement. |
+
+Replaces standard SwiGLU's frozen `w_down` with a fast weight that adapts per chunk:
+
+```python
+class LivingSwiGLU(nn.Module):
+    def __init__(self, d_model, ffn_inner, ttt_enabled=False):
+        super().__init__()
+        self.w_gate_up = nn.Linear(d_model, 2 * ffn_inner, bias=False)
+        self.w_down = nn.Linear(ffn_inner, d_model, bias=False)  # "slow weight"
+        self.ttt_enabled = ttt_enabled
+        if ttt_enabled:
+            self.w_target = nn.Linear(d_model, ffn_inner, bias=False)
+            self.log_gamma = nn.Parameter(torch.tensor(0.0))   # sigmoid→0.5
+            self.log_eta = nn.Parameter(torch.tensor(-2.0))    # softplus→0.13
+
+    def forward(self, x, v_hat_chunk=None, delta_W=None):
+        gate, up = self.w_gate_up(x).chunk(2, dim=-1)
+        z = F.silu(gate) * up
+        out = self.w_down(z)
+        if self.ttt_enabled and delta_W is not None:
+            out = out + z @ delta_W                     # fast weight contribution
+            v_hat_proj = self.w_target(v_hat_chunk)
+            update = torch.einsum('bcf,bcd->fd', v_hat_proj, x) / x.shape[0]
+            gamma = torch.sigmoid(self.log_gamma)
+            eta = F.softplus(self.log_eta)
+            delta_W = gamma * delta_W + eta * update    # damped accumulation
+        return out, delta_W
+```
+
+**Update rule:** `ΔW^(i) = γ·ΔW^(i-1) + η·V̂^T·Z` — damped outer-product accumulation. Mathematically related to linear attention / DeltaNet (both accumulate outer products into a matrix state), but chunk-wise with an NTP-aligned target.
+
+**NTP target:** `V̂ = CausalConv1D(embeddings, k=5)` — computed ONCE from token embeddings at the start of forward pass. Zero-init bootstrap ensures model starts as standard SwiGLU.
+
+**ΔW dimensions:** For d=1024, ffn=2560: ΔW is 2560×1024 = **5.2MB fp16 — fits exactly in Strix Halo's 6MB L2 cache.** Only one ΔW is "hot" at a time (sequential layer processing).
+
+**Three forces:** Combine with Residual Momentum (Section 1.14) for the full dynamical system: momentum (inertia on signal), TTT (plasticity on weights), damping (decay on plasticity).
+
+**Equilibrium:** At steady state, `||ΔW|| ≈ η·||update|| / (1-γ)`. For γ=0.5, η=0.13: bounded at ~0.26× update norm.
+
 ---
 
 ## Section 1b: External Kernel Integration
