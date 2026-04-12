@@ -144,11 +144,17 @@ See `knowledge/hypothesis_buildout_results.md` for full analysis.
 
 | Config | Before | After | Improvement |
 |--------|--------|-------|-------------|
-| Tempest124M AK+compile (fwd+bwd) | 20,184 tok/s | **71,024 tok/s** | **3.52x** |
-| Tempest124M AK only (fp16) | 16,674 tok/s | **59,500 tok/s** | **3.57x** |
-| Tempest124M training (AMP+optim) | ~12,952 tok/s | **22,008 tok/s** | **1.70x** |
+| Tempest124M AK+compile (fwd+bwd only) | 20,184 tok/s | **71,024 tok/s** | **3.52x** |
+| Tempest124M AK only (fp16, fwd+bwd) | 16,674 tok/s | **59,500 tok/s** | **3.57x** |
+| Tempest124M training (AMP+optim) | ~12,952 tok/s | **22,358 tok/s** | **1.73x** |
 
-**Griffin now beats LlamaModel** (71K vs 49K tok/s with compile). Training verified on BabyLM 2 epochs.
+**Real training pipeline comparison (AK+compile, BabyLM, batch=16, seq=256):**
+| Model | Training tok/s | MFU | Memory |
+|-------|---------------|-----|--------|
+| LlamaModel 124.7M | **47,864** | 60.3% | 2.6 GB |
+| Tempest124M 123.7M | **22,358** | 27.9% | 4.9 GB |
+
+Griffin training gap narrowed from ~3x to **2.14x** vs LlamaModel. Remaining gap: SDPA attention = 1 kernel vs scan = many ops, higher memory from scan intermediates.
 See `docs/superpowers/specs/2026-04-12-compile-optimized-griffin-design.md` for design spec.
 
 ### PLE + MatFormer Ablation (Tempest base, 10-min runs)

@@ -148,7 +148,7 @@ class LlamaModel(nn.Module):
         n_params = sum(p.numel() for p in self.parameters())
         print(f"LlamaModel: {n_params / 1e6:.1f}M parameters")
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, targets=None) -> torch.Tensor:
         B, T = input_ids.shape
         h = self.tok_embeddings(input_ids)
         freqs = self.freqs_cis[:T]
@@ -196,7 +196,7 @@ class LlamaModel7B(nn.Module):
         n_params = sum(p.numel() for p in self.parameters())
         print(f"LlamaModel7B: {n_params / 1e6:.1f}M parameters")
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, targets=None) -> torch.Tensor:
         B, T = input_ids.shape
         h = self.tok_embeddings(input_ids)
         freqs = self.freqs_cis[:T]
