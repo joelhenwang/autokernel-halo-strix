@@ -114,6 +114,7 @@ GPU: Radeon 8060S (gfx1151), 40 CUs, wave32, **no MFMA**, ~59.4 TFLOPS FP16. Mem
 | AMADEUS 243.8M | eager, chunked scan | 6.5K | 16% |
 | AMADEUS 243.8M | sequential scan | 1.3K | 4% |
 | Tempest 244.5M | compile + autokernel | **11,049** | **27.3%** |
+| Tempest 124.7M | compile + autokernel + fused block | **22,008** | **27.5%** |
 | Tempest + MatFormer 244.5M | compile + autokernel | **8,166** | **20.2%** |
 
 AMADEUS best loss: 12.18 (BPB 4.88) after 2 epochs on BabyLM (30.8M tokens, 79 min).
@@ -134,8 +135,21 @@ AMADEUS best loss: 12.18 (BPB 4.88) after 2 epochs on BabyLM (30.8M tokens, 79 m
 
 See `knowledge/hypothesis_buildout_results.md` for full analysis.
 
-### Compile Gap: LlamaModel vs Griffin (124M fair comparison)
-LlamaModel gets **3.2x** from torch.compile (49K tok/s) vs Tempest's **1.7x** (20K tok/s). In eager mode, the gap is only 1.27x. The difference comes from: (1) FusedResidualRMSNorm block pattern matches TransformerBlock but not TempestBlock, (2) SDPA is one kernel vs chunked scan's ~15 ops, (3) larger compile regions. Fix: register Griffin scan as `torch.library` custom op + compile-safe fused block pattern. See `docs/superpowers/specs/2026-04-12-compile-optimized-griffin-design.md`.
+### Compile-Optimized Griffin Block (2026-04-12)
+**FusedGriffinBlockPattern** now enabled — replaces TempestBlock with compile-friendly forward:
+- Inlines momentum residual (avoids module boundary for compile)
+- Plain PyTorch RMSNorm (Inductor fuses element-wise ops)
+- Griffin scan via original module (correct autograd through log-domain scan)
+- `_use_hip_backward()` guard skips HIP backward during compile tracing
+
+| Config | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Tempest124M AK+compile (fwd+bwd) | 20,184 tok/s | **71,024 tok/s** | **3.52x** |
+| Tempest124M AK only (fp16) | 16,674 tok/s | **59,500 tok/s** | **3.57x** |
+| Tempest124M training (AMP+optim) | ~12,952 tok/s | **22,008 tok/s** | **1.70x** |
+
+**Griffin now beats LlamaModel** (71K vs 49K tok/s with compile). Training verified on BabyLM 2 epochs.
+See `docs/superpowers/specs/2026-04-12-compile-optimized-griffin-design.md` for design spec.
 
 ### PLE + MatFormer Ablation (Tempest base, 10-min runs)
 - **PLE Path A:** Best quality (loss 22.65, -1.5% vs base) at 3% throughput cost
