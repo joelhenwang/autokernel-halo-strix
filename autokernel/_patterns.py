@@ -463,6 +463,7 @@ class FusedSwiGLUPattern(Pattern):
             hasattr(module, "w_gate_up")
             and hasattr(module, "w_down")
             and isinstance(getattr(module, "w_gate_up", None), nn.Linear)
+            and not getattr(module, "_skip_autokernel", False)
         )
 
     def apply(self, name: str, module: nn.Module, model: nn.Module) -> nn.Module:
