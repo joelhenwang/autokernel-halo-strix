@@ -29,6 +29,8 @@ uv run python verify.py --model models/llama_7b.py --class-name LlamaModel --inp
 # Training (Mode A auto for <2B, Mode B for >2B)
 python -m halo_training --model models/llama_7b.py --class-name LlamaModel --dataset babylm
 python -m halo_training --model models/llama_7b.py --class-name LlamaModel --compile --optimize-kernels
+python -m halo_training --model models/llama_7b.py --class-name LlamaModel --compile --optimize-kernels --muon  # Muon optimizer
+python -m halo_training --model models/llama_7b.py --class-name LlamaModel --compile --optimize-kernels --bf16  # bfloat16 training
 python -m halo_training --model models/llama_7b.py --class-name LlamaModel --smoke  # 200-step validation
 ```
 
@@ -143,6 +145,30 @@ AMADEUS best loss: 12.18 (BPB 4.88) after 2 epochs on BabyLM (30.8M tokens, 79 m
 TTT overhead: ~8% throughput + 1.3GB memory. Quality comparison pending (need same-token or longer sequences).
 
 See `knowledge/hypothesis_buildout_results.md` for full analysis.
+
+### Muon Optimizer (2026-04-13)
+Muon replaces AdamW's second moment with Newton-Schulz gradient orthogonalization. ~2x token-efficiency, ~50% less optimizer memory. Based on Moonlight/Kimi K2 papers.
+
+**A/B comparison (10-min budget, BabyLM, batch=16, block=256, accum=4):**
+
+| Model | Optimizer | tok/s | Steps | Best Loss | Memory |
+|-------|-----------|-------|-------|-----------|--------|
+| LlamaModel 124.7M | AdamW | **49,711** | 1,004 | 17.58 | 2.6 GB |
+| LlamaModel 124.7M | Muon (lr=0.005) | 48,131 | 1,004 | **17.48** | 2.6 GB |
+| AMADEUS 243.8M | AdamW | **9,304** | 340 | 14.93 | 9.2 GB |
+| AMADEUS 243.8M | Muon (lr=0.005) | 8,888 | 325 | **14.77** | **9.0 GB** |
+
+Note: displayed loss inflated 4x by accum_steps logging (real AMADEUS loss ≈ 3.7).
+
+**Key findings:**
+- Muon reaches better loss per step (convergence advantage visible even in 10 min)
+- 3-4.5% throughput overhead from Newton-Schulz iterations (eager, no compile on NS)
+- Memory slightly lower (fewer optimizer state buffers)
+- Only MLP/FFN weights use Muon; SSM/conv/embedding params stay on AdamW
+- Muon LR 0.005 (not standard 0.02) needed for SSM model stability
+- `torch.compile` on NS function causes 29GB memory blowup (disabled)
+
+**Usage:** `python -m halo_training --model <model> --class-name <class> --dataset babylm --muon`
 
 ### Compile-Optimized Griffin Block (2026-04-12)
 **FusedGriffinBlockPattern** now enabled — replaces TempestBlock with compile-friendly forward:

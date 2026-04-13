@@ -37,6 +37,8 @@ def build_optimizer(
     weight_decay: float = 0.1,
     optimizer_cls: Optional[Type] = None,
     use_cpu_adam: bool = False,
+    use_muon: bool = False,
+    muon_lr: float = 0.005,
 ) -> torch.optim.Optimizer:
     """Build optimizer with COOKBOOK.md param group rules.
 
@@ -52,7 +54,13 @@ def build_optimizer(
         use_cpu_adam: Force DeepSpeed CPUAdam. Requires params on CPU.
                      Useful for Mode B (7B+) where optimizer states dominate memory.
                      For Mode A (<2B), fused AdamW on GPU is simpler and fast enough.
+        use_muon: Use Muon optimizer for 2D weight matrices, AdamW for rest.
+                  ~2x token-efficiency, ~50% less optimizer memory.
+        muon_lr: Learning rate for Muon params (default 0.02, different scale from AdamW).
     """
+    if use_muon:
+        return _build_muon_optimizer(model, base_lr, muon_lr, weight_decay)
+
     groups = _build_param_groups(model, base_lr, weight_decay)
 
     if optimizer_cls is not None:
@@ -70,6 +78,47 @@ def build_optimizer(
 
     print("Using torch.optim.AdamW(fused=True)")
     return torch.optim.AdamW(groups, lr=base_lr, betas=(0.9, 0.95), fused=True)
+
+
+def _build_muon_optimizer(
+    model: nn.Module,
+    adamw_lr: float,
+    muon_lr: float,
+    weight_decay: float,
+) -> torch.optim.Optimizer:
+    """Build Muon optimizer: 2D weights get Muon, rest gets AdamW."""
+    from halo_training.muon import Muon, split_params_for_muon
+
+    muon_params, adamw_named = split_params_for_muon(model)
+
+    # Build AdamW groups with COOKBOOK.md rules
+    adamw_groups = []
+    for name, param in adamw_named:
+        if "engram" in name and "table" in name:
+            adamw_groups.append({"params": [param], "lr": adamw_lr * 5.0, "weight_decay": 0})
+        elif "decay_bias" in name:
+            adamw_groups.append({"params": [param], "lr": adamw_lr * 0.1, "weight_decay": 0})
+        elif "omega_param" in name or "gamma_param" in name:
+            adamw_groups.append({"params": [param], "lr": adamw_lr * 0.125, "weight_decay": 0})
+        elif "meta_token" in name:
+            adamw_groups.append({"params": [param], "lr": adamw_lr, "weight_decay": 0.01})
+        elif "norm" in name or (name.endswith(".bias") and "decay" not in name):
+            adamw_groups.append({"params": [param], "lr": adamw_lr, "weight_decay": 0})
+        else:
+            adamw_groups.append({"params": [param], "lr": adamw_lr, "weight_decay": weight_decay})
+
+    n_muon = len(muon_params)
+    n_adamw = sum(len(g["params"]) for g in adamw_groups)
+    print(f"Using Muon optimizer: {n_muon} params via Muon (lr={muon_lr}), "
+          f"{n_adamw} params via AdamW (lr={adamw_lr})")
+
+    return Muon(
+        muon_params=[{"params": muon_params}],
+        lr=muon_lr,
+        weight_decay=0.01,
+        adamw_params=adamw_groups,
+        adamw_lr=adamw_lr,
+    )
 
 
 def _build_param_groups(

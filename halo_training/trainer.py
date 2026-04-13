@@ -35,6 +35,8 @@ def train(
     num_workers: int = 4,
     mode: str = "auto",
     checkpoint_every: int = 2,
+    use_muon: bool = False,
+    use_bf16: bool = False,
 ) -> Dict[str, Any]:
     """Train a model using Mode A (direct) or Mode B (layer-streaming).
 
@@ -58,6 +60,8 @@ def train(
         checkpoint_dir: Directory for saving checkpoints.
         log_interval: Log every N steps.
         num_workers: DataLoader workers.
+        use_bf16: Use bfloat16 instead of float16 for mixed precision.
+                  bf16 has same exponent range as fp32 — no GradScaler needed.
 
     Returns:
         Dict with training stats (final_loss, tok_s, steps, etc.)
@@ -123,7 +127,7 @@ def train(
     dataloader = build_dataloader(dataset, batch_size=batch_size, num_workers=num_workers)
 
     # --- Setup optimizer (NEVER compile this) ---
-    optimizer = build_optimizer(model, base_lr=base_lr)
+    optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon)
 
     total_steps = len(dataloader) * epochs // accum_steps
     scheduler = build_scheduler(optimizer, total_steps)
@@ -156,7 +160,10 @@ def train(
         loss_fn = default_loss_fn
 
     # --- Setup mixed precision ---
-    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+    amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
+    # bf16 doesn't need loss scaling (same exponent range as fp32)
+    use_scaler = (device.type == "cuda") and not use_bf16
+    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
 
     # --- Training loop ---
     model.train()
@@ -206,7 +213,7 @@ def train(
                 input_ids = input_ids.to(device)
                 targets = targets.to(device)
 
-                with torch.amp.autocast("cuda", dtype=torch.float16):
+                with torch.amp.autocast("cuda", dtype=amp_dtype):
                     if streamer is not None:
                         output = streamer.forward(input_ids)
                     else:

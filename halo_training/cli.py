@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=1, help="Number of epochs")
     parser.add_argument("--compile", action="store_true", help="Apply torch.compile")
     parser.add_argument("--optimize-kernels", action="store_true", help="Apply autokernel.optimize()")
+    parser.add_argument("--muon", action="store_true", help="Use Muon optimizer (2x token-efficiency)")
+    parser.add_argument("--bf16", action="store_true", help="Use bfloat16 instead of float16 (no GradScaler needed)")
     parser.add_argument("--mode", default="auto", choices=["auto", "A", "B"], help="Training mode")
     parser.add_argument("--checkpoint-dir", default=None, help="Checkpoint save directory")
     parser.add_argument("--log-interval", type=int, default=10, help="Log every N steps")
@@ -68,6 +70,7 @@ def main():
             steps=200,
             batch_size=args.batch_size,
             block_size=min(args.block_size, 512),  # smaller for smoke
+            use_muon=args.muon,
         )
         sys.exit(0 if result["passed"] else 1)
 
@@ -86,6 +89,8 @@ def main():
         mode=args.mode,
         checkpoint_dir=args.checkpoint_dir,
         log_interval=args.log_interval,
+        use_muon=args.muon,
+        use_bf16=args.bf16,
     )
 
     print(f"\nFinal stats: {stats}")

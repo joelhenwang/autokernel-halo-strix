@@ -35,6 +35,7 @@ def run_smoke_test(
     min_tok_s: float = 10_000,
     max_state_ratio: float = 1.05,
     compile: bool = False,
+    use_muon: bool = False,
 ) -> Dict[str, Any]:
     """Run standardized smoke test and return pass/fail results.
 
@@ -60,7 +61,7 @@ def run_smoke_test(
     dataloader = build_dataloader(ds, batch_size=batch_size, num_workers=0, shuffle=True)
 
     # Setup optimizer
-    optimizer = build_optimizer(model, base_lr=base_lr)
+    optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon)
     scheduler = build_scheduler(optimizer, total_steps=steps)
 
     # Setup state-norm monitor for recurrent architectures
