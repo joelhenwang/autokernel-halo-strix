@@ -170,6 +170,19 @@ Note: displayed loss inflated 4x by accum_steps logging (real AMADEUS loss ≈ 3
 
 **Usage:** `python -m halo_training --model <model> --class-name <class> --dataset babylm --muon`
 
+### ARGUS Architecture (2026-04-13)
+ARGUS (Adaptive Retrieval-Guided Unified System): 6-mechanism novel architecture.
+- 3:1 ShortConv/GQA (LFM2.5-inspired) + In-Place TTT (ByteDance cumsum) + Engram + Momentum + MatFormer
+- 156.1M params, d_model=768, 16 layers (12 ShortConv + 4 GQA at 3,7,11,15)
+
+| Config | tok/s | MFU | Best Loss | Memory |
+|--------|-------|-----|-----------|--------|
+| compile + autokernel | **15,826** | **25.0%** | **11.99** | 6.8 GB |
+| autokernel only | 9,588 | 15.1% | 14.90 | 7.0 GB |
+
+BabyLM 2 epochs: loss 11.99 (real ≈ 3.00) — competitive with AMADEUS (2.90) and Tempest (2.98).
+Key: TTT lr=0.01 (not 0.3) for from-scratch stability. Engram needs project RMSNorm (not nn.RMSNorm).
+
 ### bf16 vs fp16 (2026-04-13)
 bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.** The `--bf16` flag exists but should only be used for testing.
 
