@@ -101,9 +101,23 @@ explosion. At 160-250M with SSM models, not relevant.
 
 **Distributed Muon:** Our single-GPU setup doesn't need the all-reduce variant.
 
+## bf16 vs fp16 Comparison (2026-04-13)
+
+bf16 is NOT viable on gfx1151:
+
+| Model | Dtype | tok/s | Best Loss | Memory |
+|-------|-------|-------|-----------|--------|
+| AMADEUS 243.8M | fp16 | **9,304** | **14.93** | **9.2 GB** |
+| AMADEUS 243.8M | bf16 | 7,107 | 15.39 | 12.1 GB |
+| LlamaModel 124.7M | bf16 (no compile) | 15,436 | 13.61 | 6.1 GB |
+| LlamaModel 124.7M | bf16 + compile | CRASH | — | — |
+
+bf16 is 24% slower and uses 32% more memory on AMADEUS. ROCm bf16 ops not optimized on gfx1151.
+bf16 + torch.compile crashes on LlamaModel (Inductor can't handle complex RoPE ops in bf16).
+**Conclusion: Stick with fp16 + GradScaler.**
+
 ## Next Steps
 
-- Test with bf16 (eliminates GradScaler, may fix transient grad norm issues)
-- Longer training runs (2 epochs on BabyLM) to quantify convergence advantage
+- Longer training runs (2 epochs on BabyLM) to quantify Muon convergence advantage
 - GPT-training-small (111M tokens) where token-efficiency matters more
 - LR sweep (0.003, 0.005, 0.01) to find optimal Muon LR for SSM models

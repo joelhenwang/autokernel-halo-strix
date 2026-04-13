@@ -170,6 +170,9 @@ Note: displayed loss inflated 4x by accum_steps logging (real AMADEUS loss ≈ 3
 
 **Usage:** `python -m halo_training --model <model> --class-name <class> --dataset babylm --muon`
 
+### bf16 vs fp16 (2026-04-13)
+bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.** The `--bf16` flag exists but should only be used for testing.
+
 ### Compile-Optimized Griffin Block (2026-04-12)
 **FusedGriffinBlockPattern** now enabled — replaces TempestBlock with compile-friendly forward:
 - Inlines momentum residual (avoids module boundary for compile)
