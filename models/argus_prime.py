@@ -413,6 +413,35 @@ class ArgusPrimeTTT2FiLM(ArgusPrimeBase):
 
 
 # ---------------------------------------------------------------------------
+# Throughput optimization variants
+# ---------------------------------------------------------------------------
+
+class ArgusPrimeWide(ArgusPrimeBase):
+    """B0 with bigger FFN (3328 = 4.3x) — more compute in FFN matmuls."""
+    def __init__(self, **kw):
+        super().__init__(
+            ffn_inner=3328, ttt_layers={15}, ttt_mode="single", use_film=False, **kw
+        )
+
+
+class ArgusPrime14L(ArgusPrimeBase):
+    """B0 with 14 layers (8 ShortConv + 6 GQA) + bigger FFN (3328).
+
+    Fewer layers = less sequential overhead. Same 6 GQA but only 8 ShortConv.
+    GQA at positions 2, 4, 6, 8, 11, 13 (0-indexed in 14 layers).
+    TTT on layer 13 (last GQA).
+    """
+    def __init__(self, **kw):
+        super().__init__(
+            n_layers=14, ffn_inner=3328,
+            gqa_layers=(2, 4, 6, 8, 11, 13),
+            ttt_layers={13}, ttt_mode="single", use_film=False,
+            film_start=6,  # adjusted for 14 layers
+            **kw,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Mini for smoke testing
 # ---------------------------------------------------------------------------
 
