@@ -52,7 +52,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 class Attention(nn.Module):
-    """GQA with RoPE + QK-Norm (L2-normalize Q,K before attention)."""
+    """GQA with RoPE + QK-Norm. Uses separate wq/wk/wv/wo for autokernel FusedQKV pattern."""
 
     def __init__(self, dim: int, n_heads: int, n_kv_heads: int, qk_norm: bool = True):
         super().__init__()
@@ -62,6 +62,7 @@ class Attention(nn.Module):
         self.n_rep = n_heads // n_kv_heads
         self.qk_norm = qk_norm
 
+        # Separate Q/K/V so autokernel's FusedQKVPattern matches and fuses QKV+RoPE
         self.wq = nn.Linear(dim, n_heads * self.head_dim, bias=False)
         self.wk = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
         self.wv = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
