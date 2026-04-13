@@ -30,16 +30,21 @@ from models.amadeus import RMSNorm, SwiGLU, GatedConv, FiLMConditioner
 from models.argus import TTTSwiGLU, precompute_freqs_cis, apply_rotary_emb
 
 try:
-    from causal_conv1d import causal_conv1d_fn
-    _HAS_CAUSAL_CONV1D = True
-except ImportError:
-    _HAS_CAUSAL_CONV1D = False
-
-try:
     from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
     _HAS_HYBRID_ATTN = True
 except ImportError:
     _HAS_HYBRID_ATTN = False
+
+try:
+    from kernels.hip.fused_gated_conv import kernel_fn as fused_gated_conv_fn
+    _HAS_FUSED_GATED_CONV = True
+except Exception:
+    _HAS_FUSED_GATED_CONV = False
+
+try:
+    from causal_conv1d import causal_conv1d_fn
+except ImportError:
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +90,6 @@ class Attention(nn.Module):
 
         # Hybrid attention: flash_attn forward + SDPA backward (8.9% faster)
         if _HAS_HYBRID_ATTN and q.dtype == torch.float16:
-            # hybrid expects (B,T,H,D); we have (B,H,T,D)
             y = hybrid_flash_sdpa_attention(
                 q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
             ).transpose(1, 2)
@@ -185,7 +189,17 @@ class ShortConvBlock(nn.Module):
         self.ffn = SwiGLU(d_model, ffn_inner)
 
     def forward(self, x, velocity):
-        mixer_out = self.out_proj(self.conv(self.pre_norm(x)))
+        # GatedConv with optional fused kernel
+        normed = self.pre_norm(x)
+        if _HAS_FUSED_GATED_CONV and normed.dtype == torch.float16:
+            # Fused path: proj → [gate_mul + conv + output_gate] in 2 HIP kernels
+            proj_out = self.conv.proj(normed)
+            conv_out = fused_gated_conv_fn(
+                proj_out, self.conv.conv_weight, self.conv.conv_bias, x.shape[1]
+            )
+        else:
+            conv_out = self.conv(normed)
+        mixer_out = self.out_proj(conv_out)
 
         # Inlined momentum (compile-friendly)
         beta = torch.sigmoid(self.log_beta)
@@ -259,7 +273,7 @@ class ArgusPrimeBase(nn.Module):
         vocab_size: int = 50257,
         d_model: int = 768,
         n_layers: int = 16,
-        d_conv: int = 768,
+        d_conv: int = 512,  # smaller conv = less memory-bound ops, more time in FFN matmuls
         ffn_inner: int = 2816,  # 3.7x (LFM2-aligned)
         conv_kernel: int = 3,
         n_heads: int = 12,
