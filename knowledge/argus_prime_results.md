@@ -137,3 +137,30 @@ Config: B0, d_conv=512, lr=0.0012, Muon, block=256, batch=16×4, compile+autoker
 
 Loss converged from ~34 → 16.03, still slowly decreasing at epoch end.
 Checkpoints at: `checkpoints/argus_prime_gpt/step_{2000..12000}.pt`
+
+### Text Generation (step_12000 checkpoint)
+
+Tested with `scripts/generate_text.py` (top-k=40, top-p=0.9, temp=0.7-0.9):
+- Coherent grammar and sentence structure
+- Stays on topic within generations
+- Knows factual patterns (technology, science, geography, zoology)
+- EOS token termination works correctly
+- Weaknesses: repetitive patterns, hallucinated details, loops after ~50-100 tokens
+- Quality consistent with 168M params trained on 222M tokens
+
+## Dolma 10B Training Projection
+
+| Setup | tok/s | 1 epoch (10B) | 2 epochs (20B) |
+|-------|-------|---------------|----------------|
+| 1 machine | 16,700 | ~6.9 days | ~13.9 days |
+| 2 machines (DDP over TB4) | ~29,000 | ~4 days | ~8 days |
+
+### Multi-Machine DDP Feasibility (2× Strix Halo via Thunderbolt 4)
+
+- TB4 bandwidth: 32 Gbps (4 GB/s) — no RDMA
+- Gradient sync per step: 168M × 4 bytes = 672 MB → 168ms (84ms with fp16 compression)
+- Current step time: ~273ms → DDP overhead amortized via accum_steps=4
+- Projected speedup: **1.7-1.8×** (not full 2× due to sync cost)
+- 168M model is ideal for DDP — small gradient sync relative to compute
+- Implementation: PyTorch DDP + torchrun, no model changes needed
+- Muon optimizer works natively with DDP (operates on post-allreduce gradients)
