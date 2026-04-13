@@ -120,7 +120,20 @@ Backward dropped from ARGUS's 70.8% to 54.9% by removing 3 TTT layers.
 | `kernels/hip/fused_gated_conv_backward.py` | Backward HIP kernel (tested, slower than native) |
 | `kernels/hip/_torch_ops.py` | Custom op registration with autograd |
 
-## GPT-training-small Run (in progress)
+## GPT-training-small 2 Epochs — Final Results
 
-Config: B0, d_conv=512, lr=0.0012, Muon, block=256, batch=16×4, compile+autokernel, 2 epochs.
-Estimated: ~3.6 hours for 222M tokens at 16.9K tok/s. Checkpoint saved.
+Config: B0, d_conv=512, lr=0.0012, Muon, block=256, batch=16×4, compile+autokernel.
+
+| Metric | Value |
+|--------|-------|
+| tok/s | 16,745 |
+| MFU | 28.5% |
+| Best loss | 16.03 (real ≈ 4.01) |
+| Steps | 13,578 |
+| Tokens | 222.5M (full 2 epochs) |
+| Time | 3.7 hours |
+| Memory | 6.1 GB |
+| Non-finite skips | 2 (minor Muon instability) |
+
+Loss converged from ~34 → 16.03, still slowly decreasing at epoch end.
+Checkpoints at: `checkpoints/argus_prime_gpt/step_{2000..12000}.pt`

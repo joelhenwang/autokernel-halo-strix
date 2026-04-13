@@ -230,7 +230,9 @@ Evolution from ARGUS: strip Engram/MatFormer, align to LFM2's 10:6 ShortConv/GQA
 - Optimal Muon base LR: 0.0012 (Muon LR ~0.0075)
 - Block=256 wins (fewer steps with larger blocks hurts quality in fixed time)
 - Larger batch (128 vs 64) is neutral — no quality benefit
-- GPT-training-small 2-epoch run in progress with optimal config
+
+**GPT-training-small 2 epochs (Muon, lr=0.0012):** 16,745 tok/s, 222.5M tokens, 13,578 steps, 3.7 hours.
+Best loss: **16.03** (real ≈ 4.01). Checkpoint: `checkpoints/argus_prime_gpt/step_12000.pt`
 
 ### bf16 vs fp16 (2026-04-13)
 bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.** The `--bf16` flag exists but should only be used for testing.
