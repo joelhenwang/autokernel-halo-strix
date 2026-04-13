@@ -196,6 +196,42 @@ Block=1024 drops throughput 15.8K→13.1K and memory 6.8→20.5 GB (TTT cumsum s
 Muon is 6% slower (Newton-Schulz overhead) but converges faster (loss 13.63 vs 14.06 in same budget).
 Profiling: backward 70.8% of time, forward 20.8%. Remaining throughput gap to 20K is fundamental (GQA attention + GatedConv matmuls dominate).
 
+### ARGUS-PRIME Architecture (2026-04-13)
+Evolution from ARGUS: strip Engram/MatFormer, align to LFM2's 10:6 ShortConv/GQA ratio, bigger FFN, QK-Norm, surgical TTT.
+- 10:6 ShortConv/GQA (was 12:4), ffn_inner=2816 (was 2048), QK-Norm, d_conv=512
+- TTT on layer 16 only ("sniper") vs ARGUS's 4 layers — 75% less backward cost
+- 6 variants: B0 (1 TTT), B1 (+FiLM), B2 (multi-step), B3 (multi+FiLM), B4 (2 TTT), B5 (2 TTT+FiLM)
+- Multi-step TTT (B2/B3) unstable for from-scratch training — diverges with NaN
+
+**Best config: B0, d_conv=512, ~155M params**
+
+| Config | tok/s | MFU | Memory | Notes |
+|--------|-------|-----|--------|-------|
+| B0 compile+AK (d_conv=768) | 16,797 | 29.9% | 6.6 GB | Original |
+| **B0 compile+AK (d_conv=512)** | **17,968** | **30.5%** | **6.3 GB** | **Best throughput** |
+| B0 14L+ffn=3328 | 18,205 | 31.0% | 6.2 GB | Fewer layers, wider FFN |
+| B0 + Muon | 15,346 | 24.2% | 6.5 GB | 6% slower, better convergence |
+| B1 FiLM (fixed) | 16,518 | 29.5% | 6.7 GB | FiLM after layer, not before |
+| B4 2-TTT bracket | 16,555 | 29.5% | 6.7 GB | Extra TTT at layer 8 |
+
+**Optimizations tried and results:**
+- d_conv 768→512: **+7% tok/s** (winner — shifts compute from memory-bound conv to FFN matmuls)
+- Fused GatedConv forward HIP kernel: no gain (forward not bottleneck)
+- Fused GatedConv backward HIP kernel: **-2%** (atomic overhead, recompute cost > autograd native)
+- Fused QKV projection: **-3.5%** (breaks autokernel's FusedQKV+RoPE pattern)
+- hipBLASLt + Stream-K env vars: no effect (Tensile already optimal)
+- Inline momentum+RMSNorm: +1-3% (small gain, compile fuses better)
+- Hybrid flash_sdpa attention: included, 8.9% faster per attention layer
+- 50% MFU analysis: not achievable with ShortConv (depthwise conv is inherently memory-bound, ~30% MFU ceiling)
+
+**GEMM findings:** Cannot beat Tensile scalar FMA on gfx1151. Manual QKV fusion loses autokernel pattern. hipBLASLt already default. use_cu_efficiency flag C API only.
+
+**Muon hyperparameter sweep (GPT-training-small, 10-min tests):**
+- Optimal Muon base LR: 0.0012 (Muon LR ~0.0075)
+- Block=256 wins (fewer steps with larger blocks hurts quality in fixed time)
+- Larger batch (128 vs 64) is neutral — no quality benefit
+- GPT-training-small 2-epoch run in progress with optimal config
+
 ### bf16 vs fp16 (2026-04-13)
 bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.** The `--bf16` flag exists but should only be used for testing.
 
