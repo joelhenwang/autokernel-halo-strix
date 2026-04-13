@@ -201,7 +201,8 @@ class TTTSwiGLU(nn.Module):
         d_down_scaled = torch.cat([w_orig, d_down * self.ttt_lr], dim=1)  # (B, nc, d, h)
 
         # Cumsum → adapted weight per chunk (parallel!)
-        w_adapted = d_down_scaled.cumsum(dim=1)  # (B, nc, d_model, ffn_inner)
+        # Detach from autograd: saves ~10 GB at block=1024 (ttt_proj/ttt_conv still learn)
+        w_adapted = d_down_scaled.detach().cumsum(dim=1)  # (B, nc, d_model, ffn_inner)
 
         # Apply adapted weight to each chunk: output = h @ W^T
         output = torch.einsum('btdh,btch->btcd', w_adapted, h_chunked)  # (B, nc, C, d_model)
@@ -233,9 +234,19 @@ class ShortConvBlock(nn.Module):
             self.ffn = SwiGLU(d_model, ffn_inner)
 
     def forward(self, x, velocity):
+        # Mixer
         mixer_out = self.out_proj(self.conv(self.pre_norm(x)))
-        x, velocity = self.momentum(x, mixer_out, velocity)
-        x = x + self.ffn(self.ffn_norm(x))
+
+        # Momentum INLINED (eliminates module boundary → Inductor fuses better)
+        beta = torch.sigmoid(self.momentum.log_beta)
+        velocity = beta * velocity + mixer_out
+
+        # Residual + RMSNorm INLINED (plain PyTorch → Inductor fuses element-wise)
+        x = x + velocity
+        rms = torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
+        normed = (x.float() * rms).to(x.dtype) * self.ffn_norm.weight
+
+        x = x + self.ffn(normed)
         return x, velocity
 
 
@@ -256,9 +267,17 @@ class GQABlock(nn.Module):
 
     def forward(self, x, velocity, freqs_cis, ttt_target):
         attn_out = self.attn(self.pre_norm(x), freqs_cis)
-        x, velocity = self.momentum(x, attn_out, velocity)
-        ffn_in = self.ffn_norm(x)
-        x = x + self.ffn(ffn_in, ttt_target=ttt_target)
+
+        # Momentum INLINED (eliminates module boundary → Inductor fuses better)
+        beta = torch.sigmoid(self.momentum.log_beta)
+        velocity = beta * velocity + attn_out
+
+        # Residual + RMSNorm INLINED (plain PyTorch → Inductor fuses element-wise)
+        x = x + velocity
+        rms = torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
+        normed = (x.float() * rms).to(x.dtype) * self.ffn_norm.weight
+
+        x = x + self.ffn(normed, ttt_target=ttt_target)
         return x, velocity
 
 
@@ -279,7 +298,7 @@ class ArgusConfig:
     n_kv_heads: int = 4
     gqa_layers: tuple = (3, 7, 11, 15)
     # TTT
-    ttt_chunk: int = 256
+    ttt_chunk: int = 512  # larger chunks = fewer serial steps + less memory
     ttt_lr_init: float = 0.01  # conservative for from-scratch training
     ttt_conv_kernel: int = 5
     # Engram
