@@ -133,6 +133,15 @@ AMADEUS best loss: 12.18 (BPB 4.88) after 2 epochs on BabyLM (30.8M tokens, 79 m
 | DualCortex | 125.2M | 5.44 | 32,426 | **FAILED** — autokernel breaks small dims |
 | Obsidian | 124.0M | 5.71 | 34,115 | **FAILED** — autokernel breaks small dims |
 
+### LAZARUS TTT Fast Weights (2026-04-13)
+| Variant | Params | tok/s | Notes |
+|---------|--------|-------|-------|
+| LAZARUS-A (full) | 247.5M | 8,309 | Too heavy — hit budget at 68% epoch 1 |
+| **LazarusLite** | 160.2M | **12,150** | 92% of AMADEUS speed, 2 TTT layers, no momentum |
+| AMADEUS (baseline) | 157.7M | 13,203 | Quality champion |
+
+TTT overhead: ~8% throughput + 1.3GB memory. Quality comparison pending (need same-token or longer sequences).
+
 See `knowledge/hypothesis_buildout_results.md` for full analysis.
 
 ### Compile-Optimized Griffin Block (2026-04-12)
