@@ -189,15 +189,10 @@ class ShortConvBlock(nn.Module):
         self.ffn = SwiGLU(d_model, ffn_inner)
 
     def forward(self, x, velocity):
-        # GatedConv with optional fused forward kernel
+        # GatedConv — use native path (autograd + causal_conv1d backward is faster
+        # than our fused custom op with recomputation overhead)
         normed = self.pre_norm(x)
-        if _HAS_FUSED_GATED_CONV and normed.dtype == torch.float16:
-            proj_out = self.conv.proj(normed)
-            conv_out = fused_gated_conv_fn(
-                proj_out, self.conv.conv_weight, self.conv.conv_bias, x.shape[1]
-            )
-        else:
-            conv_out = self.conv(normed)
+        conv_out = self.conv(normed)
         mixer_out = self.out_proj(conv_out)
 
         # Inlined momentum (compile-friendly)

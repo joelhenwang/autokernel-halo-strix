@@ -583,8 +583,18 @@ def _fused_gated_conv_backward(ctx, grad_output):
     proj_out, conv_weight, conv_bias = ctx.saved_tensors
     seq_len = ctx.seq_len
 
-    # Always use PyTorch fallback — Inductor can fuse these during compile,
-    # and the HIP backward can be added later for eager mode speedup.
+    # Use HIP backward kernel when available (eager mode)
+    if _use_hip_backward() and grad_output.dtype == torch.float16 and grad_output.is_cuda:
+        try:
+            from kernels.hip.fused_gated_conv_backward import kernel_fn as bwd_fn
+            grad_proj, grad_w, grad_b = bwd_fn(
+                proj_out, conv_weight, conv_bias, grad_output, seq_len
+            )
+            return grad_proj, grad_w.to(conv_weight.dtype), grad_b.to(conv_bias.dtype), None
+        except Exception:
+            pass  # fall through to PyTorch fallback
+
+    # PyTorch fallback (for compile tracing and fp32)
     D = proj_out.shape[-1] // 3
     orig_shape = proj_out.shape[:-1]
     M = proj_out.view(-1, 3 * D).shape[0]
