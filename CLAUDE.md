@@ -237,6 +237,7 @@ Text generation tested: coherent grammar, factual patterns, EOS works. Quality l
 
 **Dolma 10B projection:** 1 epoch = 6.9 days (1 machine) or ~4 days (2 machines DDP over TB4).
 2-machine DDP: ~1.7-1.8× speedup, 168M model ideal for TB4 bandwidth (84ms fp16 gradient sync vs 273ms step).
+See `knowledge/ddp_dual_strix_halo_tb4.md` for full implementation guide.
 
 ### bf16 vs fp16 (2026-04-13)
 bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.** The `--bf16` flag exists but should only be used for testing.
