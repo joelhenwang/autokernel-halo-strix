@@ -116,6 +116,16 @@ bf16 is 24% slower and uses 32% more memory on AMADEUS. ROCm bf16 ops not optimi
 bf16 + torch.compile crashes on LlamaModel (Inductor can't handle complex RoPE ops in bf16).
 **Conclusion: Stick with fp16 + GradScaler.**
 
+## ARGUS + Muon (2026-04-13)
+
+| Config | tok/s | Best Loss | Memory | Notes |
+|--------|-------|-----------|--------|-------|
+| ARGUS AdamW (compile+AK) | **16,335** | 14.06 | 6.7 GB | Baseline |
+| ARGUS Muon (compile+AK) | 15,346 | **13.63** | **6.5 GB** | 6% slower, better convergence |
+
+Muon routes 56 params via Newton-Schulz, 100 via AdamW. Engram tables stay on AdamW (5x LR rule).
+Despite lower throughput, Muon reaches better loss in same wall-clock time.
+
 ## Next Steps
 
 - Longer training runs (2 epochs on BabyLM) to quantify Muon convergence advantage

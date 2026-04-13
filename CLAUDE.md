@@ -185,6 +185,17 @@ GPT-training-small (141M tokens, block=1024): 13,074 tok/s, 20.6% MFU, loss 16.4
 Key: TTT lr=0.01 (not 0.3) for from-scratch stability. Engram needs project RMSNorm (not nn.RMSNorm).
 Block=1024 drops throughput 15.8K→13.1K and memory 6.8→20.5 GB (TTT cumsum scales with chunks).
 
+**Optimizations applied (2026-04-13):** Inline momentum+RMSNorm (FusedGriffinBlock pattern), TTT cumsum detach, ttt_chunk 256→512.
+
+| Config | tok/s | MFU | Best Loss | Memory |
+|--------|-------|-----|-----------|--------|
+| Baseline (compile+AK) | 15,826 | 25.0% | 14.13 | 6.8 GB |
+| **Fused blocks + TTT opt** | **16,335** | **25.8%** | **14.06** | **6.7 GB** |
+| Fused + Muon | 15,346 | 24.2% | **13.63** | **6.5 GB** |
+
+Muon is 6% slower (Newton-Schulz overhead) but converges faster (loss 13.63 vs 14.06 in same budget).
+Profiling: backward 70.8% of time, forward 20.8%. Remaining throughput gap to 20K is fundamental (GQA attention + GatedConv matmuls dominate).
+
 ### bf16 vs fp16 (2026-04-13)
 bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.** The `--bf16` flag exists but should only be used for testing.
 
