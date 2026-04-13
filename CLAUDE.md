@@ -181,7 +181,9 @@ ARGUS (Adaptive Retrieval-Guided Unified System): 6-mechanism novel architecture
 | autokernel only | 9,588 | 15.1% | 14.90 | 7.0 GB |
 
 BabyLM 2 epochs: loss 11.99 (real ≈ 3.00) — competitive with AMADEUS (2.90) and Tempest (2.98).
+GPT-training-small (141M tokens, block=1024): 13,074 tok/s, 20.6% MFU, loss 16.41 (real ≈ 4.10, still converging).
 Key: TTT lr=0.01 (not 0.3) for from-scratch stability. Engram needs project RMSNorm (not nn.RMSNorm).
+Block=1024 drops throughput 15.8K→13.1K and memory 6.8→20.5 GB (TTT cumsum scales with chunks).
 
 ### bf16 vs fp16 (2026-04-13)
 bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.** The `--bf16` flag exists but should only be used for testing.
