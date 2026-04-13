@@ -189,10 +189,9 @@ class ShortConvBlock(nn.Module):
         self.ffn = SwiGLU(d_model, ffn_inner)
 
     def forward(self, x, velocity):
-        # GatedConv with optional fused kernel
+        # GatedConv with optional fused forward kernel
         normed = self.pre_norm(x)
         if _HAS_FUSED_GATED_CONV and normed.dtype == torch.float16:
-            # Fused path: proj → [gate_mul + conv + output_gate] in 2 HIP kernels
             proj_out = self.conv.proj(normed)
             conv_out = fused_gated_conv_fn(
                 proj_out, self.conv.conv_weight, self.conv.conv_bias, x.shape[1]

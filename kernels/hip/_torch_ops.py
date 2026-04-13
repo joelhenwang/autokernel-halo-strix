@@ -551,3 +551,106 @@ def _fused_ple_gate_backward(ctx, grad_output):
 fused_ple_gate_op.register_autograd(
     _fused_ple_gate_backward, setup_context=_fused_ple_gate_setup
 )
+
+
+# ---------------------------------------------------------------------------
+# Fused GatedConv: proj_out → b*h_tilde → conv1d → c*z
+# ---------------------------------------------------------------------------
+
+@torch.library.custom_op("autokernel::fused_gated_conv", mutates_args=())
+def fused_gated_conv_op(
+    proj_out: torch.Tensor, conv_weight: torch.Tensor,
+    conv_bias: torch.Tensor, seq_len: int,
+) -> torch.Tensor:
+    from kernels.hip.fused_gated_conv import kernel_fn
+    return kernel_fn(proj_out, conv_weight, conv_bias, seq_len)
+
+
+@fused_gated_conv_op.register_fake
+def _(proj_out: torch.Tensor, conv_weight: torch.Tensor,
+      conv_bias: torch.Tensor, seq_len: int) -> torch.Tensor:
+    D = proj_out.shape[-1] // 3
+    return proj_out.new_empty(*proj_out.shape[:-1], D)
+
+
+def _fused_gated_conv_setup(ctx, inputs, output):
+    proj_out, conv_weight, conv_bias, seq_len = inputs
+    ctx.save_for_backward(proj_out, conv_weight, conv_bias)
+    ctx.seq_len = seq_len
+
+
+def _fused_gated_conv_backward(ctx, grad_output):
+    proj_out, conv_weight, conv_bias = ctx.saved_tensors
+    seq_len = ctx.seq_len
+
+    # Always use PyTorch fallback — Inductor can fuse these during compile,
+    # and the HIP backward can be added later for eager mode speedup.
+    D = proj_out.shape[-1] // 3
+    orig_shape = proj_out.shape[:-1]
+    M = proj_out.view(-1, 3 * D).shape[0]
+    T = seq_len
+    K = conv_weight.shape[1]
+
+    b = proj_out[..., :D].contiguous()
+    c = proj_out[..., D:2*D].contiguous()
+    h_tilde = proj_out[..., 2*D:].contiguous()
+
+    # Recompute forward intermediates
+    y = b * h_tilde  # (*, D)
+
+    # Recompute conv forward: z = depthwise_causal_conv1d(y)
+    y_flat = y.reshape(M, D)
+    y_t = y_flat.t().unsqueeze(0)  # (1, D, M)
+    z_t = F.conv1d(
+        F.pad(y_t, (K - 1, 0)),  # causal left-pad
+        conv_weight.unsqueeze(1),  # (D, 1, K) depthwise
+        conv_bias, groups=D,
+    )  # (1, D, M)
+    z = z_t.squeeze(0).t().reshape_as(y)  # (*, D)
+
+    # Backward through output gate: output = c * z
+    grad_c = grad_output * z
+    grad_z = grad_output * c
+
+    # Backward through conv: grad_y from grad_z
+    grad_z_flat = grad_z.reshape(M, D)
+    gz_t = grad_z_flat.t().unsqueeze(0)  # (1, D, M)
+    # Conv transpose = conv with flipped kernel + right-pad (anticausal)
+    grad_y_t = F.conv1d(
+        F.pad(gz_t, (0, K - 1)),  # anticausal right-pad
+        conv_weight.flip(-1).unsqueeze(1),  # (D, 1, K) flipped
+        groups=D,
+    )  # (1, D, M)
+    grad_y = grad_y_t.squeeze(0).t().reshape_as(y)  # (*, D)
+
+    # Conv weight gradient: for each (d, j), sum_t y[t-j, d] * grad_z[t, d]
+    # This is a cross-correlation between y and grad_z
+    grad_conv_weight = torch.zeros_like(conv_weight, dtype=torch.float32)
+    for j in range(K):
+        # y shifted by j positions (causal: y[t-j])
+        if j == 0:
+            y_shifted = y_flat
+        else:
+            y_shifted = F.pad(y_flat[:-j], (0, 0, j, 0))  # zero-pad top
+            # Handle batch boundaries
+            for bi in range(M // T):
+                start = bi * T
+                y_shifted[start:start+j] = 0
+        grad_conv_weight[:, j] = (y_shifted.float() * grad_z_flat.float()).sum(dim=0)
+
+    # Conv bias gradient: sum of grad_z over all positions
+    grad_conv_bias = grad_z_flat.float().sum(dim=0)
+
+    # Backward through input gate: y = b * h_tilde
+    grad_b = grad_y * h_tilde
+    grad_h_tilde = grad_y * b
+
+    # Concatenate into grad_proj_out
+    grad_proj_out = torch.cat([grad_b, grad_c, grad_h_tilde], dim=-1)
+
+    return grad_proj_out, grad_conv_weight.to(conv_weight.dtype), grad_conv_bias.to(conv_bias.dtype), None
+
+
+fused_gated_conv_op.register_autograd(
+    _fused_gated_conv_backward, setup_context=_fused_gated_conv_setup
+)
