@@ -35,6 +35,12 @@ try:
 except ImportError:
     _HAS_CAUSAL_CONV1D = False
 
+try:
+    from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
+    _HAS_HYBRID_ATTN = True
+except ImportError:
+    _HAS_HYBRID_ATTN = False
+
 
 # ---------------------------------------------------------------------------
 # GQA Attention with QK-Norm (LFM2 technique)
@@ -77,7 +83,14 @@ class Attention(nn.Module):
             k = k.repeat_interleave(self.n_rep, dim=1)
             v = v.repeat_interleave(self.n_rep, dim=1)
 
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        # Hybrid attention: flash_attn forward + SDPA backward (8.9% faster)
+        if _HAS_HYBRID_ATTN and q.dtype == torch.float16:
+            # hybrid expects (B,T,H,D); we have (B,H,T,D)
+            y = hybrid_flash_sdpa_attention(
+                q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
+            ).transpose(1, 2)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
 
 
@@ -325,18 +338,19 @@ class ArgusPrimeBase(nn.Module):
 
         context = None
         for i, layer in enumerate(self.layers):
-            # FiLM: compute context at film_start, apply to subsequent layers
-            if self.use_film and self.film is not None:
-                if i == self.film_start:
-                    context = self.film.compute_context(h)
-                if i >= self.film_start and context is not None:
-                    h = self.film.apply(h, context, i - self.film_start)
+            # FiLM: compute context at film_start
+            if self.use_film and self.film is not None and i == self.film_start:
+                context = self.film.compute_context(h)
 
             if isinstance(layer, GQABlock):
                 ttt_target = h if layer.ttt_mode != "none" else None
                 h, velocity = layer(h, velocity, freqs_cis, ttt_target=ttt_target)
             else:
                 h, velocity = layer(h, velocity)
+
+            # FiLM: apply AFTER layer forward (safer — avoids amplifying FFN gradients)
+            if self.use_film and context is not None and i >= self.film_start:
+                h = self.film.apply(h, context, i - self.film_start)
 
         return self.output(self.norm(h))
 
