@@ -293,10 +293,12 @@ def main():
     parser.add_argument("--optimize-kernels", action="store_true")
     parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--time-budget", type=float, default=0, help="Minutes, 0=unlimited")
+    parser.add_argument("--backend", default="nccl", choices=["nccl", "gloo"],
+                        help="DDP backend: nccl (RCCL, fast) or gloo (CPU, fallback)")
     args = parser.parse_args()
 
     # --- DDP init ---
-    dist.init_process_group(backend="nccl")  # RCCL on ROCm
+    dist.init_process_group(backend=args.backend)
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     torch.cuda.set_device(0)  # 1 GPU per machine
@@ -343,10 +345,12 @@ def main():
     model = DDP(model, device_ids=[0])
 
     # fp16 gradient compression — halves sync payload (672 MB -> 336 MB)
-    from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
-    model.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
-    if rank == 0:
-        print("Registered fp16 gradient compression hook")
+    # Only available with NCCL backend
+    if args.backend == "nccl":
+        from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
+        model.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
+        if rank == 0:
+            print("Registered fp16 gradient compression hook")
 
     # torch.compile AFTER DDP wrapping
     if args.compile:
