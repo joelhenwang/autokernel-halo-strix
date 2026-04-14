@@ -151,9 +151,9 @@ torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 \
     --resume-from checkpoints/argus_prime_cc/step_36000.pt \
     --dataset datasets/common_crawl_sample.bin \
     --epochs 2 --compile --optimize-kernels --lr 0.0012 \
-    --batch-size 16 --block-size 256 --accum-steps 4 \
+    --batch-size 16 --block-size 256 --accum-steps 16 \
     --checkpoint-dir checkpoints/argus_prime_cc_ddp \
-    --checkpoint-interval 18000 --log-interval 100
+    --checkpoint-interval 9000 --log-interval 100
 ```
 
 **Machine 1 (worker):**
@@ -169,12 +169,13 @@ torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 \
     --resume-from checkpoints/argus_prime_cc/step_36000.pt \
     --dataset datasets/common_crawl_sample.bin \
     --epochs 2 --compile --optimize-kernels --lr 0.0012 \
-    --batch-size 16 --block-size 256 --accum-steps 4 \
+    --batch-size 16 --block-size 256 --accum-steps 16 \
     --checkpoint-dir checkpoints/argus_prime_cc_ddp \
-    --checkpoint-interval 18000 --log-interval 100
+    --checkpoint-interval 9000 --log-interval 100
 ```
 
 Note: each machine uses its own venv and cwd but the same relative paths.
+Note: `--accum-steps 16` is critical — see "Backend Selection" below.
 
 ---
 
@@ -193,26 +194,56 @@ ps aux | grep torchrun | grep -v grep
 
 ---
 
+## Backend Selection: gloo (Recommended)
+
+**Key finding:** On Strix Halo with unified memory, `gloo` matches or beats `nccl` for DDP.
+
+| Backend | accum_steps=4 | accum_steps=16 |
+|---------|--------------|----------------|
+| gloo | ~22K tok/s | **31K tok/s** |
+| nccl | ~22K tok/s | ~31K tok/s |
+
+**Why gloo wins on unified memory:**
+- No GPU↔CPU copy penalty — both access the same LPDDR5X
+- No GPU kernel launch overhead or HIP stream sync barriers
+- Zen 5 CPU (16 cores, AVX-512) handles fp32 reductions efficiently
+- CPU allreduce runs concurrently on separate cores while GPU computes next microstep
+
+**Why accum_steps=16 is critical:**
+- Allreduce happens once per optimizer step, not per microstep (`model.no_sync()` skips non-final steps)
+- At accum_steps=4: sync every ~1.1s, overhead ~56% → 22K tok/s
+- At accum_steps=16: sync every ~4.4s, overhead ~12% → 31K tok/s (93% scaling efficiency)
+- Effective batch goes from 128 to 512, acceptable for 2.4B+ token datasets
+
+**RCCL/NCCL status:** Bundled RCCL in pip PyTorch has `invalid kernel file` for gfx1151. We built RCCL from source with gfx1151 kernels (see `knowledge/rccl_build_gfx1151_guide.md`). It works, but offers no advantage over gloo on unified memory + TB4 TCP. Use gloo.
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
-| `NCCL timeout` | Increase `NCCL_TIMEOUT=3600`. Check firewall: `sudo ufw allow 29500` |
-| `Connection refused` | Machine 0 must start first. Check `MASTER_ADDR=10.77.0.1` is correct |
-| Wrong interface | Verify `NCCL_SOCKET_IFNAME=tb-ddp` matches `ip addr` output |
+| NCCL `invalid kernel file` | Use `--backend gloo` (recommended) or build RCCL from source |
+| `find_unused_parameters` error | Already set in train_ddp.py, needed for TTT + compile |
+| `static_graph=True` crash | Don't use — incompatible with torch.compile on ROCm |
+| `Connection refused` | Machine 0 must start first. Check `MASTER_ADDR=10.77.0.1` |
+| Wrong interface | Verify `NCCL_SOCKET_IFNAME=thunderbol0` matches `ip addr` output |
 | One machine crashes | Kill both, resume from latest checkpoint |
 | TB4 disconnects | Checkpoint every 1/4 epoch. Resume from last checkpoint |
-| Slow sync | Increase `--accum-steps` to 8 to amortize sync further |
+| Low tok/s at accum_steps=4 | Increase to 16 — amortizes allreduce over more compute |
 | Different venv paths | OK — each machine uses its own venv. PyTorch version must match |
+| Checkpoint loads with high loss (~70) | Apply autokernel BEFORE loading checkpoint (fused QKV keys) |
 
 ---
 
-## Performance Reference
+## Performance (Measured)
 
-| Metric | 1 Machine | 2 Machines (DDP) |
-|--------|-----------|-----------------|
-| tok/s | 16,700 | ~29,000-32,000 |
-| Effective batch | 64 | 128 |
-| Gradient sync (fp16) | — | ~33ms per optimizer step |
+| Metric | 1 Machine | 2 Machines (DDP gloo) |
+|--------|-----------|----------------------|
+| tok/s | 16,700 | **31,000** |
+| MFU | 28.5% | 26.8% |
+| Effective batch | 64 | 512 (batch=16 × accum=16 × 2 machines) |
+| Scaling efficiency | — | **93%** (31K / 33.4K theoretical) |
 | Memory per machine | 6.1 GB | 6.1 GB (same) |
-| Common Crawl 2.4B, 2 epochs | ~79 hrs | ~42-45 hrs |
+| TB4 bandwidth (measured) | — | 9 Gbps |
+| Common Crawl 2.4B, 2 epochs | ~79 hrs | **~42 hrs (1.8 days)** |

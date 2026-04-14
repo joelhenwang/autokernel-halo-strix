@@ -258,9 +258,16 @@ Text generation tested: coherent grammar, factual patterns, EOS works. Quality l
 
 Loss progression: initial spike to 22.97 (distribution shift), recovered within ~30 steps, epoch 2 drop 14.73→13.91 (second pass benefit). Generation quality improved: stronger factual grounding (WWII history, military specifics), encyclopedic Wikipedia style, longer coherent paragraphs. Checkpoint: `checkpoints/argus_prime_wikitext103/step_7200.pt`
 
-**Dolma 10B projection:** 1 epoch = 6.9 days (1 machine) or ~4 days (2 machines DDP over TB4).
-2-machine DDP: ~1.7-1.8× speedup, 168M model ideal for TB4 bandwidth (84ms fp16 gradient sync vs 273ms step).
-See `knowledge/ddp_dual_strix_halo_tb4.md` for full implementation guide.
+**2-Machine DDP (Measured, 2× Strix Halo via TB4):**
+- **31K tok/s** (1.85× speedup, 93% scaling efficiency) using `gloo` backend + `accum_steps=16`
+- TB4 measured at 9 Gbps (3× above spec). gloo matches nccl on unified memory (no GPU↔CPU copy penalty).
+- RCCL/NCCL has `invalid kernel file` for gfx1151. Built from source with patches but gloo is preferred.
+- `find_unused_parameters=True` required (TTT + compile). `static_graph=True` crashes.
+- Autokernel must be applied BEFORE checkpoint load (fused QKV keys).
+- Common Crawl 2.4B, 2 epochs: ~42 hours (vs 79 single machine).
+- See `knowledge/ddp_setup_guide.md` for full setup + `knowledge/rccl_build_gfx1151_guide.md` for RCCL build.
+
+**Dolma 10B projection:** 1 epoch = 6.9 days (1 machine) or ~3.7 days (2 machines DDP over TB4).
 
 ### bf16 vs fp16 (2026-04-13)
 bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.** The `--bf16` flag exists but should only be used for testing.
