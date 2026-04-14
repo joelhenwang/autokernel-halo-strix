@@ -2,108 +2,98 @@
 
 Step-by-step guide to connect two Ryzen AI MAX+ 395 machines for distributed training of ARGUS-PRIME.
 
-**Expected result:** ~29K tok/s (vs 16.7K single machine), ~1.7-1.8x speedup.
+**Expected result:** ~29-32K tok/s (vs 16.7K single machine), ~1.85-1.9x speedup.
+
+---
+
+## Our Setup
+
+```
+┌──────────────────────────┐     Thunderbolt 4      ┌──────────────────────────┐
+│  Machine 0 (master)       │◄──── 9 Gbps ─────►│  Machine 1 (worker)       │
+│  Ryzen AI MAX+ 395        │     (measured)        │  Ryzen AI MAX+ 395        │
+│  Radeon 8060S (40CU)      │                       │  Radeon 8060S (40CU)      │
+│  128 GB LPDDR5X           │                       │  128 GB LPDDR5X           │
+│  IP: 10.77.0.1            │                       │  IP: 10.77.0.2            │
+│  Interface: tb-ddp        │                       │  Interface: tb-ddp        │
+│                            │                       │                            │
+│  Venv: ~/Desktop/ai_lab/  │                       │  Venv: ~/Desktop/          │
+│    autokernel-halo-strix/  │                       │    comfyui-rocm7.12/.venv/ │
+│    .venv/                  │                       │                            │
+│  Codebase: ~/Desktop/     │                       │  Codebase: ~/Desktop/      │
+│    ai_lab/autokernel-     │                       │    comfyui-rocm7.12/       │
+│    halo-strix/            │                       │    autokernel-halo-strix/  │
+└──────────────────────────┘                       └──────────────────────────┘
+```
+
+**TB4 bandwidth measured:** 9 Gbps (iperf3, 10 GB transfer) — 3x better than estimated.
+
+| Metric | Value |
+|--------|-------|
+| Gradient sync (fp16 compressed, 336 MB) | ~33ms |
+| Sync overhead (accum_steps=4) | ~3-6% |
+| Effective speedup | ~1.85-1.9x |
 
 ---
 
 ## Step 1: Physical Connection
 
-Plug a **Thunderbolt 4 cable** between the two machines. TB4 creates a direct network bridge (32 Gbps / 4 GB/s).
+Plug a Thunderbolt 4 cable between the two machines.
 
 ---
 
-## Step 2: Network — Find Each Other
+## Step 2: Network
 
-After plugging in the TB4 cable, figure out the network interface and IPs.
+TB4 interface configured as `tb-ddp` with static IPs on a /30 subnet:
 
-**On both machines:**
 ```bash
-ip addr | grep -E "enp|thunderbolt|inet 192|inet 10"
+# Machine 0:
+sudo ip addr add 10.77.0.1/30 dev tb-ddp
+sudo ip link set tb-ddp up
+
+# Machine 1:
+sudo ip addr add 10.77.0.2/30 dev tb-ddp
+sudo ip link set tb-ddp up
 ```
 
-You're looking for:
-- The **TB4 network interface name** (something like `enp6s0`, `thunderbolt0`, or `enpXsY`)
-- The **IP address** of each machine on that interface
-
-If TB4 creates a direct link without DHCP, manually assign IPs:
-```bash
-# Machine 0 (master):
-sudo ip addr add 10.77.0.1/30 dev <tb4_interface>
-sudo ip link set <tb4_interface> up
-
-# Machine 1 (worker):
-sudo ip addr add 10.77.0.2/30 dev <tb4_interface>
-sudo ip link set <tb4_interface> up
-```
-
-Verify connectivity:
-```bash
-# From Machine 0:
-ping 10.77.0.1    # or whatever Machine 1's IP is
-
-# From Machine 1:
-ping 10.77.0.2
-```
-
-**Record these values — you'll need them later:**
-- Machine 0 IP: `10.77.0.1/30` (e.g., 192.168.1.140 or 10.0.0.1)
-- Machine 1 IP: `10.77.0.2/30` (e.g., 192.168.1.XXX or 10.0.0.2)
-- TB4 interface name: `tb-ddp` (e.g., enp6s0)
+Verify: `ping 10.77.0.2` from Machine 0, `ping 10.77.0.1` from Machine 1.
 
 ---
 
 ## Step 3: Passwordless SSH
 
-`torchrun` needs to SSH between machines without a password prompt.
-
-**From Machine 0:**
 ```bash
-ssh-copy-id joelwang-ai-2@<machine_1_ip>
-```
+# From Machine 0:
+ssh-copy-id joelwang-ai-2@10.77.0.2
 
-**Verify it works without a password:**
-```bash
-ssh joelwang-ai-2@<machine_1_ip> "hostname && echo OK"
-```
-
-**From Machine 1 (also needed for bidirectional torchrun):**
-```bash
-ssh-copy-id joelwang-ai-2@<machine_0_ip>
+# From Machine 1:
+ssh-copy-id joelwang-ai-2@10.77.0.1
 ```
 
 ---
 
-## Step 4: Sync Environment on Machine 1
+## Step 4: Sync Files to Machine 1
 
-Machine 1 needs an identical codebase, venv, and dataset.
+Machine 1 does NOT need a full copy of Machine 0's codebase. It needs:
+- The model code (`models/argus_prime.py` + dependencies `models/amadeus.py`, `models/argus.py`)
+- The training script (`scripts/train_ddp.py`)
+- The env script (`scripts/ddp_env.sh`)
+- The dataset (`.bin` file)
+- The checkpoint (if resuming)
+- Matching PyTorch version (both have same version confirmed)
 
-### 4a: Sync codebase
 ```bash
-rsync -avz ~/Desktop/ai_lab/autokernel-halo-strix/ \
-    joelwang-ai-2@<machine_1_ip>:~/Desktop/ai_lab/autokernel-halo-strix/
-```
+# From Machine 0 — copy scripts
+scp scripts/ddp_env.sh scripts/train_ddp.py \
+    joelwang-ai-2@10.77.0.2:~/Desktop/comfyui-rocm7.12/autokernel-halo-strix/scripts/
 
-### 4b: Verify Python environment matches
-```bash
-ssh joelwang-ai-2@<machine_1_ip> \
-    "source ~/Desktop/ai_lab/autokernel-halo-strix/.venv/bin/activate && \
-     python3 -c 'import torch; print(torch.__version__, torch.cuda.is_available())'"
-```
+# Copy dataset (4.7 GB, ~4 sec over TB4)
+rsync -avP datasets/common_crawl_sample.bin \
+    joelwang-ai-2@10.77.0.2:~/Desktop/comfyui-rocm7.12/autokernel-halo-strix/datasets/
 
-Both machines must show the same PyTorch version and `True` for CUDA.
-
-### 4c: Copy the dataset
-```bash
-rsync -avP ~/Desktop/ai_lab/autokernel-halo-strix/datasets/common_crawl_sample.bin \
-    joelwang-ai-2@<machine_1_ip>:~/Desktop/ai_lab/autokernel-halo-strix/datasets/
-```
-
-This is 4.7 GB — takes ~2 seconds over TB4.
-
-### 4d: Copy the checkpoint (if resuming)
-```bash
-rsync -avP ~/Desktop/ai_lab/autokernel-halo-strix/checkpoints/argus_prime_cc/step_36000.pt \
-    joelwang-ai-2@<machine_1_ip>:~/Desktop/ai_lab/autokernel-halo-strix/checkpoints/argus_prime_cc/
+# Copy checkpoint (if resuming)
+rsync -avP checkpoints/argus_prime_cc/step_36000.pt \
+    joelwang-ai-2@10.77.0.2:~/Desktop/comfyui-rocm7.12/autokernel-halo-strix/checkpoints/argus_prime_cc/
 ```
 
 ---
@@ -111,101 +101,92 @@ rsync -avP ~/Desktop/ai_lab/autokernel-halo-strix/checkpoints/argus_prime_cc/ste
 ## Step 5: Test Bandwidth
 
 ```bash
-# On Machine 0: start iperf server
+# Machine 0:
 iperf3 -s
 
-# On Machine 1 (separate terminal):
-iperf3 -c <machine_0_ip>
+# Machine 1:
+iperf3 -c 10.77.0.1
+# Result: ~9 Gbps
 ```
-
-**Expected:** ~3-4 Gbps over TB4. If significantly lower, check the cable and interface.
-
-Stop iperf3 after testing (Ctrl+C on Machine 0).
 
 ---
 
-## Step 6: RCCL/NCCL Environment Variables
+## Step 6: RCCL Environment
 
-ROCm uses RCCL (ROCm Collective Communication Library) as the NCCL backend. Over TB4 (no RDMA), it falls back to TCP sockets.
-
-Create a file `~/ddp_env.sh` on **both machines**:
+The `scripts/ddp_env.sh` file is already configured:
 
 ```bash
-cat > ~/ddp_env.sh << 'EOF'
-export NCCL_SOCKET_IFNAME=<tb4_interface>   # e.g., enp6s0
-export NCCL_P2P_DISABLE=1                   # no GPU-direct (unified memory, not discrete)
-export NCCL_IB_DISABLE=1                    # no InfiniBand
-export NCCL_SOCKET_NTHREADS=4               # more threads for TCP
-export NCCL_NSOCKS_PERTHREAD=4              # more sockets per thread
-export NCCL_TIMEOUT=1800                    # 30 min timeout (default 30s is too short)
-export MASTER_ADDR=<machine_0_ip>           # master machine IP
-export MASTER_PORT=29500                    # any free port
-EOF
+export NCCL_SOCKET_IFNAME=tb-ddp
+export NCCL_P2P_DISABLE=1
+export NCCL_IB_DISABLE=1
+export NCCL_SOCKET_NTHREADS=4
+export NCCL_NSOCKS_PERTHREAD=4
+export NCCL_TIMEOUT=1800
+export MASTER_ADDR=10.77.0.1
+export MASTER_PORT=29500
 ```
 
-**Replace** `<tb4_interface>` and `<machine_0_ip>` with your actual values.
+Source it on both machines before launching: `source scripts/ddp_env.sh`
+
+For first-run debugging, add `export NCCL_DEBUG=INFO` to see RCCL ring formation logs. Remove after confirming it works.
 
 ---
 
 ## Step 7: Launch DDP Training
 
-The DDP training script (`scripts/train_ddp.py`) needs to be created first — tell Claude the IPs and interface name from Step 2, and it will generate the script.
+Start Machine 0 first, then Machine 1 within ~30 seconds.
 
-**Launch pattern (run simultaneously on both machines):**
-
+**Machine 0 (master):**
 ```bash
-# Machine 0 (master):
-source ~/ddp_env.sh
+source ~/Desktop/ai_lab/autokernel-halo-strix/scripts/ddp_env.sh
 source ~/Desktop/ai_lab/autokernel-halo-strix/.venv/bin/activate
 cd ~/Desktop/ai_lab/autokernel-halo-strix
 
 torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 \
-    --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
+    --master_addr=10.77.0.1 --master_port=29500 \
     scripts/train_ddp.py \
     --model models/argus_prime.py --class-name ArgusPrime \
     --resume-from checkpoints/argus_prime_cc/step_36000.pt \
     --dataset datasets/common_crawl_sample.bin \
-    --epochs 2 --compile --optimize-kernels --muon --lr 0.0012 \
+    --epochs 2 --compile --optimize-kernels --lr 0.0012 \
     --batch-size 16 --block-size 256 --accum-steps 4 \
     --checkpoint-dir checkpoints/argus_prime_cc_ddp \
-    --checkpoint-interval 18000
+    --checkpoint-interval 18000 --log-interval 100
 ```
 
+**Machine 1 (worker):**
 ```bash
-# Machine 1 (worker):
-source ~/ddp_env.sh
-source ~/Desktop/ai_lab/autokernel-halo-strix/.venv/bin/activate
-cd ~/Desktop/ai_lab/autokernel-halo-strix
+source ~/Desktop/comfyui-rocm7.12/autokernel-halo-strix/scripts/ddp_env.sh
+source ~/Desktop/comfyui-rocm7.12/.venv/bin/activate
+cd ~/Desktop/comfyui-rocm7.12/autokernel-halo-strix
 
 torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 \
-    --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
+    --master_addr=10.77.0.1 --master_port=29500 \
     scripts/train_ddp.py \
     --model models/argus_prime.py --class-name ArgusPrime \
     --resume-from checkpoints/argus_prime_cc/step_36000.pt \
     --dataset datasets/common_crawl_sample.bin \
-    --epochs 2 --compile --optimize-kernels --muon --lr 0.0012 \
+    --epochs 2 --compile --optimize-kernels --lr 0.0012 \
     --batch-size 16 --block-size 256 --accum-steps 4 \
     --checkpoint-dir checkpoints/argus_prime_cc_ddp \
-    --checkpoint-interval 18000
+    --checkpoint-interval 18000 --log-interval 100
 ```
 
-**Note:** `--node_rank=0` on master, `--node_rank=1` on worker. Everything else is identical.
+Note: each machine uses its own venv and cwd but the same relative paths.
 
 ---
 
 ## Step 8: Monitor Training
 
-**Check progress (from either machine):**
 ```bash
+# From Machine 0:
 tail -5 checkpoints/argus_prime_cc_ddp/train_log.jsonl
-```
 
-**Check RCCL communication (first run only):**
-Add `export NCCL_DEBUG=INFO` to `ddp_env.sh` temporarily. Look for `NCCL INFO` lines showing the allreduce ring formation. Remove after confirming it works (adds log noise).
+# Check GPU utilization on each machine:
+watch -n 1 rocm-smi
 
-**Check GPU utilization:**
-```bash
-watch -n 1 rocm-smi    # on each machine
+# Check if still running:
+ps aux | grep torchrun | grep -v grep
 ```
 
 ---
@@ -215,11 +196,12 @@ watch -n 1 rocm-smi    # on each machine
 | Problem | Fix |
 |---------|-----|
 | `NCCL timeout` | Increase `NCCL_TIMEOUT=3600`. Check firewall: `sudo ufw allow 29500` |
-| `Connection refused` | Machine 0 must start first (or within ~30s). Check MASTER_ADDR is correct |
-| Wrong interface | `NCCL_SOCKET_IFNAME` must match the TB4 interface exactly. Check with `ip addr` |
-| One machine crashes | Kill both, resume from latest checkpoint on single machine |
-| TB4 disconnects mid-training | Checkpoint every 1/4 epoch. Resume from last checkpoint |
-| Slow sync | Increase `--accum-steps` to 8 (amortizes sync further, but larger effective batch) |
+| `Connection refused` | Machine 0 must start first. Check `MASTER_ADDR=10.77.0.1` is correct |
+| Wrong interface | Verify `NCCL_SOCKET_IFNAME=tb-ddp` matches `ip addr` output |
+| One machine crashes | Kill both, resume from latest checkpoint |
+| TB4 disconnects | Checkpoint every 1/4 epoch. Resume from last checkpoint |
+| Slow sync | Increase `--accum-steps` to 8 to amortize sync further |
+| Different venv paths | OK — each machine uses its own venv. PyTorch version must match |
 
 ---
 
@@ -227,8 +209,8 @@ watch -n 1 rocm-smi    # on each machine
 
 | Metric | 1 Machine | 2 Machines (DDP) |
 |--------|-----------|-----------------|
-| tok/s | 16,700 | ~29,000 |
+| tok/s | 16,700 | ~29,000-32,000 |
 | Effective batch | 64 | 128 |
-| Gradient sync | — | ~84ms (fp16 compressed) per optimizer step |
-| Memory per machine | 6.1 GB | 6.1 GB (same — full model copy) |
-| Common Crawl 2.4B, 2 epochs | ~79 hrs | ~45 hrs |
+| Gradient sync (fp16) | — | ~33ms per optimizer step |
+| Memory per machine | 6.1 GB | 6.1 GB (same) |
+| Common Crawl 2.4B, 2 epochs | ~79 hrs | ~42-45 hrs |
