@@ -341,8 +341,8 @@ def main():
             if rank == 0:
                 print(f"autokernel skipped: {e}")
 
-    # Wrap in DDP FIRST (needs to see raw parameters before compile)
-    model = DDP(model, device_ids=[0])
+    # Wrap in DDP (find_unused_parameters needed for TTT conditional paths + compile)
+    model = DDP(model, device_ids=[0], find_unused_parameters=True)
 
     # fp16 gradient compression — halves sync payload (672 MB -> 336 MB)
     # Only available with NCCL backend
