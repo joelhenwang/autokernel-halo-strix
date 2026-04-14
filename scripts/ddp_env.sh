@@ -3,6 +3,7 @@
 # Source this on BOTH machines before running torchrun:
 #   source scripts/ddp_env.sh
 
+export HSA_OVERRIDE_GFX_VERSION=11.5.1
 export NCCL_SOCKET_IFNAME=tb-ddp
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1

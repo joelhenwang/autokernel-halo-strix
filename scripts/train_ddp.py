@@ -339,14 +339,7 @@ def main():
             if rank == 0:
                 print(f"autokernel skipped: {e}")
 
-    # torch.compile
-    if args.compile:
-        compile_mode = "default" if args.optimize_kernels else "reduce-overhead"
-        if rank == 0:
-            print(f"Compiling model ({compile_mode})...")
-        model = torch.compile(model, mode=compile_mode)
-
-    # Wrap in DDP
+    # Wrap in DDP FIRST (needs to see raw parameters before compile)
     model = DDP(model, device_ids=[0])
 
     # fp16 gradient compression — halves sync payload (672 MB -> 336 MB)
@@ -354,6 +347,13 @@ def main():
     model.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
     if rank == 0:
         print("Registered fp16 gradient compression hook")
+
+    # torch.compile AFTER DDP wrapping
+    if args.compile:
+        compile_mode = "default" if args.optimize_kernels else "reduce-overhead"
+        if rank == 0:
+            print(f"Compiling model ({compile_mode})...")
+        model = torch.compile(model, mode=compile_mode)
 
     # --- Data ---
     dataset = PreTokenizedDataset(args.dataset, block_size=args.block_size)
