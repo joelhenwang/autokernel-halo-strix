@@ -29,6 +29,7 @@ import math
 import os
 import sys
 import time
+from contextlib import nullcontext
 
 import numpy as np
 import torch
@@ -416,16 +417,23 @@ def main():
                 input_ids = input_ids.to(device)
                 targets = targets.to(device)
 
-                with torch.amp.autocast("cuda", dtype=amp_dtype):
-                    output = model(input_ids, targets=targets)
-                    if isinstance(output, torch.Tensor) and output.dim() == 0:
-                        loss = output / args.accum_steps
-                    else:
-                        loss = ce_loss_fn(
-                            output.view(-1, output.size(-1)), targets.view(-1)
-                        ) / args.accum_steps
+                # Skip gradient sync on all microsteps except the last one.
+                # Without this, DDP allreduces on EVERY backward() call,
+                # which with gloo = 610ms * accum_steps of wasted sync.
+                is_last_microstep = (batch_idx + 1) % args.accum_steps == 0
+                sync_context = model.no_sync if not is_last_microstep else nullcontext
 
-                scaler.scale(loss).backward()
+                with sync_context():
+                    with torch.amp.autocast("cuda", dtype=amp_dtype):
+                        output = model(input_ids, targets=targets)
+                        if isinstance(output, torch.Tensor) and output.dim() == 0:
+                            loss = output / args.accum_steps
+                        else:
+                            loss = ce_loss_fn(
+                                output.view(-1, output.size(-1)), targets.view(-1)
+                            ) / args.accum_steps
+
+                    scaler.scale(loss).backward()
 
                 tokens_in_batch = input_ids.numel()
                 total_tokens += tokens_in_batch
