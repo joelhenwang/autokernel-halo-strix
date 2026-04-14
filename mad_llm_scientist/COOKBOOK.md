@@ -664,6 +664,18 @@ This is THE lesson from the Ternary Reflex failure. Small scale (d=128, vocab=10
 
 **Training strategies** (Self-Curriculum, Lottery Forge) apply ON TOP of any Tier 1-3 architecture. Build the architecture first, then layer the training strategy.
 
+### Priority Fast-Track (2026-04-13)
+
+Based on training results from 9 architectures + LAZARUS TTT experiments:
+
+| Priority | Architecture | Why | Reuses From |
+|----------|-------------|-----|-------------|
+| **P0** | **NEXUS** | Compile-optimized Griffin + TTT + FiLM + Momentum. Targets 20K tok/s + val < 2.90. | Tempest (chassis), AMADEUS (FiLM), LAZARUS (TTT) |
+| P1 | **Tempest+FiLM** | Ablation: does FiLM alone close quality gap? ~22K tok/s. | Tempest + AMADEUS FiLM |
+| P2 | **LAZARUS-G** | Griffin-backbone LAZARUS with compile optimization. | Tempest + LAZARUS |
+
+NEXUS is the convergence of everything we've learned: Griffin's compile speed (22K tok/s), AMADEUS's FiLM quality (val 2.90), LAZARUS's adaptive weights (mechanically proven), and TEMPEST's momentum (free). See `plans/NEXUS.md`.
+
 ---
 
 ## Section 6: Ternary Reflex Addendum

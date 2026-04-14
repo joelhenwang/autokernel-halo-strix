@@ -256,12 +256,15 @@ The backward pass is 53% of training step time. Key findings from research:
 See `docs/possible_techniques_bwd_improv.md` for full survey.
 
 ## Constraints
-- Model < 250M parameters
+- Model < **175M parameters** (scaled from LFM2-350M; matches our ~170M test harness)
 - Training budget: **45 minutes** (120-min timeout)
 - Tokenizer: tiktoken GPT2 (vocab_size=50257)
 - All scans MUST use chunked linear recurrence
 - All plans MUST include "Hardware Optimization Notes"
 - **EOS tokens:** `<|endoftext|>` (token 50256) inserted between documents in `halo_training/data.py`. Critical for document boundary learning.
+
+### LFM2 Architecture Reference (target to beat)
+LFM2-350M: d=1024, ffn=4608 (4.5×), 16 layers (10 ShortConv + 6 GQA), 16Q/8KV heads, hd=64, QK-Norm, RoPE, kernel=3. At 175M scale: d=768, ffn=2816 (3.7×), same layer structure.
 
 ## Skills
 
