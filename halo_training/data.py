@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 
@@ -11,7 +12,8 @@ from torch.utils.data import Dataset, DataLoader
 class BabyLMDataset(Dataset):
     """BabyLM dataset: tokenized text chunks for language modeling.
 
-    Supports parquet files (HuggingFace format) and plain text files.
+    Supports pre-tokenized .bin files, parquet (HuggingFace), .jsonl.zst,
+    and plain text files.
     """
 
     def __init__(
@@ -23,10 +25,24 @@ class BabyLMDataset(Dataset):
         self.block_size = block_size
 
         root = Path(root)
+
+        # Support .bin files directly (pre-tokenized with scripts/pretokenize.py)
+        if root.suffix == ".bin" and root.is_file():
+            import tiktoken
+            enc = tiktoken.get_encoding(tokenizer_name)
+            self.vocab_size = enc.n_vocab
+            raw = np.fromfile(str(root), dtype=np.uint16)
+            tokens = raw.astype(np.int64)
+            n_tokens = len(tokens)
+            n_chunks = n_tokens // (block_size + 1)
+            self.tokens = torch.from_numpy(tokens[: n_chunks * (block_size + 1)].copy()).view(n_chunks, block_size + 1)
+            print(f"BabyLMDataset: {n_tokens:,} tokens (pre-tokenized .bin) -> {n_chunks:,} chunks of {block_size}")
+            return
+
         if not root.exists():
             raise FileNotFoundError(
                 f"Dataset not found at {root}. "
-                f"Expected parquet or text files in this directory."
+                f"Expected .bin, parquet, .jsonl.zst, or text files."
             )
 
         # Load pre-tokenized or raw text
@@ -90,6 +106,24 @@ class BabyLMDataset(Dataset):
                         all_tokens.append(50256)  # EOS between documents
                     return all_tokens, None
 
+        # Zstandard-compressed JSONL files (recursive — supports nested category dirs)
+        zst_files = sorted(root.rglob("*.jsonl.zst"))
+        if zst_files:
+            import zstandard, json, io
+            texts = []
+            for f in zst_files:
+                dctx = zstandard.ZstdDecompressor()
+                with open(f, "rb") as fh:
+                    reader = dctx.stream_reader(fh)
+                    text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+                    for line in text_reader:
+                        row = json.loads(line)
+                        text = row.get("text", "")
+                        if text.strip():
+                            texts.append(text)
+            if texts:
+                return None, texts
+
         # Plain text files
         texts = []
         for ext in ("*.train", "*.txt"):
@@ -98,7 +132,7 @@ class BabyLMDataset(Dataset):
 
         if not texts:
             raise FileNotFoundError(
-                f"No parquet, .train, or .txt files found in {root}"
+                f"No parquet, .jsonl.zst, .train, or .txt files found in {root}"
             )
         return None, texts
 

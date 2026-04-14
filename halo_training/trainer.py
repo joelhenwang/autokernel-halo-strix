@@ -31,6 +31,7 @@ def train(
     max_grad_norm: float = 1.0,
     label_smoothing: float = 0.0,
     checkpoint_dir: Optional[str] = None,
+    checkpoint_interval: Optional[int] = None,
     log_interval: int = 10,
     num_workers: int = 4,
     mode: str = "auto",
@@ -59,6 +60,7 @@ def train(
         max_grad_norm: Gradient clipping max norm.
         label_smoothing: Label smoothing for cross-entropy loss.
         checkpoint_dir: Directory for saving checkpoints.
+        checkpoint_interval: Save checkpoint every N optimizer steps (default: log_interval * 10).
         log_interval: Log every N steps.
         num_workers: DataLoader workers.
         use_bf16: Use bfloat16 instead of float16 for mixed precision.
@@ -329,7 +331,8 @@ def train(
                         best_loss = min(best_loss, avg_loss)
 
                     # Checkpoint
-                    if checkpoint_dir and global_step % (log_interval * 10) == 0:
+                    ckpt_every = checkpoint_interval or (log_interval * 10)
+                    if checkpoint_dir and global_step % ckpt_every == 0:
                         _save_checkpoint(model, optimizer, global_step, checkpoint_dir, total_tokens)
 
             else:

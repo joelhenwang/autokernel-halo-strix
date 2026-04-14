@@ -9,6 +9,13 @@ AutoKernel is an autonomous AI agent system for GPU kernel optimization and mode
 ## Commands
 ### Note: If the Halo Strix machine is the remote machine, use `run_remote.sh` to run commands on the remote machine with the Halo Strix hardware. Quickly go through the script to understand the workspace path and venv in the remote machine.
 
+### Monitoring long training runs
+Do NOT rely on SSH stdout for monitoring — SSH sessions timeout on long runs (exit code 255). Instead, check progress by tailing the training log on the remote:
+```bash
+bash run_remote.sh "tail -5 checkpoints/<run_name>/train_log.jsonl"
+bash run_remote.sh "ps aux | grep python3 | grep -v grep"  # check if still running
+```
+
 ```bash
 # Setup (uv package manager, Python 3.10+, PyTorch 2.10.0+rocm7.12)
 uv sync                          # core deps
