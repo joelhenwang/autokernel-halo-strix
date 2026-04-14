@@ -37,6 +37,7 @@ def train(
     checkpoint_every: int = 2,
     use_muon: bool = False,
     use_bf16: bool = False,
+    resume_from: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Train a model using Mode A (direct) or Mode B (layer-streaming).
 
@@ -62,6 +63,8 @@ def train(
         num_workers: DataLoader workers.
         use_bf16: Use bfloat16 instead of float16 for mixed precision.
                   bf16 has same exponent range as fp32 — no GradScaler needed.
+        resume_from: Path to checkpoint for continued pre-training (Approach B).
+                     Loads model weights only — optimizer and LR schedule are fresh.
 
     Returns:
         Dict with training stats (final_loss, tok_s, steps, etc.)
@@ -80,6 +83,24 @@ def train(
 
     # --- Setup model ---
     model = model.to(device)
+
+    # --- Continued pre-training: load weights from checkpoint (fresh optimizer) ---
+    prev_tokens = 0
+    if resume_from:
+        print(f"Loading checkpoint for continued pre-training: {resume_from}")
+        ckpt = torch.load(resume_from, map_location=device, weights_only=False)
+        state_dict = ckpt.get("model_state_dict", ckpt)
+        try:
+            model.load_state_dict(state_dict)
+        except RuntimeError:
+            model.load_state_dict(state_dict, strict=False)
+            print("  Warning: loaded with strict=False (some keys may not match)")
+        prev_step = ckpt.get("step", 0) if isinstance(ckpt, dict) else 0
+        prev_tokens = ckpt.get("total_tokens", 0) if isinstance(ckpt, dict) else 0
+        print(f"  Resumed from step {prev_step} ({prev_tokens:,} prev tokens)")
+        print(f"  Fresh optimizer + LR schedule (Approach B warm restart)")
+        del ckpt, state_dict
+
     model.train()
 
     if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
@@ -309,7 +330,7 @@ def train(
 
                     # Checkpoint
                     if checkpoint_dir and global_step % (log_interval * 10) == 0:
-                        _save_checkpoint(model, optimizer, global_step, checkpoint_dir)
+                        _save_checkpoint(model, optimizer, global_step, checkpoint_dir, total_tokens)
 
             else:
                 continue
@@ -358,7 +379,7 @@ def _grad_norm(model: nn.Module) -> float:
 
 def _save_checkpoint(
     model: nn.Module, optimizer: torch.optim.Optimizer,
-    step: int, checkpoint_dir: str,
+    step: int, checkpoint_dir: str, total_tokens: int = 0,
 ):
     """Save model and optimizer state."""
     import os
@@ -369,5 +390,6 @@ def _save_checkpoint(
         "step": step,
         "model_state_dict": raw_model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
+        "total_tokens": total_tokens,
     }, path)
     print(f"Checkpoint saved: {path}")

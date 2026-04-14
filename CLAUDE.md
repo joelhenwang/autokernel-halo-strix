@@ -32,6 +32,7 @@ python -m halo_training --model models/llama_7b.py --class-name LlamaModel --com
 python -m halo_training --model models/llama_7b.py --class-name LlamaModel --compile --optimize-kernels --muon  # Muon optimizer
 python -m halo_training --model models/llama_7b.py --class-name LlamaModel --compile --optimize-kernels --bf16  # bfloat16 training
 python -m halo_training --model models/llama_7b.py --class-name LlamaModel --smoke  # 200-step validation
+python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --resume-from checkpoints/argus_prime_gpt/step_12000.pt --dataset datasets/wikitext-103-raw-train --compile --optimize-kernels --muon  # continued pre-training
 ```
 
 ## Workflow
@@ -234,6 +235,21 @@ Evolution from ARGUS: strip Engram/MatFormer, align to LFM2's 10:6 ShortConv/GQA
 **GPT-training-small 2 epochs (Muon, lr=0.0012):** 16,745 tok/s, 222.5M tokens, 13,578 steps, 3.7 hours.
 Best loss: **16.03** (real ≈ 4.01). Checkpoint: `checkpoints/argus_prime_gpt/step_12000.pt`
 Text generation tested: coherent grammar, factual patterns, EOS works. Quality limited by 168M params + 222M tokens.
+
+**Continued Pre-Training on WikiText-103 (Approach B warm restart):**
+`--resume-from` loads model weights only, fresh Muon optimizer + cosine LR schedule. Dataset: Salesforce/wikitext `wikitext-103-raw-v1` train split (~60M tokens, from HuggingFace `refs/convert/parquet` branch).
+
+| Metric | Value |
+|--------|-------|
+| tok/s | 16,707 |
+| MFU | 28.4% |
+| Best loss | **13.20** (real ≈ 3.30) |
+| Steps | 7,280 |
+| Tokens | 119.3M (60M × 2 epochs) |
+| Time | 2 hours |
+| Memory | 6.1 GB |
+
+Loss progression: initial spike to 22.97 (distribution shift), recovered within ~30 steps, epoch 2 drop 14.73→13.91 (second pass benefit). Generation quality improved: stronger factual grounding (WWII history, military specifics), encyclopedic Wikipedia style, longer coherent paragraphs. Checkpoint: `checkpoints/argus_prime_wikitext103/step_7200.pt`
 
 **Dolma 10B projection:** 1 epoch = 6.9 days (1 machine) or ~4 days (2 machines DDP over TB4).
 2-machine DDP: ~1.7-1.8× speedup, 168M model ideal for TB4 bandwidth (84ms fp16 gradient sync vs 273ms step).

@@ -148,6 +148,55 @@ Tested with `scripts/generate_text.py` (top-k=40, top-p=0.9, temp=0.7-0.9):
 - Weaknesses: repetitive patterns, hallucinated details, loops after ~50-100 tokens
 - Quality consistent with 168M params trained on 222M tokens
 
+## Continued Pre-Training on WikiText-103 (2026-04-14)
+
+**Approach B (warm restart):** Load model weights from GPT-training-small checkpoint, fresh Muon optimizer + cosine LR schedule. No optimizer state carried over — lets the optimizer adapt to the new data distribution.
+
+**Dataset:** Salesforce/wikitext `wikitext-103-raw-v1` train split, ~60M tokens (Wikipedia articles). Downloaded from HuggingFace `refs/convert/parquet` branch as parquet with `text` column.
+
+Config: B0, d_conv=512, lr=0.0012, Muon, block=256, batch=16×4, compile+autokernel.
+Resume from: `checkpoints/argus_prime_gpt/step_12000.pt` (GPT-training-small, 222M tokens).
+
+| Metric | Value |
+|--------|-------|
+| tok/s | 16,707 |
+| MFU | 28.4% |
+| Best loss | 13.20 (real ≈ 3.30) |
+| Steps | 7,280 |
+| Tokens | 119.3M (60M × 2 epochs) |
+| Time | 2 hours |
+| Memory | 6.1 GB |
+
+### Loss Progression
+
+| Phase | Steps | Loss | Notes |
+|-------|-------|------|-------|
+| Initial spike | 1-10 | 22.97 | Distribution shift (GPT-training → Wikipedia) |
+| Recovery | 10-50 | 16.25 | Pre-trained weights adapt quickly |
+| Epoch 1 midpoint | ~1000 | 15.66 | Steady learning |
+| End of epoch 1 | ~3640 | 14.73 | — |
+| Epoch 2 start | ~3660 | 13.91 | Sharp drop — second pass benefit |
+| End of epoch 2 | 7280 | 13.47 | Best=13.20 at step 6750 |
+
+### Text Generation (step_7200 checkpoint)
+
+Tested with `scripts/generate_text.py` (top-k=40, top-p=0.9, temp=0.7-0.8):
+- **Stronger factual grounding** than GPT-training-small checkpoint — WWII history, military specifics (USAAF, Guadalcanal, Solomon Islands, USS Missouri)
+- **Encyclopedic Wikipedia style** — longer, more connected paragraphs
+- **Better coherence** — fewer random topic jumps, stays on subject
+- **Clean EOS termination** — all samples end naturally
+- **Remaining weaknesses:** factual hallucination (expected at 168M), some circular phrasing
+
+### Implementation Notes
+
+- `--resume-from` flag added to CLI: loads `model_state_dict` only, skips optimizer state
+- Loaded with `strict=False` (autokernel fuses QKV keys in checkpoint)
+- Fresh cosine LR schedule with 100-step warmup — standard for CPT domain shift
+- `total_tokens` now saved in checkpoints for tracking across CPT runs
+- Dataset stored at `datasets/wikitext-103-raw-train/` (train split only, flattened parquet)
+
+Checkpoints at: `checkpoints/argus_prime_wikitext103/step_{100..7200}.pt`
+
 ## Dolma 10B Training Projection
 
 | Setup | tok/s | 1 epoch (10B) | 2 epochs (20B) |

@@ -55,6 +55,7 @@ def main():
     parser.add_argument("--mode", default="auto", choices=["auto", "A", "B"], help="Training mode")
     parser.add_argument("--checkpoint-dir", default=None, help="Checkpoint save directory")
     parser.add_argument("--log-interval", type=int, default=10, help="Log every N steps")
+    parser.add_argument("--resume-from", default=None, help="Checkpoint path for continued pre-training (loads weights only, fresh optimizer)")
 
     args = parser.parse_args()
 
@@ -91,6 +92,7 @@ def main():
         log_interval=args.log_interval,
         use_muon=args.muon,
         use_bf16=args.bf16,
+        resume_from=args.resume_from,
     )
 
     print(f"\nFinal stats: {stats}")
