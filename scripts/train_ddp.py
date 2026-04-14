@@ -1,35 +1,31 @@
 """Distributed Data Parallel training across 2 Strix Halo machines via TB4.
 
 Each machine holds a full model copy, processes different data batches, and
-synchronizes gradients over Thunderbolt 4 using RCCL (ROCm's NCCL).
+synchronizes gradients over Thunderbolt 4. Uses manual async allreduce with
+fp16 compression to overlap communication with compute.
 
 Usage (run on BOTH machines simultaneously):
   # Machine 0 (master):
-  source ~/ddp_env.sh
+  source scripts/ddp_env.sh
   torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 \
     --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
     scripts/train_ddp.py --model models/argus_prime.py --class-name ArgusPrime \
-    --dataset datasets/common_crawl_sample.bin --epochs 2 ...
+    --dataset datasets/common_crawl_sample.bin --epochs 2 --accum-steps 8 ...
 
   # Machine 1 (worker):
-  source ~/ddp_env.sh
   torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 \
     --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
     scripts/train_ddp.py --model models/argus_prime.py --class-name ArgusPrime \
-    --dataset datasets/common_crawl_sample.bin --epochs 2 ...
-
-Paths are resolved relative to each machine's cwd — so model, dataset, and
-checkpoint paths can differ as long as the CLI args point to the right place
-on each machine.
+    --dataset datasets/common_crawl_sample.bin --epochs 2 --accum-steps 8 ...
 """
 
 import argparse
 import importlib.util
+import json
 import math
 import os
 import sys
 import time
-from contextlib import nullcontext
 
 import numpy as np
 import torch
@@ -42,7 +38,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 
 # ===========================================================================
-# Muon Optimizer (inlined — identical to halo_training/muon.py)
+# Muon Optimizer (inlined from halo_training/muon.py)
 # ===========================================================================
 
 def zeropower_via_newtonschulz5(G, steps=5):
@@ -74,8 +70,10 @@ class Muon(torch.optim.Optimizer):
         for group in muon_params:
             if isinstance(group, dict):
                 g = dict(group)
-                g.setdefault("lr", lr); g.setdefault("momentum", momentum)
-                g.setdefault("nesterov", nesterov); g.setdefault("ns_steps", ns_steps)
+                g.setdefault("lr", lr)
+                g.setdefault("momentum", momentum)
+                g.setdefault("nesterov", nesterov)
+                g.setdefault("ns_steps", ns_steps)
                 g.setdefault("weight_decay", weight_decay)
                 g["_optimizer_type"] = "muon"
                 muon_groups.append(g)
@@ -93,7 +91,8 @@ class Muon(torch.optim.Optimizer):
             for group in adamw_params:
                 if isinstance(group, dict):
                     g = dict(group)
-                    g.setdefault("lr", adamw_lr); g.setdefault("betas", adamw_betas)
+                    g.setdefault("lr", adamw_lr)
+                    g.setdefault("betas", adamw_betas)
                     g.setdefault("weight_decay", g.pop("weight_decay", adamw_wd))
                     g["_optimizer_type"] = "adamw"
                     adamw_groups.append(g)
@@ -221,7 +220,8 @@ class PreTokenizedDataset(Dataset):
         n_chunks = n_tokens // (block_size + 1)
         tokens = raw[: n_chunks * (block_size + 1)].astype(np.int64)
         self.tokens = torch.from_numpy(tokens).view(n_chunks, block_size + 1)
-        print(f"[rank {dist.get_rank()}] Dataset: {n_tokens:,} tokens -> {n_chunks:,} chunks of {block_size}")
+        if dist.is_initialized():
+            print(f"[rank {dist.get_rank()}] Dataset: {n_tokens:,} tokens -> {n_chunks:,} chunks of {block_size}")
 
     def __len__(self):
         return len(self.tokens)
@@ -255,7 +255,6 @@ def load_model_from_file(model_path: str, class_name: str):
 def save_checkpoint(model, optimizer, step, checkpoint_dir, total_tokens=0):
     os.makedirs(checkpoint_dir, exist_ok=True)
     path = os.path.join(checkpoint_dir, f"step_{step}.pt")
-    # Unwrap DDP -> compiled -> raw model
     raw = model.module if hasattr(model, "module") else model
     raw = raw._orig_mod if hasattr(raw, "_orig_mod") else raw
     torch.save({
@@ -269,6 +268,63 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, total_tokens=0):
 
 def compute_bpb(ce_loss: float) -> float:
     return (ce_loss / math.log(2)) / 3.6
+
+
+# ===========================================================================
+# Manual Async Allreduce with fp16 Compression
+# ===========================================================================
+
+def compress_grads_fp16(model):
+    """Cast all gradients to fp16 in-place to halve allreduce payload."""
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.data = p.grad.data.half()
+
+
+def decompress_grads_fp32(model):
+    """Cast gradients back to fp32 for optimizer step."""
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.data = p.grad.data.float()
+
+
+def allreduce_grads_async(model):
+    """Launch async allreduce on all gradients. Returns handles."""
+    handles = []
+    for p in model.parameters():
+        if p.grad is not None:
+            handle = dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM, async_op=True)
+            handles.append(handle)
+    return handles
+
+
+def allreduce_grads_sync(model):
+    """Synchronous allreduce on all gradients."""
+    for p in model.parameters():
+        if p.grad is not None:
+            dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
+
+
+def average_grads(model, world_size):
+    """Divide all gradients by world_size (after allreduce SUM)."""
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.data /= world_size
+
+
+def _complete_step(model, optimizer, scaler, scheduler, world_size, max_grad_norm, rank):
+    """Unscale, clip, step optimizer, update scaler. Returns grad_norm."""
+    scaler.unscale_(optimizer)
+    grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+    if torch.isfinite(grad_norm):
+        scaler.step(optimizer)
+    else:
+        if rank == 0:
+            print(f"  Non-finite grad norm, skipping step")
+    scaler.update()
+    optimizer.zero_grad(set_to_none=True)
+    scheduler.step()
+    return grad_norm
 
 
 # ===========================================================================
@@ -288,24 +344,30 @@ def main():
     parser.add_argument("--muon-lr", type=float, default=0.005)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--block-size", type=int, default=256)
-    parser.add_argument("--accum-steps", type=int, default=4)
+    parser.add_argument("--accum-steps", type=int, default=8)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--optimize-kernels", action="store_true")
     parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--time-budget", type=float, default=0, help="Minutes, 0=unlimited")
-    parser.add_argument("--backend", default="nccl", choices=["nccl", "gloo"],
-                        help="DDP backend: nccl (RCCL, fast) or gloo (CPU, fallback)")
+    parser.add_argument("--backend", default="gloo", choices=["nccl", "gloo"])
+    parser.add_argument("--no-async", action="store_true", help="Disable async allreduce overlap")
+    parser.add_argument("--no-fp16-compress", action="store_true", help="Disable fp16 grad compression")
     args = parser.parse_args()
+
+    use_async = not args.no_async
+    use_fp16 = not args.no_fp16_compress
 
     # --- DDP init ---
     dist.init_process_group(backend=args.backend)
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    torch.cuda.set_device(0)  # 1 GPU per machine
+    torch.cuda.set_device(0)
     device = torch.device("cuda", 0)
 
-    print(f"[rank {rank}] Initialized DDP: world_size={world_size}, device={device}")
+    if rank == 0:
+        print(f"DDP: world_size={world_size}, backend={args.backend}, "
+              f"async={use_async}, fp16_compress={use_fp16}")
 
     # --- Model ---
     sys.path.insert(0, ".")
@@ -323,7 +385,7 @@ def main():
             if rank == 0:
                 print(f"autokernel skipped: {e}")
 
-    # Resume (Approach B: weights only)
+    # Resume (Approach B: weights only, fresh optimizer)
     if args.resume_from:
         if rank == 0:
             print(f"Loading checkpoint: {args.resume_from}")
@@ -335,25 +397,17 @@ def main():
             model.load_state_dict(state_dict, strict=False)
             if rank == 0:
                 print("  Warning: loaded with strict=False")
-        prev_step = ckpt.get("step", 0) if isinstance(ckpt, dict) else 0
         if rank == 0:
-            print(f"  Resumed from step {prev_step}, fresh optimizer (Approach B)")
+            print(f"  Resumed from step {ckpt.get('step', '?')}, fresh optimizer")
         del ckpt, state_dict
 
     model.train()
 
+    # DDP wrapper — find_unused_parameters needed for TTT conditional paths
     model = DDP(model, device_ids=[0], find_unused_parameters=True,
                 gradient_as_bucket_view=True)
 
-    # fp16 gradient compression — halves sync payload (672 MB -> 336 MB)
-    # Only available with NCCL backend
-    if args.backend == "nccl":
-        from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
-        model.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
-        if rank == 0:
-            print("Registered fp16 gradient compression hook")
-
-    # torch.compile AFTER DDP wrapping
+    # torch.compile AFTER DDP
     if args.compile:
         compile_mode = "default" if args.optimize_kernels else "reduce-overhead"
         if rank == 0:
@@ -369,20 +423,22 @@ def main():
     )
 
     # --- Optimizer + Scheduler ---
-    # Build optimizer on the unwrapped model (DDP .module)
-    raw_model = model.module._orig_mod if hasattr(model.module, "_orig_mod") else model.module
-    optimizer = build_muon_optimizer(raw_model, base_lr=args.lr, muon_lr=args.muon_lr)
+    raw_model = model
+    # Unwrap compile -> DDP -> raw
+    if hasattr(raw_model, "_orig_mod"):
+        raw_model = raw_model._orig_mod
+    if hasattr(raw_model, "module"):
+        raw_model = raw_model.module
 
-    # total_steps accounts for world_size: each machine sees len(dataloader) batches
+    optimizer = build_muon_optimizer(raw_model, base_lr=args.lr, muon_lr=args.muon_lr)
     total_steps = len(dataloader) * args.epochs // args.accum_steps
     scheduler = build_scheduler(optimizer, total_steps)
 
     # --- Loss + AMP ---
     ce_loss_fn = nn.CrossEntropyLoss()
-    amp_dtype = torch.float16
     scaler = torch.amp.GradScaler("cuda")
 
-    # --- Metrics (rank 0 only) ---
+    # --- Metrics ---
     n_params = sum(p.numel() for p in raw_model.parameters())
     log_file = None
     if rank == 0 and args.checkpoint_dir:
@@ -400,14 +456,19 @@ def main():
     global_step = 0
     total_tokens = 0
     running_loss = 0.0
+    step_loss = 0.0  # accumulates across microsteps within one optimizer step
     best_loss = float("inf")
     start_time = time.time()
     deadline = start_time + args.time_budget * 60 if args.time_budget > 0 else None
     ckpt_every = args.checkpoint_interval or (args.log_interval * 10)
+    last_grad_norm = torch.tensor(0.0)
+
+    # Async state: pending allreduce handles from previous optimizer step
+    pending_handles = None
 
     try:
         for epoch in range(args.epochs):
-            sampler.set_epoch(epoch)  # shuffle differently each epoch
+            sampler.set_epoch(epoch)
             for batch_idx, (input_ids, targets) in enumerate(dataloader):
                 if deadline and time.time() > deadline:
                     if rank == 0:
@@ -416,15 +477,11 @@ def main():
 
                 input_ids = input_ids.to(device)
                 targets = targets.to(device)
-
-                # Skip gradient sync on all microsteps except the last one.
-                # Without this, DDP allreduces on EVERY backward() call,
-                # which with gloo = 610ms * accum_steps of wasted sync.
                 is_last_microstep = (batch_idx + 1) % args.accum_steps == 0
-                sync_context = model.no_sync if not is_last_microstep else nullcontext
 
-                with sync_context():
-                    with torch.amp.autocast("cuda", dtype=amp_dtype):
+                # All microsteps use no_sync — we do manual allreduce
+                with model.no_sync():
+                    with torch.amp.autocast("cuda", dtype=torch.float16):
                         output = model(input_ids, targets=targets)
                         if isinstance(output, torch.Tensor) and output.dim() == 0:
                             loss = output / args.accum_steps
@@ -435,72 +492,107 @@ def main():
 
                     scaler.scale(loss).backward()
 
-                tokens_in_batch = input_ids.numel()
-                total_tokens += tokens_in_batch
-                running_loss += loss.item() * args.accum_steps
+                total_tokens += input_ids.numel()
+                step_loss += loss.item()
 
-                if (batch_idx + 1) % args.accum_steps == 0:
-                    scaler.unscale_(optimizer)
-                    grad_norm = nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                if not is_last_microstep:
+                    continue
 
-                    if torch.isfinite(grad_norm):
-                        scaler.step(optimizer)
-                    else:
-                        if rank == 0:
-                            print(f"[step {global_step}] Non-finite grad norm, skipping")
+                # === End of optimizer step boundary ===
 
-                    scaler.update()
-                    optimizer.zero_grad(set_to_none=True)
-                    scheduler.step()
+                # 1. Complete PREVIOUS step's pending allreduce (if any)
+                if pending_handles is not None:
+                    for h in pending_handles:
+                        h.wait()
+                    average_grads(model, world_size)
+                    if use_fp16:
+                        decompress_grads_fp32(model)
+                    last_grad_norm = _complete_step(
+                        model, optimizer, scaler, scheduler,
+                        world_size, args.max_grad_norm, rank,
+                    )
                     global_step += 1
 
-                    # Logging (rank 0 only)
+                    # Logging
                     if rank == 0 and global_step % args.log_interval == 0:
                         elapsed = time.time() - start_time
-                        # total_tokens is per-machine; multiply by world_size for global
                         global_tokens = total_tokens * world_size
                         tok_s = global_tokens / elapsed if elapsed > 0 else 0
                         achieved = global_tokens * 6 * n_params / elapsed if elapsed > 0 else 0
-                        mfu = achieved / 118.8e12  # 2x Strix Halo = 2 * 59.4 TFLOPS
+                        mfu = achieved / 118.8e12
                         avg_loss = running_loss / args.log_interval
                         bpb = compute_bpb(avg_loss)
                         lr = scheduler.get_last_lr()[0]
                         mem_gb = torch.cuda.max_memory_allocated() / 1e9
-
-                        line = (
+                        print(
                             f"[step {global_step:>6d}] "
                             f"loss={avg_loss:.4f} bpb={bpb:.3f} lr={lr:.2e} "
-                            f"grad={grad_norm:.2f} tok/s={tok_s:,.0f} "
+                            f"grad={last_grad_norm:.2f} tok/s={tok_s:,.0f} "
                             f"mfu={mfu:.1%} mem={mem_gb:.1f}GB"
                         )
-                        print(line)
-
                         if log_file:
-                            import json
                             with open(log_file, "a") as f:
                                 f.write(json.dumps({
                                     "step": global_step, "loss": avg_loss,
                                     "bpb": bpb, "lr": lr, "tok_s": tok_s,
                                     "mfu": mfu, "mem_gb": mem_gb,
-                                    "grad_norm": grad_norm.item() if hasattr(grad_norm, "item") else grad_norm,
+                                    "grad_norm": last_grad_norm.item() if hasattr(last_grad_norm, "item") else last_grad_norm,
                                 }) + "\n")
-
                         running_loss = 0.0
                         best_loss = min(best_loss, avg_loss)
 
-                    # Checkpoint (rank 0 only)
+                    # Checkpoint
                     if rank == 0 and args.checkpoint_dir and global_step % ckpt_every == 0:
                         save_checkpoint(model, optimizer, global_step,
                                         args.checkpoint_dir, total_tokens * world_size)
+
+                # 2. Record loss for THIS step (average across microsteps)
+                running_loss += step_loss  # step_loss = sum of (loss / accum) = true avg
+                step_loss = 0.0
+
+                # 3. Launch allreduce for THIS step's gradients
+                if use_fp16:
+                    compress_grads_fp16(model)
+
+                if use_async:
+                    pending_handles = allreduce_grads_async(model)
+                    # Don't wait — next microsteps run while allreduce transfers
+                else:
+                    allreduce_grads_sync(model)
+                    average_grads(model, world_size)
+                    if use_fp16:
+                        decompress_grads_fp32(model)
+                    last_grad_norm = _complete_step(
+                        model, optimizer, scaler, scheduler,
+                        world_size, args.max_grad_norm, rank,
+                    )
+                    global_step += 1
+                    pending_handles = None
+
             else:
                 continue
             break
+
+        # Flush final pending allreduce
+        if pending_handles is not None:
+            for h in pending_handles:
+                h.wait()
+            average_grads(model, world_size)
+            if use_fp16:
+                decompress_grads_fp32(model)
+            _complete_step(model, optimizer, scaler, scheduler,
+                           world_size, args.max_grad_norm, rank)
+            global_step += 1
 
     except KeyboardInterrupt:
         if rank == 0:
             print(f"\nInterrupted at step {global_step}")
 
-    # Final
+    # Final checkpoint
+    if rank == 0 and args.checkpoint_dir:
+        save_checkpoint(model, optimizer, global_step,
+                        args.checkpoint_dir, total_tokens * world_size)
+
     if rank == 0:
         elapsed = time.time() - start_time
         global_tokens = total_tokens * world_size

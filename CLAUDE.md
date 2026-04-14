@@ -259,12 +259,15 @@ Text generation tested: coherent grammar, factual patterns, EOS works. Quality l
 Loss progression: initial spike to 22.97 (distribution shift), recovered within ~30 steps, epoch 2 drop 14.73→13.91 (second pass benefit). Generation quality improved: stronger factual grounding (WWII history, military specifics), encyclopedic Wikipedia style, longer coherent paragraphs. Checkpoint: `checkpoints/argus_prime_wikitext103/step_7200.pt`
 
 **2-Machine DDP (Measured, 2× Strix Halo via TB4):**
-- **31K tok/s** (1.85× speedup, 93% scaling efficiency) using `gloo` backend + `accum_steps=16`
+- **35K tok/s** (2.1× real speedup, 29.8% MFU) using gloo + async overlap + fp16 grad compression
+- Manual async allreduce overlaps with next forward pass, hiding TB4 sync latency
+- `accum_steps=8` (effective batch=256), fp16 gradient compression halves payload
 - TB4 measured at 9 Gbps (3× above spec). gloo matches nccl on unified memory (no GPU↔CPU copy penalty).
 - RCCL/NCCL has `invalid kernel file` for gfx1151. Built from source with patches but gloo is preferred.
 - `find_unused_parameters=True` required (TTT + compile). `static_graph=True` crashes.
 - Autokernel must be applied BEFORE checkpoint load (fused QKV keys).
-- Common Crawl 2.4B, 2 epochs: ~42 hours (vs 79 single machine).
+- Common Crawl 2.4B, 2 epochs: **~37 hours** (vs 79 single machine).
+- Loss logging: displayed loss is true CE loss (~4.1-4.3 for CC), not inflated by accum_steps.
 - See `knowledge/ddp_setup_guide.md` for full setup + `knowledge/rccl_build_gfx1151_guide.md` for RCCL build.
 
 **Dolma 10B projection:** 1 epoch = 6.9 days (1 machine) or ~3.7 days (2 machines DDP over TB4).
