@@ -342,9 +342,8 @@ def main():
 
     model.train()
 
-    # static_graph=True: cheaper than find_unused_parameters, tells DDP the
-    # computation graph is fixed after first iteration (safe for compiled models)
-    model = DDP(model, device_ids=[0], static_graph=True)
+    model = DDP(model, device_ids=[0], find_unused_parameters=True,
+                gradient_as_bucket_view=True)
 
     # fp16 gradient compression — halves sync payload (672 MB -> 336 MB)
     # Only available with NCCL backend
