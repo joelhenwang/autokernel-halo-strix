@@ -312,6 +312,17 @@ def main():
     model = load_model_from_file(args.model, args.class_name)
     model = model.to(device)
 
+    # autokernel BEFORE checkpoint load (checkpoint has fused QKV keys)
+    if args.optimize_kernels:
+        try:
+            import autokernel
+            model = autokernel.optimize(model, training=True)
+            if rank == 0:
+                print("autokernel optimizations applied")
+        except Exception as e:
+            if rank == 0:
+                print(f"autokernel skipped: {e}")
+
     # Resume (Approach B: weights only)
     if args.resume_from:
         if rank == 0:
@@ -331,19 +342,9 @@ def main():
 
     model.train()
 
-    # autokernel (optional, ROCm only)
-    if args.optimize_kernels:
-        try:
-            import autokernel
-            model = autokernel.optimize(model, training=True)
-            if rank == 0:
-                print("autokernel optimizations applied")
-        except Exception as e:
-            if rank == 0:
-                print(f"autokernel skipped: {e}")
-
-    # Wrap in DDP (find_unused_parameters needed for TTT conditional paths + compile)
-    model = DDP(model, device_ids=[0], find_unused_parameters=True)
+    # static_graph=True: cheaper than find_unused_parameters, tells DDP the
+    # computation graph is fixed after first iteration (safe for compiled models)
+    model = DDP(model, device_ids=[0], static_graph=True)
 
     # fp16 gradient compression — halves sync payload (672 MB -> 336 MB)
     # Only available with NCCL backend

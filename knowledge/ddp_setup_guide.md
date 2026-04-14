@@ -116,7 +116,9 @@ iperf3 -c 10.77.0.1
 The `scripts/ddp_env.sh` file is already configured:
 
 ```bash
-export NCCL_SOCKET_IFNAME=tb-ddp
+export HSA_OVERRIDE_GFX_VERSION=11.5.1
+export NCCL_SOCKET_IFNAME=thunderbol0
+export GLOO_SOCKET_IFNAME=thunderbol0
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 export NCCL_SOCKET_NTHREADS=4
