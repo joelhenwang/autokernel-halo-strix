@@ -1,3 +1,14 @@
+---
+title: "RTX 4060 Ti over OCuLink: When It Helps and When It Does Not"
+domain: operations
+type: guide
+status: active
+related:
+  - docs/halo-strix-apu/04_two_machine_distributed_training.md
+  - docs/halo-strix-apu/01_platform_and_rocm.md
+tags: [%oculink, %cuda, %multi-machine]
+---
+
 # 03 — RTX 4060 Ti over OCuLink: When It Helps and When It Does Not
 
 ## 1. The question

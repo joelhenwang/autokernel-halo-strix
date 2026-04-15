@@ -1,3 +1,13 @@
+---
+title: "Install causal-conv1d on ROCm"
+domain: operations
+type: guide
+status: active
+related:
+  - knowledge/kernels/external_kernels.md
+tags: [%install, %causal-conv1d, %rocm]
+---
+
 # Halo Strix ROCm Install Notes
 
 This documents the exact procedure that worked in this workspace to install `causal-conv1d` on:

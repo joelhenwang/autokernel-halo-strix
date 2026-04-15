@@ -1,3 +1,14 @@
+---
+title: "AutoKernel Optimization Report"
+domain: project
+type: results
+status: active
+related:
+  - knowledge/kernels/kernel_benchmarks.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%results, %benchmarks, %summary]
+---
+
 # AutoKernel Optimization Report — AMD Strix Halo (gfx1151)
 
 **Hardware:** AMD Radeon 8060S (gfx1151), RDNA 3.5 APU, 20 CUs, wave32, ~170 GB/s LPDDR5X, 64KB LDS/CU  
@@ -829,9 +840,9 @@ Tested a 3-tier adaptive softmax (8K full-rank + 16K low-rank(256) + 26K low-ran
 
 ---
 
-## Prior Training Baselines (from llm_engineer_agent)
+## Prior Training Baselines (from mad_llm_scientist)
 
-Training experiments conducted before halo_training/ was built, using `~/Desktop/ai_lab/llm_engineer_agent/` on the remote machine. These provide reference points for evaluating new architectures.
+Training experiments conducted before halo_training/ was built, using `~/Desktop/ai_lab/mad_llm_scientist/` on the remote machine. These provide reference points for evaluating new architectures.
 
 ### META-ENGRAM (234.5M)
 

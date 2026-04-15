@@ -1,3 +1,15 @@
+---
+title: "Hypothesis Build-Out & Training Results"
+domain: architectures
+type: results
+status: active
+related:
+  - knowledge/architectures/Estimation_Hypothesis_Ranking.md
+  - knowledge/architectures/reliable_small_lm_insights.md
+  - knowledge/architectures/ple_ablation_results.md
+tags: [%hypothesis, %amadeus, %tempest, %buildout, %170m]
+---
+
 # Hypothesis Build-Out & Training Results
 
 **Date:** 2026-04-11 — 2026-04-12

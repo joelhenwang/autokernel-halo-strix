@@ -1,3 +1,13 @@
+---
+title: "Hypothesis Throughput Ranking (Estimated)"
+domain: architectures
+type: reference
+status: active
+related:
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %ranking, %mfu, %feasibility]
+---
+
 # Hypothesis Throughput Ranking (Estimated)
 
 **Date:** 2026-04-10
@@ -150,7 +160,7 @@
 
 ## Backward Pass Optimization Impact (2026-04-10)
 
-Measured backward kernel speedups on gfx1151. See `knowledge/backward_pass_optimization_results.md` for full details.
+Measured backward kernel speedups on gfx1151. See `knowledge/kernels/backward_pass_optimization_results.md` for full details.
 
 ### Measured Backward Kernel Speedups
 

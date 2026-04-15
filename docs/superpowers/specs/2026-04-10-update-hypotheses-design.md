@@ -1,3 +1,15 @@
+---
+title: "Update Scientist Hypotheses with Verified External Kernels"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-wire-external-kernels-design.md
+  - docs/superpowers/specs/2026-04-10-ple-matformer-design.md
+  - docs/superpowers/specs/2026-04-10-training-evolution-design.md
+tags: [%hypothesis, %update, %mid-training]
+---
+
 # Update Scientist Hypotheses with Verified External Kernels
 
 **Date:** 2026-04-10

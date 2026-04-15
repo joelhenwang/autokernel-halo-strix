@@ -1,3 +1,14 @@
+---
+title: "MAESTRO-FORTE"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %maestro-forte]
+---
+
 # MAESTRO-FORTE
 
 **Movement II: Emotional Arc — Crescendo and Diminuendo Across Depth**

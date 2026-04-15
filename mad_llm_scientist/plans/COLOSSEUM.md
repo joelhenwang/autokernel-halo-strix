@@ -1,3 +1,14 @@
+---
+title: "COLOSSEUM"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %colosseum]
+---
+
 # COLOSSEUM
 
 **Unified Memory Training Arena — MegaTrain Techniques Adapted for Strix Halo**

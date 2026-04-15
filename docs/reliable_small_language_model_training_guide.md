@@ -1,3 +1,14 @@
+---
+title: "Training a Reliable Small Language Model"
+domain: training
+type: guide
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-training-evolution-design.md
+  - docs/superpowers/specs/2026-04-08-halo-training-stack-design.md
+tags: [%small-lm, %training-guide, %stability, %initialization]
+---
+
 # Training a Reliable Small Language Model
 
 _A synthesis of practical small-model training lessons, interpreted from Maxime Labonne's **Everything I Learned Training Frontier Small Models** deck, plus a concrete evaluation and reliability playbook._

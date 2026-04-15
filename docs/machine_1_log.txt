@@ -1,0 +1,77 @@
+[2026-04-14 16:13:16] joelwang-ai-1-BeyondMax-Series:18387:18387 [0] /home/runner/_work/rockrel/rockrel/output/build/comm-libs/rccl/build/hipify/src/misc/rocmwrap.cc:133 NCCL WARN pfn_hsa_system_get_info failed with 4107
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Kernel version: 6.18.7-061807-generic
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Hipruntime version: 71260610, firmware version: 0
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to thunderbolt0
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Bootstrap: Using thunderbolt0:10.77.0.2<0>
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO RCCL version : 2.28.3-HEAD:2bd1678+
+HIP version  : 7.12.60610-2bd1678d3d
+ROCm version : 7.12.0.14-9999-2bd1678d3d
+Hostname     : joelwang-ai-1-BeyondMax-Series
+Librccl path : /home/joelwang-ai-1/Desktop/comfyui-rocm7.12/.venv/lib/python3.12/site-packages/_rocm_sdk_libraries_gfx1151/lib/librccl.so.1
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Comm config Blocking set to 1
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO NET/Plugin: Could not find: libnccl-net.so
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO NCCL_IB_DISABLE set by environment to 1.
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Failed to initialize NET plugin IB
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to thunderbolt0
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO NET/Socket : Using [0]thunderbolt0:10.77.0.2<0>
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Initialized NET plugin Socket
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Assigned NET plugin Socket to comm
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Using network Socket
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO [node_id = 1; gpu_id = 11898; unique_id = 0; location_id = 50432; bdf = 50432; domain = 0; partition = 0],
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO initialized internal alternative rsmi functionality
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO ncclCommInitRankConfig_impl comm 0x2815e080 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId c5000 commId 0x8fcd3a20de11027a - Init START
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO RAS client listening socket at 127.0.0.1<28028>
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Bootstrap timings total 0.001382 (create 0.000029, send 0.000226, recv 0.000617, ring 0.000203, delay 0.000001)
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO UALoE fabric detection skipped: RCCL_USE_AMD_SMI_LIB not set
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO NCCL_P2P_DISABLE set by environment to 1
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Tuning index set to: 0
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO ncclTopoGetCpuAffinity: Affinity for GPU 0 is 0-31. (GPU affinity = 0-31 ; CPU affinity = 0-31).
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO GFX9 cheap fence is OFF
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO comm 0x2815e080 rank 1 nRanks 2 nNodes 2 localRanks 1 localRank 0 MNNVL 0
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1 comm 0x2815e080 nRanks 02 busId c5000
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO P2P Chunksize set to 131072
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO PROFILER/Plugin: Could not find: librccl-profiler.so
+joelwang-ai-1-BeyondMax-Series:18387:18536 [0] NCCL INFO [Proxy Service UDS] Device 0 CPU core 8
+joelwang-ai-1-BeyondMax-Series:18387:18535 [0] NCCL INFO [Proxy Service] Device 0 CPU core 27
+joelwang-ai-1-BeyondMax-Series:18387:18535 [0] NCCL INFO NCCL_NSOCKS_PERTHREAD set by environment to 4.
+joelwang-ai-1-BeyondMax-Series:18387:18535 [0] NCCL INFO NCCL_SOCKET_NTHREADS set by environment to 4.
+joelwang-ai-1-BeyondMax-Series:18387:18535 [0] NCCL INFO NET/Socket: Using 4 threads and 4 sockets per thread
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/Socket/0 comm 0x2815e080 nRanks 02
+joelwang-ai-1-BeyondMax-Series:18387:18535 [0] NCCL INFO NET/Socket: Using 4 threads and 4 sockets per thread
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/Socket/0 comm 0x2815e080 nRanks 02
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/Socket/0 comm 0x2815e080 nRanks 02
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/Socket/0 comm 0x2815e080 nRanks 02
+joelwang-ai-1-BeyondMax-Series:18387:18537 [0] NCCL INFO [Proxy Progress] Device 0 CPU core 8
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Connected all rings, use ring PXN 0 GDR 0
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Connected all trees
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Connected binomial trees
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO TUNER/Plugin: Could not find: libnccl-tuner.so. Using internal tuner plugin.
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO RCCL Tuning index:0
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 256 | 256
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO comm:0x2815e080, nRanks:2, nNodes:2, coll channels:2 collnet channels:2, nvls channels:0, p2p channels:2, p2p channels per peer:1, shiftSize:-1
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO RCCL Unroll Factor (pre-set): 4
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO ncclCommInitRankConfig_impl comm 0x2815e080 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId c5000 commId 0x8fcd3a20de11027a - Init COMPLETE
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO Init timings - ncclCommInitRankConfig_impl: rank 1 nranks 2 total 0.09 (kernels 0.00, alloc 0.01, bootstrap 0.00, allgathers 0.00, topo 0.03, graphs 0.00, connections 0.04, rest 0.00)
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO pre-adjustment threadThreshold:16 nBytes:16 nc:2
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO minNChannels:-2
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO post-adjustment based on threadThreshold:16 nBytes:16 nc:1
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] [FATAL ERROR]: HIP failure: 'invalid kernel file'
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO /home/runner/_work/rockrel/rockrel/output/build/comm-libs/rccl/build/hipify/src/group.cc:338 -> 1
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO /home/runner/_work/rockrel/rockrel/output/build/comm-libs/rccl/build/hipify/src/group.cc:636 -> 1
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO /home/runner/_work/rockrel/rockrel/output/build/comm-libs/rccl/build/hipify/src/group.cc:779 -> 1
+joelwang-ai-1-BeyondMax-Series:18387:18387 [0] NCCL INFO /home/runner/_work/rockrel/rockrel/output/build/comm-libs/rccl/build/hipify/src/enqueue.cc:3094 -> 1
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/autokernel-halo-strix/scripts/train_ddp.py", line 503, in <module>
+[rank1]:     main()
+[rank1]:   File "/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/autokernel-halo-strix/scripts/train_ddp.py", line 343, in main
+[rank1]:     model = DDP(model, device_ids=[0])
+[rank1]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/.venv/lib/python3.12/site-packages/torch/nn/parallel/distributed.py", line 862, in __init__
+[rank1]:     _verify_param_shape_across_processes(self.process_group, parameters)
+[rank1]:   File "/home/joelwang-ai-1/Desktop/comfyui-rocm7.12/.venv/lib/python3.12/site-packages/torch/distributed/utils.py", line 286, in _verify_param_shape_across_processes
+[rank1]:     return dist._verify_params_across_processes(process_group, tensors, logger)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]: torch.distributed.DistBackendError: NCCL error in: /__w/rockrel/rockrel/external-builds/pytorch/pytorch/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp:3756, unhandled cuda error (run with NCCL_DEBUG=INFO for details), NCCL version 2.28.3
+[rank1]: ncclUnhandledCudaError: Call to CUDA function failed.
+[rank1]: Last error:
+[rank1]: pfn_hsa_system_get_info failed with 4107

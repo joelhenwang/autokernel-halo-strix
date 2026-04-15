@@ -1,3 +1,13 @@
+---
+title: "Evaluation Guide for Continued Pre-Training"
+domain: architectures
+type: guide
+status: active
+related:
+  - mad_llm_scientist/BPB_MFU_ANALYSIS.md
+tags: [%evaluation, %benchmarks, %methodology]
+---
+
 # Evaluation Guide for Continued Pre-Training
 
 ## Purpose

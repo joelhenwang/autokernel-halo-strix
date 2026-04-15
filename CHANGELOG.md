@@ -1,3 +1,12 @@
+---
+title: "Changelog"
+domain: project
+type: reference
+status: active
+related: []
+tags: [%changelog, %versions]
+---
+
 # Changelog
 
 ## v2.1.0 -- 2026-04-09
@@ -34,7 +43,7 @@
 
 - **New HIP C++ backend**: 9 kernel implementations in `kernels/hip/` with HIP compilation
   pipeline (`_compile.py`) using hipcc via `torch.utils.cpp_extension.load_inline()`
-- **New RDNA 3.5 knowledge base**: `knowledge/amd_rdna35_strix_halo.md` with hardware specs,
+- **New RDNA 3.5 knowledge base**: `knowledge/hardware/amd_rdna35_strix_halo.md` with hardware specs,
   wave32 optimization guide, LDS tiling strategies, and profiling tools
 - **Rewrote matmul kernel**: Replaced NVIDIA WMMA tensor core GEMM with scalar tiled GEMM
   using double-buffered LDS and register-level 4x4 tiling

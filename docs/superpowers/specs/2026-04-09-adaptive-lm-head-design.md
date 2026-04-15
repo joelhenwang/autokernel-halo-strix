@@ -1,3 +1,14 @@
+---
+title: "Adaptive LM Head + Chunked Cross-Entropy"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-backward-pass-optimization-design.md
+  - docs/superpowers/specs/2026-04-10-training-pipeline-optimization-design.md
+tags: [%adaptive-softmax, %lm-head]
+---
+
 # Adaptive LM Head + Chunked Cross-Entropy
 
 **Date:** 2026-04-09

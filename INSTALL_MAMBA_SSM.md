@@ -1,3 +1,13 @@
+---
+title: "Install mamba-ssm on ROCm"
+domain: operations
+type: guide
+status: active
+related:
+  - knowledge/kernels/external_kernels.md
+tags: [%install, %mamba-ssm, %rocm]
+---
+
 # Mamba SSM ROCm Install Notes
 
 This documents the local-source procedure used in this workspace to patch and install `mamba-ssm` on:

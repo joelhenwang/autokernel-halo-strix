@@ -1,3 +1,15 @@
+---
+title: "Optimization Libraries Integration + Fused Engram Kernel"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-wire-external-kernels-design.md
+  - docs/superpowers/specs/2026-04-08-autokernel-library-api-design.md
+  - docs/superpowers/specs/2026-04-10-aiter-rocblas-optimization-design.md
+tags: [%external-kernels, %libraries, %selection]
+---
+
 # Optimization Libraries Integration + Fused Engram Kernel
 
 **Date:** 2026-04-10
@@ -7,7 +19,7 @@
 
 ## Context
 
-We have identified several optimization opportunities from `knowledge/mHC_MoE_Engram_optimizations.md` and external research. This spec covers installing/benchmarking external libraries and writing a custom fused Engram kernel (3 variants) to accelerate the complex architecture components (Engram, MoE) that currently limit Tier 3-4 hypothesis throughput.
+We have identified several optimization opportunities from `knowledge/kernels/mHC_MoE_Engram_optimizations.md` and external research. This spec covers installing/benchmarking external libraries and writing a custom fused Engram kernel (3 variants) to accelerate the complex architecture components (Engram, MoE) that currently limit Tier 3-4 hypothesis throughput.
 
 Key findings driving this work:
 - Engram hash+gather+gate+conv has 3+ intermediate tensors that can be eliminated via fusion
@@ -164,7 +176,7 @@ loss_fn = LigerFusedLinearCrossEntropyLoss()
 
 ## Part 5: Knowledge Capture
 
-Update `knowledge/mHC_MoE_Engram_optimizations.md` with:
+Update `knowledge/kernels/mHC_MoE_Engram_optimizations.md` with:
 - Flashback: JAX-only, backwards-over-backwards for meta-learning/arch search. Not actionable now. Reference for future.
 - DeepSpeed: Not useful for our setup (single GPU, 250M, RDNA 3.5). Only Flops Profiler has marginal value.
 - Top-K bucket sort: llama.cpp technique — histogram-based threshold finding in 2-3 passes vs our 20-pass binary search. 7-10x potential speedup. Deferred to inference phase.
@@ -189,7 +201,7 @@ Update `knowledge/mHC_MoE_Engram_optimizations.md` with:
 | `kernels/hip/_torch_ops.py` | Register winning Engram variant with autograd |
 | `models/engram.py` | Wire winning variant via try/except import |
 | `halo_training/trainer.py` | Integrate FusedLinearCrossEntropyLoss (if Liger works) |
-| `knowledge/mHC_MoE_Engram_optimizations.md` | Update with all findings |
+| `knowledge/kernels/mHC_MoE_Engram_optimizations.md` | Update with all findings |
 
 ---
 

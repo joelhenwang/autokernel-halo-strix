@@ -1,3 +1,13 @@
+---
+title: "Mamba Usage and Adoption"
+domain: kernels
+type: guide
+status: active
+related:
+  - external/mamba/README.md
+tags: [%mamba, %usage, %external]
+---
+
 # Mamba adoption
 
 We've been very happy to see Mamba being adopted by many organizations

@@ -1,3 +1,14 @@
+---
+title: "ARCHON"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %archon]
+---
+
 # ARCHON
 
 **The Supreme Architecture — Quality-Maximized Convergence of 11 Hypotheses and 15+ Papers**

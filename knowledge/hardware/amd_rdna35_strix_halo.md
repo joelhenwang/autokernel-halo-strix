@@ -1,3 +1,14 @@
+---
+title: "AMD RDNA 3.5 (Strix Halo, gfx1151) Optimization Reference"
+domain: hardware
+type: reference
+status: active
+related:
+  - knowledge/hardware/workload_guidance.md
+  - knowledge/kernels/backward_pass_optimization_research.md
+tags: [%gfx1151, %rdna35, %strix-halo, %rocm, %rocblas, %lds, %wave32]
+---
+
 # AMD RDNA 3.5 (Strix Halo, gfx1151) Optimization Reference
 
 > Use this reference when optimizing HIP C++ kernels on AMD Strix Halo APU.

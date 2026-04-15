@@ -1,3 +1,15 @@
+---
+title: "Platform, ROCm, and the gfx1151 Reality"
+domain: operations
+type: guide
+status: active
+related:
+  - docs/halo-strix-apu/README.md
+  - docs/halo-strix-apu/06_commands_and_checklists.md
+  - docs/superpowers/specs/2026-04-10-aiter-rocblas-optimization-design.md
+tags: [%rocm, %platform, %setup, %gfx1151]
+---
+
 # 01 — Platform, ROCm, and the gfx1151 Reality
 
 ## 1. The correct mental model of Strix Halo

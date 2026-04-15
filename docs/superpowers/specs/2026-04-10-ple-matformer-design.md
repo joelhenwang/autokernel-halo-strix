@@ -1,3 +1,14 @@
+---
+title: "PLE + MatFormer: Composable Modules for Elastic Architecture Design"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-update-hypotheses-design.md
+  - docs/superpowers/specs/2026-04-10-training-evolution-design.md
+tags: [%ple, %matformer, %ablation]
+---
+
 # PLE + MatFormer: Composable Modules for Elastic Architecture Design
 
 **Date:** 2026-04-10

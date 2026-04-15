@@ -1,3 +1,13 @@
+---
+title: "Causal Conv1d External Package"
+domain: kernels
+type: reference
+status: active
+related:
+  - INSTALL_CAUSAL_CONV1D.md
+tags: [%causal-conv1d, %external]
+---
+
 # Causal depthwise conv1d in CUDA with a PyTorch interface
 
 Features:

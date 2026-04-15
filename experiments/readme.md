@@ -1,3 +1,14 @@
+---
+title: "MI300 Experiments"
+domain: project
+type: reference
+status: active
+related:
+  - experiments/mi300_optimization.md
+  - experiments/mi300_porting.md
+tags: [%experiments, %mi300]
+---
+
 # AutoKernel MI300 适配与优化闭环
 
 基于 AutoKernel 项目在 AMD MI300 GPU 上的实际落地，梳理 skills-only 模式下的完整工作流。
@@ -115,7 +126,7 @@ Phase B 优化循环前，已将 [AMD-AGI/GEAK](https://github.com/AMD-AGI/GEAK)
 | 文件 | 内容 | 来源 |
 |------|------|------|
 | [`knowledge/amd_cdna3_optimization.md`](../knowledge/amd_cdna3_optimization.md) | MI300X 硬件架构、Triton-on-ROCm 差异、autotune configs、occupancy、coalescing、perf counters | GEAK KB layers 1/3/5/6 |
-| [`knowledge/workload_guidance.md`](../knowledge/workload_guidance.md) | 基于 bottleneck 的优化策略框架（Prefer First / Consider / Deprioritize） | GEAK `workload_guidance.py` |
+| [`knowledge/hardware/workload_guidance.md`](../knowledge/workload_guidance.md) | 基于 bottleneck 的优化策略框架（Prefer First / Consider / Deprioritize） | GEAK `workload_guidance.py` |
 | [`program.md` Tier 5](../program.md) | 新增 MI300X (CDNA3, gfx942) 和 HIP 后端的 architecture-specific 优化指南 | GEAK KB + 实测经验 |
 | [`bench.py` GPU detection](../bench.py) | MI300X 检测，gcnArchName fallback | MI300 porting 实测 |
 

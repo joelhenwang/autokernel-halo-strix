@@ -1,3 +1,14 @@
+---
+title: "EVAL-FRAMEWORK"
+domain: architectures
+type: reference
+status: active
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%evaluation, %framework]
+---
+
 # EVAL FRAMEWORK
 
 **Custom Evaluation Suite for 15-Minute Architecture Comparison at 250M Scale**

@@ -1,3 +1,14 @@
+---
+title: "PROMETHEUS"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %prometheus]
+---
+
 # PROMETHEUS
 
 **Steal Fire from the Gods: 2 Flash-Attn + 14 Griffin + Residual Momentum**

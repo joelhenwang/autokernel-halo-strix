@@ -1,3 +1,15 @@
+---
+title: "Compile-Optimized Griffin Block"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-08-torch-compile-custom-ops-design.md
+  - docs/superpowers/specs/2026-04-10-training-pipeline-optimization-design.md
+  - docs/halo-strix-apu/02_training_performance_analysis.md
+tags: [%torch-compile, %griffin, %fused-block, %tempest]
+---
+
 # Compile-Optimized Griffin Block
 
 **Date:** 2026-04-12

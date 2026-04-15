@@ -1,3 +1,14 @@
+---
+title: "Commands, Environment Variables, and Benchmarking Checklist"
+domain: operations
+type: guide
+status: active
+related:
+  - docs/halo-strix-apu/README.md
+  - docs/halo-strix-apu/01_platform_and_rocm.md
+tags: [%commands, %checklists, %troubleshooting]
+---
+
 # 06 — Commands, Environment Variables, and Benchmarking Checklist
 
 ## 1. GEMM backend experiments on ROCm

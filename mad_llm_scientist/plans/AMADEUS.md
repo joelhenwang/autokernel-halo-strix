@@ -1,3 +1,14 @@
+---
+title: "AMADEUS"
+domain: architectures
+type: plan
+status: active
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %amadeus]
+---
+
 # AMADEUS
 
 **The Simple Masterpiece: Parallel Hybrid + FiLM Conditioning — 4 Components, 1 Innovation**

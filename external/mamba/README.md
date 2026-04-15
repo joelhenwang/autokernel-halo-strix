@@ -1,3 +1,14 @@
+---
+title: "Mamba External Package"
+domain: kernels
+type: reference
+status: active
+related:
+  - INSTALL_MAMBA_SSM.md
+  - external/mamba/usage.md
+tags: [%mamba, %ssm, %external]
+---
+
 # Mamba
 
 ![Mamba](assets/selection.png "Selective State Space")

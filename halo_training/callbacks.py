@@ -84,7 +84,7 @@ class MemoryMonitor:
 class StateNormMonitor:
     """Track hidden state growth ratio per recurrent block.
 
-    Adapted from llm_engineer_agent/diagnostics/state_norm_logger.py.
+    Adapted from mad_llm_scientist/diagnostics/state_norm_logger.py.
     Detects recurrence instability ~10 steps before gradient explosion.
 
     Usage:
@@ -160,7 +160,7 @@ class StateNormMonitor:
 class PerParamGradMonitor:
     """Log top-K parameters by gradient norm each step.
 
-    Adapted from llm_engineer_agent/diagnostics/per_param_grad_log.py.
+    Adapted from mad_llm_scientist/diagnostics/per_param_grad_log.py.
     Global grad norm hides which components explode — this identifies culprits.
 
     Usage:

@@ -1,3 +1,13 @@
+---
+title: "Workload-Aware Optimization Strategy"
+domain: hardware
+type: reference
+status: active
+related:
+  - knowledge/hardware/amd_rdna35_strix_halo.md
+tags: [%optimization, %workload, %strategy]
+---
+
 # Workload-Aware Optimization Strategy
 
 > Curated from [AMD-AGI/GEAK](https://github.com/AMD-AGI/GEAK) `workload_guidance.py`.

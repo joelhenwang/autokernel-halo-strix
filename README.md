@@ -1,3 +1,14 @@
+---
+title: "AutoKernel"
+domain: project
+type: reference
+status: active
+related:
+  - REPORT.md
+  - KNOWLEDGE_GRAPH.md
+tags: [%overview, %quick-start, %autokernel]
+---
+
 # AutoKernel
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/UfEyc72t)

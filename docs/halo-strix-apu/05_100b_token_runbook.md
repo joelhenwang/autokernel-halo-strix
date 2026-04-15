@@ -1,3 +1,14 @@
+---
+title: "Runbook for the 100B-Token Training Plan"
+domain: operations
+type: guide
+status: active
+related:
+  - docs/halo-strix-apu/04_two_machine_distributed_training.md
+  - docs/superpowers/specs/2026-04-10-training-evolution-design.md
+tags: [%runbook, %100b-tokens, %dolma]
+---
+
 # 05 — Runbook for the 100B-Token Training Plan
 
 ## 1. Dataset size is not the real scaling problem

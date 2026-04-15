@@ -1,3 +1,14 @@
+---
+title: "TERNARY-REFLEX"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %ternary-reflex]
+---
+
 # TERNARY REFLEX
 
 **MatMul-Free Reflex Path + Standard Genius Path with Caveman Routing**

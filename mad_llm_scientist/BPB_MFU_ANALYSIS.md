@@ -1,3 +1,13 @@
+---
+title: "BPB + MFU Analysis for 15-Minute Bakeoffs"
+domain: architectures
+type: reference
+status: active
+related:
+  - mad_llm_scientist/EVALUATION_GUIDE.md
+tags: [%bpb, %mfu, %metrics, %analysis]
+---
+
 # BPB + MFU Analysis for 15-Minute Bakeoffs
 
 ## Goal

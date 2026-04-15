@@ -1,3 +1,13 @@
+---
+title: "Install aiter on ROCm"
+domain: operations
+type: guide
+status: active
+related:
+  - knowledge/kernels/external_kernels.md
+tags: [%install, %aiter, %flash-attn, %rocm]
+---
+
 # Aiter (AMD AI Tensor Engine Runtime) on ROCm 7.12 / gfx1151
 
 This documents the procedure to install and patch `aiter` for flash_attn backward support on Strix Halo.

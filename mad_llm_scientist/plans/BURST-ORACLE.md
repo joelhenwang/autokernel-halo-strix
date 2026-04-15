@@ -1,3 +1,14 @@
+---
+title: "BURST-ORACLE"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %burst-oracle]
+---
+
 # BURST ORACLE
 
 **Multi-Token Prediction with Engram-Verified Burst Decoding on a Caveman LFM Backbone**

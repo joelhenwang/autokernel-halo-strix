@@ -1,3 +1,13 @@
+---
+title: "Pretraining Concerns"
+domain: architectures
+type: reference
+status: active
+related:
+  - mad_llm_scientist/EVALUATION_GUIDE.md
+tags: [%pretraining, %token-budget, %stability, %convergence]
+---
+
 The Cold, Hard Math First
 Let's just run the numbers before I give you my opinion.
 The Arithmetic

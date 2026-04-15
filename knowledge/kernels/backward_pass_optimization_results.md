@@ -1,3 +1,13 @@
+---
+title: "Backward Pass Optimization Results"
+domain: kernels
+type: results
+status: active
+related:
+  - knowledge/kernels/backward_pass_optimization_research.md
+tags: [%backward, %optimization, %chunked-ce, %measurements]
+---
+
 # Backward Pass Optimization Results
 
 **Date:** 2026-04-10

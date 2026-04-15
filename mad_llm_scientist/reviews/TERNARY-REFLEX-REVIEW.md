@@ -1,3 +1,13 @@
+---
+title: "Ternary Reflex Review"
+domain: architectures
+type: review
+status: active
+related:
+  - mad_llm_scientist/reviews/TERNARY-REFLEX-RESPONSE.md
+tags: [%review, %ternary-reflex]
+---
+
 # Ternary Reflex Review
 
 ## Summary

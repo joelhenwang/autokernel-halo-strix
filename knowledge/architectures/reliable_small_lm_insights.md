@@ -1,3 +1,13 @@
+---
+title: "Insights from Reliable Small LM Training Guide"
+domain: architectures
+type: reference
+status: active
+related:
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%small-lm, %best-practices, %stability]
+---
+
 # Insights from "Reliable Small LM Training Guide" Applied to Our Project
 
 **Source:** `docs/reliable_small_language_model_training_guide.md` (Maxime Labonne, AI Engineer Europe 2026)

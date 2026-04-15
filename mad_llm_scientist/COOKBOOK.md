@@ -1,3 +1,13 @@
+---
+title: "Universal Implementation Cookbook"
+domain: architectures
+type: cookbook
+status: active
+related:
+  - mad_llm_scientist/plans/
+tags: [%cookbook, %shared-modules, %implementation, %rmsnorm, %swiglu, %griffin]
+---
+
 # Universal Implementation Cookbook
 
 **How to Build ANY of Our 13 Architectures — Module Library, Training Recipes, Stability Lessons**
@@ -9,7 +19,7 @@ This cookbook provides the **shared implementation recipe** for all 13 architect
 - **Token budget math** → see `PRETRAINING_CONCERNS.md`
 - **Evaluation methodology** → see `EVALUATION_GUIDE.md`
 - **MFU analysis** → see `BPB_MFU_ANALYSIS.md`
-- **Training loop basics** → see `llm_engineer_agent/CLAUDE (1).md`
+- **Training loop basics** → see `mad_llm_scientist/CLAUDE.md`
 
 ## Universal Constants
 

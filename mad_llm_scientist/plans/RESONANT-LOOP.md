@@ -1,3 +1,14 @@
+---
+title: "RESONANT-LOOP"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %resonant-loop]
+---
+
 # RESONANT LOOP
 
 **Cache-Resident Iterative Shared Block with Adaptive Halting**

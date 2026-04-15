@@ -1,3 +1,14 @@
+---
+title: "LAZARUS"
+domain: architectures
+type: plan
+status: active
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %lazarus]
+---
+
 # LAZARUS
 
 **The Architecture That Refuses to Stay Dead: TTT Fast Weights + SSM/Griffin + Residual Momentum**

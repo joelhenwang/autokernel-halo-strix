@@ -1,3 +1,14 @@
+---
+title: "Wire External Kernel Speedups Into Architectures"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-optimization-libraries-design.md
+  - docs/superpowers/specs/2026-04-10-aiter-rocblas-optimization-design.md
+tags: [%external-kernels, %causal-conv1d, %mamba-ssm]
+---
+
 # Wire External Kernel Speedups Into Architectures
 
 **Date:** 2026-04-10

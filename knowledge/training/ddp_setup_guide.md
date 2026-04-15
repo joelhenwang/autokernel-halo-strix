@@ -1,3 +1,14 @@
+---
+title: "DDP Setup Guide: 2x Strix Halo via Thunderbolt 4"
+domain: training
+type: guide
+status: active
+related:
+  - knowledge/training/rccl_build_gfx1151_guide.md
+  - knowledge/training/argus_prime_results.md
+tags: [%ddp, %thunderbolt4, %gloo, %2-machine, %strix-halo, %distributed]
+---
+
 # DDP Setup Guide: 2x Strix Halo via Thunderbolt 4
 
 Step-by-step guide to connect two Ryzen AI MAX+ 395 machines for distributed training of ARGUS-PRIME.
@@ -219,7 +230,7 @@ Both backends give identical throughput because the bottleneck is TB4 TCP, not t
 - `scaler.unscale_()` + `clip` + `step` + `update` done together after allreduce completes — keeps GradScaler state consistent
 - Default `--accum-steps 8` (effective batch=256), down from 16 — async overlap hides the sync latency
 
-**RCCL/NCCL status:** Bundled RCCL in pip PyTorch has `invalid kernel file` for gfx1151. We built RCCL from source with gfx1151 kernels (see `knowledge/rccl_build_gfx1151_guide.md`). It works, but offers no advantage over gloo on unified memory + TB4 TCP. Use gloo.
+**RCCL/NCCL status:** Bundled RCCL in pip PyTorch has `invalid kernel file` for gfx1151. We built RCCL from source with gfx1151 kernels (see `knowledge/training/rccl_build_gfx1151_guide.md`). It works, but offers no advantage over gloo on unified memory + TB4 TCP. Use gloo.
 
 ---
 
@@ -254,3 +265,30 @@ Both backends give identical throughput because the bottleneck is TB4 TCP, not t
 | Common Crawl 2.4B, 2 epochs | ~79 hrs | **~37 hrs (1.5 days)** |
 
 Steady-state: 35K tok/s ± 0.2% over 3600+ steps. Loss converging: 4.27 → 4.14.
+
+---
+
+## Why DDP (Not FSDP/Pipeline)
+
+| Approach | Pros | Cons | Verdict |
+|----------|------|------|---------|
+| **DDP** | Simple, no model changes, overlapped sync | Full model copy on each machine | **Best for 168M** |
+| FSDP (ZeRO) | Shards params + optimizer state | Overhead > benefit at 168M | Overkill |
+| Pipeline Parallel | Splits layers across machines | Bubble overhead, complex | Not worth it |
+| Tensor Parallel | Splits individual ops | TB4 latency kills this | No |
+
+At 168M params, the full model + optimizer fits easily in 128 GB. DDP is simplest and most efficient.
+
+---
+
+## Key Considerations
+
+**Muon Optimizer:** Works natively with DDP. Newton-Schulz orthogonalization operates on local (already-synced) gradients. No special handling needed.
+
+**torch.compile + DDP:** Compile happens independently on each machine (no shared compilation cache). First-step overhead ~5-10 min per machine. After first step, compiled graphs are cached.
+
+**Data Loading:** Both machines see the same dataset but different batches via `DistributedSampler`. Dataset must be accessible on both machines. `sampler.set_epoch(epoch)` ensures different shuffling each epoch.
+
+**Checkpointing:** Only rank 0 saves to avoid duplicate writes. `model.module.state_dict()` unwraps DDP wrapper.
+
+**Dolma 10B projection:** 1 epoch = 6.9 days (1 machine) or ~3.7 days (2 machines DDP over TB4).

@@ -1,3 +1,14 @@
+---
+title: "MI300 Closed-Loop Kernel Optimization"
+domain: kernels
+type: results
+status: stale
+related:
+  - experiments/readme.md
+  - experiments/mi300_porting.md
+tags: [%mi300, %cdna3, %optimization]
+---
+
 # MI300 Phase B: Closed-Loop Kernel Optimization
 
 环境：AMD Instinct MI300X (gfx942), PyTorch 2.6.0+rocm6.4, Triton 3.2.0 HIP backend.

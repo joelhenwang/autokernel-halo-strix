@@ -1,3 +1,14 @@
+---
+title: "MAESTRO-FINALE"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %maestro-finale]
+---
+
 # MAESTRO-FINALE
 
 **Movement IV: The Full Symphony — Component Dynamics + Emotional Arc + Evolving Interpretation**

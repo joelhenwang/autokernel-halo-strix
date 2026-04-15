@@ -1,3 +1,14 @@
+---
+title: "Halo Strix LLM Training Notes"
+domain: operations
+type: guide
+status: active
+related:
+  - docs/halo-strix-apu/01_platform_and_rocm.md
+  - docs/halo-strix-apu/06_commands_and_checklists.md
+tags: [%operations, %index, %strix-halo]
+---
+
 # Halo Strix LLM Training Notes
 
 This documentation pack consolidates the main engineering conclusions from our discussion about training small language models on **Ryzen AI Max+ 395 / Strix Halo (gfx1151)** systems.

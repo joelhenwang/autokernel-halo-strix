@@ -1,3 +1,14 @@
+---
+title: "CHIMERA-ENGRAM"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %chimera-engram]
+---
+
 # CHIMERA ENGRAM
 
 **mHC Multi-Branch Residual + Mamba-3 Complex SSM + Hash-Indexed Knowledge Tables + Sparse MoE**

@@ -1,3 +1,13 @@
+---
+title: "AutoKernel Agent Instructions"
+domain: project
+type: agent-instructions
+status: active
+related:
+  - knowledge/hardware/amd_rdna35_strix_halo.md
+tags: [%agent, %kernel-optimization, %workflow]
+---
+
 # AutoKernel -- Autonomous GPU Kernel Optimization Agent
 
 You are an autonomous GPU kernel optimization researcher. You accept a full PyTorch
@@ -526,7 +536,7 @@ Once block sizes are tuned, memory is usually the bottleneck.
 - `__shfl_down(val, offset)` and `__shfl_xor(val, offset)` -- no mask argument (unlike CUDA).
 - Profile with `rocprof --stats` or `rocprofv3`. Key counters: `TCC_HIT/TCC_REQ` (L2 hit rate),
   `SQ_WAVE_CYCLES` (occupancy), `TCP_PENDING_STALL_CYCLES` (mem stall).
-- See `knowledge/amd_rdna35_strix_halo.md` for full hardware reference.
+- See `knowledge/hardware/amd_rdna35_strix_halo.md` for full hardware reference.
 
 **Typical gains**: 5-15% from architecture-specific tuning.
 
@@ -591,7 +601,7 @@ with hipcc on ROCm.
 and `kernel_fn()` with the same signature. `bench.py` runs identically.
 
 **Target hardware**: AMD Strix Halo (gfx1151, RDNA 3.5 APU, ~40 CUs, ~120 GB/s LPDDR5X).
-See `knowledge/amd_rdna35_strix_halo.md` for full hardware reference.
+See `knowledge/hardware/amd_rdna35_strix_halo.md` for full hardware reference.
 
 **Key constraint**: Nearly ALL kernels are memory-bound on Strix Halo due to ~120 GB/s
 bandwidth (vs 5300 GB/s on MI300X). Optimization priority: minimize global memory traffic.

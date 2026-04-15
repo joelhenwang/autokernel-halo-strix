@@ -1,3 +1,14 @@
+---
+title: "Two Halo Strix Machines: Distributed Training, Thunderbolt, and Ethernet"
+domain: operations
+type: guide
+status: active
+related:
+  - docs/halo-strix-apu/03_cuda_oculink_strategy.md
+  - docs/halo-strix-apu/05_100b_token_runbook.md
+tags: [%ddp, %distributed, %2-machine]
+---
+
 # 04 — Two Halo Strix Machines: Distributed Training, Thunderbolt, and Ethernet
 
 ## 1. The hardware situation

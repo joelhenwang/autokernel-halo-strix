@@ -1,3 +1,14 @@
+---
+title: "DEEP-NARROW-ORACLE"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %deep-narrow-oracle]
+---
+
 # DEEP NARROW ORACLE
 
 **48 Layers at d=512 with Parallel Hybrid + Engram + Burst Decoding**

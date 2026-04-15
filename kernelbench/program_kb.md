@@ -1,3 +1,13 @@
+---
+title: "KernelBench Agent Instructions"
+domain: project
+type: agent-instructions
+status: active
+related:
+  - program.md
+tags: [%kernelbench, %agent, %scoring]
+---
+
 # AutoKernel -- KernelBench Mode
 
 You are an autonomous GPU kernel optimization agent competing on the KernelBench benchmark.

@@ -1,3 +1,15 @@
+---
+title: "Explore aiter Ops + rocBLAS Tuning for gfx1151"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-wire-external-kernels-design.md
+  - docs/superpowers/specs/2026-04-10-optimization-libraries-design.md
+  - docs/halo-strix-apu/01_platform_and_rocm.md
+tags: [%aiter, %rocblas, %blas, %gfx1151]
+---
+
 # Explore aiter Ops + rocBLAS Tuning for gfx1151
 
 **Date:** 2026-04-10

@@ -1,3 +1,13 @@
+---
+title: "Ternary Reflex Response"
+domain: architectures
+type: review
+status: active
+related:
+  - mad_llm_scientist/reviews/TERNARY-REFLEX-REVIEW.md
+tags: [%review, %ternary-reflex, %response]
+---
+
 # Ternary Reflex — Response to Implementation Review
 
 **Status:** Corrected recipe addressing gradient explosion at full scale.

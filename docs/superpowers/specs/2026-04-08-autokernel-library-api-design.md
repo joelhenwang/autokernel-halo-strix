@@ -1,3 +1,14 @@
+---
+title: "AutoKernel Library API"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-08-torch-compile-custom-ops-design.md
+  - docs/superpowers/specs/2026-04-10-optimization-libraries-design.md
+tags: [%autokernel, %api, %pattern-matching]
+---
+
 # Design: AutoKernel Library API
 
 **Date:** 2026-04-08

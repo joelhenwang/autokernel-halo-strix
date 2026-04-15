@@ -1,3 +1,14 @@
+---
+title: "Optimization Candidates for mHC, MoE, and Engram Components"
+domain: kernels
+type: results
+status: active
+related:
+  - knowledge/kernels/backward_pass_optimization_research.md
+  - knowledge/kernels/backward_pass_optimization_results.md
+tags: [%engram, %moe, %scattermoe, %fla, %fusion]
+---
+
 # Optimization Candidates for mHC, MoE, and Engram Components
 
 **Date:** 2026-04-10
@@ -266,7 +277,7 @@ DeepSpeed is already installed on remote but only the Flops Profiler has margina
 
 ## Installation Notes
 
-All external packages on gfx1151 need ROCm 7.12 math builtin patching (`expf` → `__builtin_expf`, etc.). See `knowledge/amd_rdna35_strix_halo.md` §7 for the pattern. Budget 1-2 hours per package for source builds.
+All external packages on gfx1151 need ROCm 7.12 math builtin patching (`expf` → `__builtin_expf`, etc.). See `knowledge/hardware/amd_rdna35_strix_halo.md` §7 for the pattern. Budget 1-2 hours per package for source builds.
 
 ```bash
 # ScatterMoE (Triton-based, likely works)

@@ -1,3 +1,13 @@
+---
+title: "Halo Training Stack"
+domain: project
+type: reference
+status: active
+related:
+  - README.md
+tags: [%halo-training, %training-stack, %cli]
+---
+
 # Halo Training Stack
 
 Composable pretraining stack for AMD Strix Halo (gfx1151, RDNA 3.5 APU) on ROCm 7.12. Supports two training modes:

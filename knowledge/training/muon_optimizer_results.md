@@ -1,3 +1,13 @@
+---
+title: "Muon Optimizer — Results & Configuration"
+domain: training
+type: results
+status: active
+related:
+  - knowledge/training/argus_prime_results.md
+tags: [%muon, %optimizer, %adamw, %newton-schulz]
+---
+
 # Muon Optimizer — Results & Configuration (2026-04-13)
 
 ## What is Muon?

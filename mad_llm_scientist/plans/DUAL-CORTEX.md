@@ -1,3 +1,14 @@
+---
+title: "DUAL-CORTEX"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %dual-cortex]
+---
+
 # DUAL CORTEX
 
 **System-1/System-2 Architecture with Entropy-Gated Routing**

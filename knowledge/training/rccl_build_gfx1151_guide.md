@@ -1,3 +1,13 @@
+---
+title: "Building RCCL from Source for gfx1151 (Strix Halo)"
+domain: training
+type: guide
+status: active
+related:
+  - knowledge/training/ddp_setup_guide.md
+tags: [%rccl, %nccl, %gfx1151, %build-from-source]
+---
+
 # Building RCCL from Source for gfx1151 (Strix Halo)
 
 ## Why

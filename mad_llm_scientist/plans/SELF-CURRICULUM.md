@@ -1,3 +1,14 @@
+---
+title: "SELF-CURRICULUM"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %self-curriculum]
+---
+
 # SELF-CURRICULUM
 
 **Self-Curriculum Learning with Knowledge Injection for 15-Minute Training**

@@ -1,3 +1,14 @@
+---
+title: "torch.compile + Custom Op Registration + Weight Pipelining"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-12-compile-optimized-griffin-design.md
+  - docs/superpowers/specs/2026-04-08-autokernel-library-api-design.md
+tags: [%torch-compile, %custom-ops, %hip]
+---
+
 # Design: torch.compile + Custom Op Registration + Weight Pipelining
 
 **Date:** 2026-04-08

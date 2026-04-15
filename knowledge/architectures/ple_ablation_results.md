@@ -1,3 +1,13 @@
+---
+title: "PLE + MatFormer Ablation Results"
+domain: architectures
+type: results
+status: active
+related:
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%ple, %matformer, %ablation, %tempest]
+---
+
 # PLE + MatFormer Ablation Results
 
 **Date:** 2026-04-10

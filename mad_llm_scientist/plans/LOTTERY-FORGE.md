@@ -1,3 +1,14 @@
+---
+title: "LOTTERY-FORGE"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %lottery-forge]
+---
+
 # LOTTERY FORGE
 
 **Overparameterized Training + Structured Pruning as Architecture Search**

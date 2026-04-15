@@ -1,3 +1,14 @@
+---
+title: "ARGUS-PRIME — Full Results & Lessons Learned"
+domain: training
+type: results
+status: active
+related:
+  - knowledge/training/ddp_setup_guide.md
+  - knowledge/training/muon_optimizer_results.md
+tags: [%argus-prime, %training, %ddp, %common-crawl, %wikitext]
+---
+
 # ARGUS-PRIME — Full Results & Lessons Learned (2026-04-13)
 
 ## Architecture

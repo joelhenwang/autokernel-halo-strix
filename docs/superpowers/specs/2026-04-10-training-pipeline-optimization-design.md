@@ -1,3 +1,15 @@
+---
+title: "Training Pipeline Optimization"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-08-halo-training-stack-design.md
+  - docs/superpowers/specs/2026-04-10-training-evolution-design.md
+  - docs/superpowers/specs/2026-04-10-backward-pass-optimization-design.md
+tags: [%training, %pipeline, %optimizer]
+---
+
 # Training Pipeline Optimization
 
 **Date:** 2026-04-10

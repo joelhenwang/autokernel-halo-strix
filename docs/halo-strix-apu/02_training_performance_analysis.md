@@ -1,3 +1,15 @@
+---
+title: "Training Performance Analysis: Llama vs Custom Models"
+domain: operations
+type: guide
+status: active
+related:
+  - docs/halo-strix-apu/01_platform_and_rocm.md
+  - docs/superpowers/specs/2026-04-12-compile-optimized-griffin-design.md
+  - docs/superpowers/specs/2026-04-10-training-pipeline-optimization-design.md
+tags: [%profiling, %throughput, %mfu]
+---
+
 # 02 — Why Llama-170M Reaches ~40k tok/s but Custom Models Sit Around ~12k tok/s
 
 ## 1. The observed behavior

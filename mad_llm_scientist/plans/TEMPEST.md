@@ -1,3 +1,14 @@
+---
+title: "TEMPEST"
+domain: architectures
+type: plan
+status: active
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %tempest]
+---
+
 # TEMPEST
 
 **Pure Element-Wise Storm: 16 Griffin Layers + Residual Momentum**

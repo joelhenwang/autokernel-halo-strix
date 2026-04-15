@@ -1,3 +1,14 @@
+---
+title: "MAESTRO-PRIMA"
+domain: architectures
+type: plan
+status: active
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %maestro-prima]
+---
+
 # MAESTRO-PRIMA
 
 **Movement I: Component Dynamics — The Conductor Controls the Volume**

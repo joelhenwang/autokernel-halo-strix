@@ -1,3 +1,14 @@
+---
+title: "ARGUS-PRIME"
+domain: architectures
+type: plan
+status: active
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %argus-prime]
+---
+
 # ARGUS-PRIME
 
 **The Streamlined LFM2.5: Strip the Fat, Upgrade the Chassis, Find the Michelin Recipe**

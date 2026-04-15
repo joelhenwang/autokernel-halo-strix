@@ -1,3 +1,14 @@
+---
+title: "MEGATRAIN-HALO"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %megatrain-halo]
+---
+
 # MEGATRAIN-HALO
 
 **Porting Guide: Adapt MegaTrain for AMD Strix Halo (gfx1151, ROCm 7.12)**

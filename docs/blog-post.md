@@ -1,3 +1,14 @@
+---
+title: "We Tried to Make LLaMA Faster on an AMD Laptop GPU"
+domain: project
+type: reference
+status: active
+related:
+  - docs/halo-strix-apu/README.md
+  - docs/superpowers/specs/2026-04-08-autokernel-library-api-design.md
+tags: [%blog, %narrative, %autokernel]
+---
+
 # We Tried to Make LLaMA Faster on an AMD Laptop GPU. Here's What Actually Worked.
 
 *An honest look at GPU kernel optimization on bandwidth-limited hardware — what we learned about fusion, Amdahl's law, and why torch.compile beat 95 hand-tuned experiments.*

@@ -1,3 +1,14 @@
+---
+title: "MI300 Porting Experiments"
+domain: kernels
+type: guide
+status: stale
+related:
+  - experiments/readme.md
+  - experiments/mi300_optimization.md
+tags: [%mi300, %porting, %strix-halo]
+---
+
 # AutoKernel MI300 Porting Experiments
 
 > Port all 9 Triton starter kernels + full pipeline to AMD MI300 GPUs.

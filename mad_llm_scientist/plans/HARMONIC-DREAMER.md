@@ -1,3 +1,14 @@
+---
+title: "HARMONIC-DREAMER"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %harmonic-dreamer]
+---
+
 # HARMONIC DREAMER
 
 **Damped Harmonic Oscillator Recurrence + Dynamic Scratchpad on Parallel Hybrid Backbone**

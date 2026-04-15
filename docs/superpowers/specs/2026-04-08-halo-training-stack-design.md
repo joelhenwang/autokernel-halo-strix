@@ -1,3 +1,14 @@
+---
+title: "Halo Training Stack Design"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-training-pipeline-optimization-design.md
+  - docs/superpowers/specs/2026-04-10-training-evolution-design.md
+tags: [%training, %mode-a, %mode-b, %halo-training]
+---
+
 # HALO-TRAINING-STACK Design
 
 > _Readable version: key constraints, decisions, and callouts are emphasized with simple inline styling._
@@ -60,7 +71,7 @@ This design composes them into a unified training stack that:
 
 > **What to remember:** memory capacity is the big unlock; bandwidth is the main bottleneck.
 
-These values supersede estimates in `knowledge/amd_rdna35_strix_halo.md` (~120 GB/s, ~50 TFLOPS FP16, 28-54W TDP).
+These values supersede estimates in `knowledge/hardware/amd_rdna35_strix_halo.md` (~120 GB/s, ~50 TFLOPS FP16, 28-54W TDP).
 
 ---
 
@@ -596,7 +607,7 @@ Pipeline parallelism over TB4:
 
 | File | Changes |
 |------|---------|
-| `knowledge/amd_rdna35_strix_halo.md` | Correct to confirmed specs (240 GB/s, 59.4 TFLOPS, 128 GB, 45-120W) |
+| `knowledge/hardware/amd_rdna35_strix_halo.md` | Correct to confirmed specs (240 GB/s, 59.4 TFLOPS, 128 GB, 45-120W) |
 | `mad_llm_scientist/plans/MEGATRAIN-HALO.md` | Add DeepSpeed CPUAdam, flash_attn, correct specs, drop stateless templates, add pipeline parallelism future note |
 | `mad_llm_scientist/CLAUDE.md` | Correct memory (128 GB) and bandwidth (~240 GB/s) |
 
@@ -635,6 +646,6 @@ Pipeline parallelism over TB4:
 - **MegaTrain repo:** github.com/DLYuanGod/MegaTrain (Apache-2.0)
 - **Porting guide:** `mad_llm_scientist/plans/MEGATRAIN-HALO.md`
 - **Architecture cookbook:** `mad_llm_scientist/COOKBOOK.md`
-- **Hardware reference:** `knowledge/amd_rdna35_strix_halo.md`
+- **Hardware reference:** `knowledge/hardware/amd_rdna35_strix_halo.md`
 - **autokernel API:** `autokernel/__init__.py`
 - **DeepSpeed CPUAdam:** DeepSpeed issue #4768 (ROCm false warning)

@@ -1,3 +1,14 @@
+---
+title: "Possible Techniques for Backward Pass Improvement"
+domain: kernels
+type: reference
+status: active
+related:
+  - docs/superpowers/specs/2026-04-10-backward-pass-optimization-design.md
+  - docs/superpowers/specs/2026-04-10-training-pipeline-optimization-design.md
+tags: [%backward, %techniques, %survey]
+---
+
 Here’s the landscape for **improving or replacing matrix multiplication in the backward pass of DL training**.
 
 For a linear layer (Y = XW), the expensive backward-pass products are:

@@ -1,3 +1,14 @@
+---
+title: "GENIUS-CAVEMAN"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %genius-caveman]
+---
+
 # GENIUS CAVEMAN
 
 **Information-Weighted Dual-Path Architecture with Engram Reflexes**

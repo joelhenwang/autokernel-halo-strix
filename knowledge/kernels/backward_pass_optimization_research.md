@@ -1,3 +1,14 @@
+---
+title: "Backward Pass Optimization Research"
+domain: kernels
+type: reference
+status: active
+related:
+  - knowledge/kernels/backward_pass_optimization_results.md
+  - knowledge/hardware/amd_rdna35_strix_halo.md
+tags: [%backward, %optimization, %research, %fp8, %sampled-softmax]
+---
+
 # Backward Pass Optimization Research
 
 **Date:** 2026-04-10

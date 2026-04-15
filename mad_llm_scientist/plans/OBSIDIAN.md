@@ -1,3 +1,14 @@
+---
+title: "OBSIDIAN"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %obsidian]
+---
+
 # OBSIDIAN
 
 **Evolution of Ternary Reflex: BitNet b1.58 + Griffin + Caveman LFM Genius + Engram**

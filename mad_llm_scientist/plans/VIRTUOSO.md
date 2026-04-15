@@ -1,3 +1,14 @@
+---
+title: "VIRTUOSO"
+domain: architectures
+type: plan
+status: active
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %virtuoso]
+---
+
 # VIRTUOSO
 
 > **Superseded** by composable PLE+MatFormer modules. See `models/ple.py`, `models/matformer.py`, `models/virtuoso.py` and `docs/superpowers/specs/2026-04-10-ple-matformer-design.md`.

@@ -1,3 +1,14 @@
+---
+title: "NEXUS"
+domain: architectures
+type: plan
+status: active
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %nexus]
+---
+
 # NEXUS
 
 **The Split-Mind Griffin: Compile-Optimized Griffin + TTT Fast Weights + FiLM + Residual Momentum**

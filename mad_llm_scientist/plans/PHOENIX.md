@@ -1,3 +1,14 @@
+---
+title: "PHOENIX"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %phoenix]
+---
+
 # PHOENIX
 
 **AMADEUS Reborn: Close the MFU Gap Through Optimization**

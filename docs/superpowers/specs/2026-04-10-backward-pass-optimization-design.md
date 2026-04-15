@@ -1,3 +1,15 @@
+---
+title: "Backward Pass Optimization Design"
+domain: design-specs
+type: spec
+status: active
+related:
+  - docs/superpowers/specs/2026-04-09-adaptive-lm-head-design.md
+  - docs/superpowers/specs/2026-04-10-training-pipeline-optimization-design.md
+  - docs/possible_techniques_bwd_improv.md
+tags: [%backward, %optimization, %chunked-ce, %fusion]
+---
+
 # Backward Pass Optimization Design
 
 **Date:** 2026-04-10
@@ -258,7 +270,7 @@ For each of the 22 hypothesis plans:
 2. Apply measured per-op backward speedups to estimate overall backward improvement
 3. Compute new tok/s = old_tok/s × (1 / (1 - backward_fraction × (1 - 1/backward_speedup)))
 4. Rerank by estimated optimized throughput
-5. Update `knowledge/Estimation_Hypothesis_Ranking.md`
+5. Update `knowledge/architectures/Estimation_Hypothesis_Ranking.md`
 
 ## File Plan
 
@@ -276,14 +288,14 @@ For each of the 22 hypothesis plans:
 | `halo_training/activation_quant.py` | Int8 activation quantization for backward | 150 |
 | `scripts/profile_backward_breakdown.py` | Per-op backward profiler | 200 |
 | `scripts/bench_backward_optimizations.py` | Benchmark all backward techniques | 300 |
-| `knowledge/backward_pass_optimization_results.md` | Results documentation | — |
+| `knowledge/kernels/backward_pass_optimization_results.md` | Results documentation | — |
 
 ### Modified Files
 | File | Change |
 |------|--------|
 | `kernels/hip/_torch_ops.py` | Wire fused backward kernels into custom op `.register_autograd` |
 | `halo_training/trainer.py` | Integrate chunked CE Approach D as default, add sampled softmax option |
-| `knowledge/Estimation_Hypothesis_Ranking.md` | Reranked throughput estimates with backward gains |
+| `knowledge/architectures/Estimation_Hypothesis_Ranking.md` | Reranked throughput estimates with backward gains |
 
 ## Expected Results
 

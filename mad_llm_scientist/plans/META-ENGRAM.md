@@ -1,3 +1,14 @@
+---
+title: "META-ENGRAM"
+domain: architectures
+type: plan
+status: stale
+related:
+  - mad_llm_scientist/COOKBOOK.md
+  - knowledge/architectures/hypothesis_buildout_results.md
+tags: [%hypothesis, %plan, %meta-engram]
+---
+
 # META ENGRAM
 
 **Two-Tier Knowledge System: Always-On Meta Tokens + On-Demand Hash Table Lookup**
