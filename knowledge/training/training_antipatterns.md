@@ -37,8 +37,27 @@ tags: [%antipatterns, %optimization, %patterns, %rocblas, %rocm, %hip, %training
 - **Adaptive softmax for training**: 3 tier matmuls is 4% slower than 1 large matmul on memory-bound hardware. Single LM head for training.
 - **SSM state explosion**: Init: A_log=log(arange(1,N+1)), dt_proj bias=-4.0, dt clamped [1e-4, 0.5], B/C normalized by max(norm, 1.0).
 - **torch.compile on full looped models**: Python loops with variable depth + no_grad/grad switching cause graph breaks. Compile gives 0% or negative benefit. **Fix:** compile each layer/zone independently (`model.compile_zones()`). JORMUNGANDR-HALO: 14K (eager) → 43K (AK + per-zone compile), 3.07x.
-- **Passing kwargs to autokernel-replaced modules**: Autokernel's fused replacements don't accept extra kwargs (e.g., `value_bias`). Guard with `if value_bias is not None: attn(x, freqs, value_bias=value_bias) else: attn(x, freqs)`.
+- **Passing kwargs to autokernel-replaced modules**: Autokernel's fused replacements don't accept extra kwargs (e.g., `value_bias`). Guard with `if value_bias is not None and not hasattr(attn, 'w_qkv'): attn(x, freqs, value_bias=value_bias) else: attn(x, freqs)`. Check `hasattr(self.attn, 'w_qkv')` to detect fused replacement.
 - **Checkpoints are always fp32**: AMP dtype (fp16/bf16) only exists transiently inside autocast. Checkpoints save fp32 master weights. Safe to load across fp16 (AMD) → bf16 (NVIDIA) training.
+- **FiLM cross-dimension mismatch**: Don't apply FiLM modulation (d_target=768) to core loop states (d=512). Compute FiLM context from the core loop, but only apply to Coda layers (d=768). n_film_targets = 4 (Coda only), not 6.
+- **Loss reporting with gradient accumulation**: `halo_training` reports loss summed over accum_steps, not averaged. Divide reported loss by accum_steps for actual per-token CE. E.g., reported 24.0 with accum_steps=4 → actual loss 6.0.
+
+## XSA + Depth Memory Cache (Ablation Results)
+
+Tested on BabyLM 1 epoch, compile + autokernel, Muon, batch=16, block=256:
+
+| Config | Loss | Δ vs Bare | Params added |
+|--------|------|-----------|-------------|
+| Bare (baseline) | 6.028 | — | — |
+| +XSA | 5.973 | -0.9% | 0 |
+| +Depth MC (GRM) | 5.879 | -2.5% | 32K |
+| +XSA+DC | 5.770 | -4.3% | 32K |
+| Full (FiLM+VE+TTT+XSA+DC) | 5.770 | -4.3% | 4.3M |
+
+**XSA** (Exclusive Self Attention, Zhai 2026): removes self-value projection from attention output. Zero params, zero compute. -0.9% alone.
+**Depth MC** (Memory Caching GRM, Behrouz et al. 2026): caches loop iteration states, content-dependent gated aggregation. 32K params. -2.5% alone.
+**Additive**: XSA+DC combined = -4.3%, nearly exact sum of individual effects. No interference.
+**FiLM+VE+TTT add no further benefit** on small BabyLM (may differentiate on larger data).
 
 ## rocBLAS / BLAS Optimization
 

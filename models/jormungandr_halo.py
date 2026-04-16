@@ -6,7 +6,7 @@ Core block (~1.2MB fp16) fits in 1/5 of 6MB L2 cache, making loop iterations
 2+ ~3x cheaper. Parcae A-matrix stability, Poisson depth sampling, staged
 component activation.
 
-110M unique params, 158M effective at 4 iters, 206M at 8 iters.
+~104M unique params, ~152M effective at 4 iters, ~200M at 8 iters.
 
 Design spec: docs/superpowers/specs/2026-04-16-jormungandr-halo-design.md
 Parent plan: mad_llm_scientist/plans/JORMUNGANDR.md
@@ -84,7 +84,18 @@ class ValueEmbedding(nn.Module):
 # ---------------------------------------------------------------------------
 
 class CodaAttention(Attention):
-    """GQA Attention that optionally adds a ValueEmbedding bias to V."""
+    """GQA Attention with optional ValueEmbedding bias and Exclusive Self Attention.
+
+    XSA removes the self-value projection from attention output, forcing attention
+    to capture information orthogonal to each token's own value — reducing redundancy
+    with the FFN layer and improving context utilization.
+    Ref: "Exclusive Self Attention" (Zhai, 2026)
+    """
+
+    def __init__(self, dim: int, n_heads: int, n_kv_heads: int,
+                 qk_norm: bool = True, exclusive: bool = False):
+        super().__init__(dim, n_heads, n_kv_heads, qk_norm)
+        self.exclusive = exclusive
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor,
                 value_bias: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -114,6 +125,14 @@ class CodaAttention(Attention):
             ).transpose(1, 2)
         else:
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+        # XSA: remove self-value projection per-head per-position
+        # z_i = y_i - (y_i · v_i / ||v_i||²) · v_i
+        if self.exclusive:
+            dot = (y * v).sum(dim=-1, keepdim=True)
+            v_norm_sq = (v * v).sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            y = y - (dot / v_norm_sq) * v
+
         return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
 
 
@@ -129,10 +148,12 @@ class CodaGQABlock(nn.Module):
                  momentum_beta: float = 0.5,
                  ttt_mode: str = "none",
                  ttt_chunk: int = 512, ttt_lr_init: float = 0.01,
-                 value_embedding: Optional[ValueEmbedding] = None):
+                 value_embedding: Optional[ValueEmbedding] = None,
+                 exclusive: bool = False):
         super().__init__()
         self.pre_norm = RMSNorm(d_model)
-        self.attn = CodaAttention(d_model, n_heads, n_kv_heads, qk_norm=True)
+        self.attn = CodaAttention(d_model, n_heads, n_kv_heads, qk_norm=True,
+                                  exclusive=exclusive)
         self.log_beta = nn.Parameter(
             torch.tensor(math.log(momentum_beta / (1 - momentum_beta)))
         )
@@ -153,9 +174,10 @@ class CodaGQABlock(nn.Module):
         if self.value_embedding is not None and input_ids is not None:
             value_bias = self.value_embedding(input_ids)
 
-        # Call attention — avoid passing value_bias kwarg when None
-        # (autokernel's fused replacement doesn't accept it)
-        if value_bias is not None:
+        # Call attention — only pass value_bias when non-None AND the attention
+        # hasn't been replaced by autokernel's fused QKV (which doesn't accept it)
+        is_fused = hasattr(self.attn, 'w_qkv')
+        if value_bias is not None and not is_fused:
             attn_out = self.attn(self.pre_norm(x), freqs_cis, value_bias=value_bias)
         else:
             attn_out = self.attn(self.pre_norm(x), freqs_cis)
@@ -217,6 +239,54 @@ class CrossDimFiLMConditioner(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# Depth Memory Cache (GRM — Gated Residual Memory over loop iterations)
+# ---------------------------------------------------------------------------
+
+class DepthMemoryCache(nn.Module):
+    """Content-dependent gated aggregation over cached loop iteration states.
+
+    Instead of using only the final loop state, caches h at each iteration
+    and lets each sequence position select its own weighted mix of depths.
+    Addresses variable convergence rates: some positions are "done" at iter 2,
+    others need all 4.
+
+    Ref: "Memory Caching: RNNs with Growing Memory" (Behrouz et al., 2026)
+    Applied here along depth (loop iterations), not sequence segments.
+    """
+
+    def __init__(self, d_core: int, d_gate: int = 64):
+        super().__init__()
+        self.W_u = nn.Linear(d_core, d_gate, bias=False)
+
+    def forward(self, cached_states: List[torch.Tensor]) -> torch.Tensor:
+        """Aggregate cached loop states via content-dependent gating.
+
+        Args:
+            cached_states: List of (B, T, d_core) tensors, one per iteration.
+        Returns:
+            Aggregated state (B, T, d_core).
+        """
+        if len(cached_states) == 1:
+            return cached_states[0]
+
+        # Query from last iteration (highest-depth representation)
+        u = self.W_u(cached_states[-1])  # (B, T, d_gate)
+
+        # Gate each cached state by similarity to its mean-pooled representation
+        gates = []
+        for state in cached_states:
+            key = self.W_u(state).mean(dim=1)  # (B, d_gate)
+            gate = (u * key.unsqueeze(1)).sum(dim=-1)  # (B, T)
+            gates.append(gate)
+
+        gates = torch.softmax(torch.stack(gates, dim=-1), dim=-1)  # (B, T, N)
+
+        # Weighted aggregation
+        stacked = torch.stack(cached_states, dim=-1)  # (B, T, d_core, N)
+        return (stacked * gates.unsqueeze(2)).sum(dim=-1)  # (B, T, d_core)
+
+
+# ---------------------------------------------------------------------------
 # JORMUNGANDR-HALO Model
 # ---------------------------------------------------------------------------
 
@@ -245,7 +315,7 @@ class JormungandrHaloBase(nn.Module):
         curriculum_steps: int = 5000,
         use_film: bool = True,
         d_film: int = 64,
-        n_film_targets: int = 6,
+        n_film_targets: int = 4,
         use_ve: bool = True,
         d_ve: int = 64,
         ttt_mode: str = "single",
@@ -254,6 +324,9 @@ class JormungandrHaloBase(nn.Module):
         momentum_beta_init: float = 0.5,
         max_seq_len: int = 1024,
         randomize_positions: bool = False,
+        use_xsa: bool = True,
+        use_depth_cache: bool = True,
+        d_gate: int = 64,
     ):
         super().__init__()
         self.d_prelude = d_prelude
@@ -310,12 +383,13 @@ class JormungandrHaloBase(nn.Module):
         self.coda_layers = nn.ModuleList([
             ShortConvBlock(d_prelude, d_conv_prelude, ffn_prelude, conv_kernel, momentum_beta_init),
             CodaGQABlock(d_prelude, ffn_prelude, n_heads, n_kv_heads,
-                         momentum_beta_init, ttt_mode="none"),
+                         momentum_beta_init, ttt_mode="none",
+                         exclusive=use_xsa),
             ShortConvBlock(d_prelude, d_conv_prelude, ffn_prelude, conv_kernel, momentum_beta_init),
             CodaGQABlock(d_prelude, ffn_prelude, n_heads, n_kv_heads,
                          momentum_beta_init, ttt_mode=ttt_mode,
                          ttt_chunk=ttt_chunk, ttt_lr_init=ttt_lr_init,
-                         value_embedding=ve),
+                         value_embedding=ve, exclusive=use_xsa),
         ])
 
         # Store VE reference for param counting (it's inside coda_layers[-1])
@@ -325,6 +399,9 @@ class JormungandrHaloBase(nn.Module):
         self.film = CrossDimFiLMConditioner(
             d_core, d_film, d_prelude, n_film_targets
         ) if use_film else None
+
+        # === DEPTH MEMORY CACHE (GRM over loop iterations) ===
+        self.depth_cache = DepthMemoryCache(d_core, d_gate) if use_depth_cache else None
 
         self._init_weights()
         n_params = sum(p.numel() for p in self.parameters())
@@ -440,8 +517,8 @@ class JormungandrHaloBase(nn.Module):
             n_detached = 0
             n_grad = self.mean_recurrence
 
-        loop_states = []
-        collect_hsv = not self.training
+        use_dc = self.depth_cache is not None
+        cached_states = []
 
         # Detached iterations (no grad, no GradScaler overhead)
         for t in range(n_detached):
@@ -449,8 +526,8 @@ class JormungandrHaloBase(nn.Module):
                 h_core = self.injection(h_core, input_embed_down)
                 for layer in self.core_layers:
                     h_core, velocity_512 = layer(h_core, velocity_512)
-                if collect_hsv:
-                    loop_states.append(h_core.detach())
+                if use_dc or not self.training:
+                    cached_states.append(h_core.detach())
 
         # Gradient-tracked iterations
         context = None
@@ -458,25 +535,30 @@ class JormungandrHaloBase(nn.Module):
             h_core = self.injection(h_core, input_embed_down)
             for layer in self.core_layers:
                 h_core, velocity_512 = layer(h_core, velocity_512)
-            if collect_hsv:
-                loop_states.append(h_core.detach())
 
-            # FiLM: compute fingerprint on first gradient iteration
-            if t == 0 and self.film is not None:
+            # FiLM: compute fingerprint on last gradient iteration (d=512 context)
+            # Applied only to Coda layers (d=768), not core loop (d=512)
+            if t == n_grad - 1 and self.film is not None:
                 context = self.film.compute_context(h_core)
 
-            # FiLM: modulate subsequent gradient iterations (targets 0..n_grad-2)
-            if t > 0 and context is not None:
-                h_core = self.film.apply(h_core, context, t - 1)
+            # Cache state: keep grad for depth cache backprop, detach for HSV-only
+            if use_dc:
+                cached_states.append(h_core)
+            elif not self.training:
+                cached_states.append(h_core.detach())
 
-        self._loop_states = loop_states
+        # HSV monitoring (always detached)
+        self._loop_states = [s.detach() for s in cached_states]
+
+        # Depth Memory Cache: gated aggregation over iteration states
+        if use_dc and len(cached_states) > 1:
+            h_core = self.depth_cache(cached_states)
 
         # === EXIT (512 → 768) ===
         h = self.proj_up(h_core)
 
         # === CODA (d=768) ===
         velocity_768 = torch.zeros_like(h)
-        film_offset = max(n_grad - 1, 0)
 
         for i, layer in enumerate(self.coda_layers):
             if isinstance(layer, CodaGQABlock):
@@ -488,9 +570,9 @@ class JormungandrHaloBase(nn.Module):
             else:
                 h, velocity_768 = layer(h, velocity_768)
 
-            # FiLM modulation on each Coda layer
+            # FiLM modulation on each Coda layer (targets 0..3)
             if context is not None:
-                h = self.film.apply(h, context, film_offset + i)
+                h = self.film.apply(h, context, i)
 
         return self.output(self.norm(h))
 
@@ -518,11 +600,42 @@ class JormungandrHaloNoTTT(JormungandrHaloBase):
 
 
 class JormungandrHaloBare(JormungandrHaloBase):
-    """Stage 1: Bare loop only — no FiLM, no VE, no TTT."""
+    """Stage 1: Bare loop only — no FiLM, no VE, no TTT, no XSA, no depth cache."""
     def __init__(self, **kw):
         super().__init__(
             mean_recurrence=4, ttt_mode="none",
-            use_film=False, use_ve=False, **kw,
+            use_film=False, use_ve=False,
+            use_xsa=False, use_depth_cache=False, **kw,
+        )
+
+
+class JormungandrHaloXSA(JormungandrHaloBase):
+    """Ablation: bare + XSA only."""
+    def __init__(self, **kw):
+        super().__init__(
+            mean_recurrence=4, ttt_mode="none",
+            use_film=False, use_ve=False,
+            use_xsa=True, use_depth_cache=False, **kw,
+        )
+
+
+class JormungandrHaloDC(JormungandrHaloBase):
+    """Ablation: bare + Depth Cache only."""
+    def __init__(self, **kw):
+        super().__init__(
+            mean_recurrence=4, ttt_mode="none",
+            use_film=False, use_ve=False,
+            use_xsa=False, use_depth_cache=True, **kw,
+        )
+
+
+class JormungandrHaloXSADC(JormungandrHaloBase):
+    """Ablation: bare + XSA + Depth Cache."""
+    def __init__(self, **kw):
+        super().__init__(
+            mean_recurrence=4, ttt_mode="none",
+            use_film=False, use_ve=False,
+            use_xsa=True, use_depth_cache=True, **kw,
         )
 
 
@@ -540,6 +653,7 @@ class JormungandrHaloMini(JormungandrHaloBase):
             curriculum_steps=100,
             use_film=False, use_ve=False,
             ttt_mode="none",
+            use_xsa=False, use_depth_cache=False,
             momentum_beta_init=0.5,
             max_seq_len=1024,
         )

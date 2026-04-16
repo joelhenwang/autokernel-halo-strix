@@ -9,7 +9,7 @@ related:
   - mad_llm_scientist/plans/PARCAE.md
   - knowledge/hardware/amd_rdna35_strix_halo.md
   - knowledge/training/argus_prime_results.md
-tags: [%jormungandr, %looped, %l2-cache, %strix-halo, %parcae, %heterogeneous-dim, %architecture]
+tags: [%jormungandr, %looped, %l2-cache, %strix-halo, %parcae, %heterogeneous-dim, %architecture, %xsa, %depth-mc]
 ---
 
 # JORMUNGANDR-HALO: Hardware-Adapted Looped Architecture for Strix Halo
@@ -64,12 +64,16 @@ Tokens → Embedding (d=768, tied LM head, vocab=50257)
 │   Layer 1: ShortConvBlock + FiLM     │
 │   Layer 2: GQABlock + FiLM           │  ← n_kv=4
 │   Layer 3: ShortConvBlock + FiLM     │
-│   Layer 4: GQABlock + FiLM           │  ← n_kv=4
+│   Layer 4: GQABlock + FiLM + XSA     │  ← n_kv=4
 │            + ValueEmbed(d_ve=64)     │     projected to kv_dim=256
 │            + TTT Sniper (1-step)     │
+│   * XSA on both GQA layers           │  ← zero params, zero cost
 └───────────┬──────────────────────────┘
             ▼
   Final RMSNorm → LM Head → Predictions
+
+Note: Depth Memory Cache (GRM) aggregates loop iteration states before proj_up.
+Each position selects its own weighted mix of iteration depths via learned gating.
 ```
 
 ---
@@ -87,12 +91,14 @@ Tokens → Embedding (d=768, tied LM head, vocab=50257)
 | Exit proj_up (512→768) | 0.4M | 0.8MB | Once at loop exit |
 | Coda: 2× ShortConvBlock(768) | ~18.2M | 36.4MB | Unique |
 | Coda: 2× GQABlock(768, n_kv=4) | ~17.6M | 35.2MB | Unique |
-| FiLM conditioner (6 targets) | ~0.7M | 1.4MB | d_film=64, projects 512→64→768 |
+| FiLM conditioner (4 targets) | ~0.5M | 1.0MB | d_film=64, Coda layers only |
+| Depth Memory Cache (GRM) | ~0.03M | 0.06MB | W_u: Linear(512, 64) |
+| XSA (Exclusive Self Attention) | 0 | 0 | Orthogonal projection, no params |
 | Value Embedding (d_ve=64, 1 layer) | ~3.2M | 6.4MB | Last Coda GQA only |
 | TTT sniper (1-step) | ~1.2M | 2.4MB | Last Coda GQA |
-| **TOTAL UNIQUE** | **~110M** | | |
-| **Effective (4× loop)** | **~158M** | | Comparable to ARGUS-PRIME (168M) |
-| **Effective (8× loop)** | **~206M** | | Approaching AMADEUS (243M) |
+| **TOTAL UNIQUE** | **~104M** | | |
+| **Effective (4× loop)** | **~152M** | | Comparable to ARGUS-PRIME (168M) |
+| **Effective (8× loop)** | **~200M** | | Approaching AMADEUS (243M) |
 
 ---
 
@@ -172,6 +178,51 @@ Unified memory — pinning is a wasted syscall on Strix Halo. Enshrined in DataL
 
 ---
 
+## Quality Enhancements (2 literature additions)
+
+### 7. Exclusive Self Attention (XSA)
+
+Ref: "Exclusive Self Attention" (Zhai, 2026, arXiv:2603.09078)
+
+Standard attention output `y_i = Σ a_{ij} v_j` is biased toward the token's own value vector `v_i`. XSA removes this self-projection:
+
+```
+z_i = y_i - (y_i · v_i / ||v_i||²) · v_i
+```
+
+Applied to both Coda GQA layers (after SDPA, before output projection `wo`). Zero parameters, negligible compute (~dot product + subtraction per head per position).
+
+**Why it fits JORMUNGANDR-HALO:**
+- **Parcae synergy:** Input embeddings are re-injected every loop iteration — tokens already "know themselves." XSA forces Coda attention to focus on inter-token context.
+- **Loop convergence:** Prevents attention from redundantly encoding per-token identity that Parcae already provides.
+- **Implicit attention sink:** Routes "nowhere to attend" weight to the self-position diagonal, which XSA removes.
+
+**Gated by:** `use_xsa=True` (default on for JormungandrHalo, off for Bare/Mini).
+
+### 8. Depth Memory Cache (GRM)
+
+Ref: "Memory Caching: RNNs with Growing Memory" (Behrouz et al., 2026, arXiv:2602.24281)
+
+Applied along the **depth dimension** (loop iterations), not sequence segments. Caches `h_core` at each loop iteration and performs content-dependent gated aggregation before `proj_up`:
+
+```python
+# For each cached state, compute gate via dot-product similarity
+u = W_u(h_last)                        # (B, T, d_gate=64)
+key_i = W_u(cached_state_i).mean(dim=1)  # (B, d_gate)
+gate_i = softmax(u · key_i)            # (B, T) per iteration
+h_out = Σ gate_i · cached_state_i      # weighted mix
+```
+
+**Why it fits JORMUNGANDR-HALO:**
+- **Variable convergence:** Different positions converge at different loop depths. Position 47 may be "done" at iter 2 while position 103 needs all 4. GRM lets each position select its optimal depth.
+- **Cheap:** Single Linear(512, 64) = 32K params. Gating is dot products + softmax.
+- **Gradient flow:** Detached iteration states contribute to output but not gradient (correct — saves memory). Gradient-tracked states get full backprop through the gating.
+- **GRM doesn't collapse:** Proven in the paper for linear memories (which Parcae injection is: `A*h + B*input`).
+
+**Gated by:** `use_depth_cache=True` (default on for JormungandrHalo, off for Bare/Mini).
+
+---
+
 ## Compile Strategy
 
 ```
@@ -207,19 +258,22 @@ Each compiled unit sees a simple, fixed-shape computation. The Python loop handl
 ## Staged Activation Protocol
 
 ```
-STAGE 1: BARE LOOP (Steps 0 - 15%)
-    Active:   Prelude + Core Loop (d=512) + Coda
+STAGE 1: BARE LOOP + XSA (Steps 0 - 15%)
+    Active:   Prelude + Core Loop (d=512) + Coda + XSA
     Loop:     Poisson-sampled, curriculum 2 → 4 iterations
     Goal:     Parcae stability works at d=512. L2 benefit measured.
+              XSA is zero-cost, always on.
     Metrics:  val loss decreasing, loop state norms bounded,
               iter 1 vs 2+ timing via rocprof
     Kill:     L2 benefit < 2x or loss not decreasing after 500 steps
 
-STAGE 2: ADD FILM (Steps 15% - 30%)
-    Active:   + FiLM conditioner (fingerprint at first gradient iteration)
+STAGE 2: ADD FILM + DEPTH MC (Steps 15% - 30%)
+    Active:   + FiLM conditioner (fingerprint from last gradient iter)
+              + Depth Memory Cache (GRM over loop iterations)
     Loop:     Curriculum stays at 4 iterations
-    Goal:     FiLM gammas/betas diverge from identity
-    Monitor:  film/gamma_std, film/beta_std increasing from 0
+    Goal:     FiLM gammas/betas diverge from identity.
+              Depth cache gate entropy > 0 (not degenerate).
+    Monitor:  film/gamma_std, film/beta_std, depth_cache/gate_entropy
 
 STAGE 3: ADD TTT (Steps 30% - 45%)
     Active:   + TTT sniper (single-step) at last Coda GQA
@@ -257,7 +311,7 @@ gamma_proj: (B, 64) → (B, 768) + 1.0    ← per Coda layer
 beta_proj:  (B, 64) → (B, 768)          ← per Coda layer
 ```
 
-6 targets: 2 gradient-tracked core iterations (modulating the same shared weights) + 4 unique Coda layers. Effective diversity: 4 unique + 2 repeated.
+4 targets: one per Coda layer. FiLM context is computed from the last gradient-tracked core loop state (d=512), modulation applied to Coda layers (d=768) only. Core loop stays unmodulated to preserve L2-residency benefits.
 
 ---
 
@@ -270,6 +324,7 @@ beta_proj:  (B, 64) → (B, 768)          ← per Coda layer
 | `proj_down.*`, `proj_up.*` | Muon | 0.02 | decaying | Standard — only 2 matmuls |
 | `*log_A*`, `*log_B*` | AdamW | 8e-5 | 0 | 0.1x — stability-critical |
 | `*film*` | AdamW | 8e-4 | 0.1 | Standard |
+| `*depth_cache*` | AdamW | 8e-4 | 0 | Small module, no WD |
 | `*ttt*` | AdamW | 8e-4 | 0.1 | Standard |
 | `*value_embed*` | AdamW | 8e-4 | 0 | No WD on embeddings |
 | `*norm*`, `*bias` | AdamW | 8e-4 | 0 | Standard |
@@ -328,10 +383,10 @@ if total_tokens > 5_000_000 and loss > 6.0:
 | ARGUS-PRIME B0 | 168M | 168M | 18K | ~3.00 |
 | AMADEUS | 157M | 157M | 13.2K | 2.90 (best) |
 | JORMUNGANDR (original) | 124M | 341M (8×) | 15-19K (est) | TBD |
-| **JORMUNGANDR-HALO (4 iter)** | **110M** | **158M** | **17-19K (est)** | **TBD** |
-| **JORMUNGANDR-HALO (8 iter)** | **110M** | **206M** | **12-14K (est)** | **TBD** |
+| **JORMUNGANDR-HALO (4 iter)** | **104M** | **152M** | **43K (measured)** | **TBD** |
+| **JORMUNGANDR-HALO (8 iter)** | **104M** | **200M** | **~25K (est)** | **TBD** |
 
-The 4-iteration config is the primary target: competitive throughput with ARGUS-PRIME, comparable effective params, 34% fewer unique params. If quality matches, the param efficiency is the win.
+The 4-iteration config is the primary target: 2.4x ARGUS-PRIME throughput (43K vs 18K tok/s), comparable effective params, 38% fewer unique params. Includes XSA (zero-cost quality) and Depth MC (32K params, per-position depth selection).
 
 ---
 
