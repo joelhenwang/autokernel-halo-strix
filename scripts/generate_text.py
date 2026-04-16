@@ -25,10 +25,12 @@ def load_model(model_path, class_name):
     return cls()
 
 
-def generate(model, prompt_ids, max_tokens=200, temperature=0.8, top_k=40, top_p=0.9):
-    """Autoregressive generation with top-k + top-p sampling."""
+def generate(model, prompt_ids, max_tokens=200, temperature=0.8, top_k=40, top_p=0.9,
+             repetition_penalty=1.0, frequency_penalty=0.0):
+    """Autoregressive generation with top-k + top-p + repetition/frequency penalties."""
     device = next(model.parameters()).device
     ids = prompt_ids.to(device)
+    token_counts = torch.zeros(1, 50257, device=device)
 
     model.eval()
     with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.float16):
@@ -36,7 +38,23 @@ def generate(model, prompt_ids, max_tokens=200, temperature=0.8, top_k=40, top_p
             # Truncate to max_seq_len if needed
             context = ids[:, -1024:]  # use last 1024 tokens
             logits = model(context)
-            logits = logits[:, -1, :] / temperature
+            logits = logits[:, -1, :]
+
+            # Repetition penalty: penalize tokens already in the sequence
+            if repetition_penalty != 1.0:
+                generated = ids[0].tolist()
+                seen = set(generated)
+                for token_id in seen:
+                    if logits[0, token_id] > 0:
+                        logits[0, token_id] /= repetition_penalty
+                    else:
+                        logits[0, token_id] *= repetition_penalty
+
+            # Frequency penalty: subtract penalty * count for each token
+            if frequency_penalty > 0.0:
+                logits -= frequency_penalty * token_counts
+
+            logits /= temperature
 
             # Top-k filtering
             if top_k > 0:
@@ -58,6 +76,7 @@ def generate(model, prompt_ids, max_tokens=200, temperature=0.8, top_k=40, top_p
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             ids = torch.cat([ids, next_token], dim=1)
+            token_counts[0, next_token.item()] += 1
 
             # Stop on EOS
             if next_token.item() == 50256:
@@ -77,6 +96,10 @@ def main():
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--num-samples", type=int, default=3)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0,
+                        help="Penalize repeated tokens (1.0=off, 1.1-1.5=typical)")
+    parser.add_argument("--frequency-penalty", type=float, default=0.0,
+                        help="Subtract penalty*count from logits (0.0=off, 0.5-2.0=typical)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -114,13 +137,15 @@ def main():
     prompt_ids = torch.tensor([prompt_tokens], dtype=torch.long)
 
     print(f"\nPrompt: {args.prompt}")
-    print(f"Config: temp={args.temperature}, top_k={args.top_k}, top_p={args.top_p}")
+    print(f"Config: temp={args.temperature}, top_k={args.top_k}, top_p={args.top_p}, "
+          f"rep_pen={args.repetition_penalty}, freq_pen={args.frequency_penalty}")
     print("=" * 60)
 
     for i in range(args.num_samples):
         output_ids = generate(
             model, prompt_ids, args.max_tokens,
-            args.temperature, args.top_k, args.top_p
+            args.temperature, args.top_k, args.top_p,
+            args.repetition_penalty, args.frequency_penalty
         )
         text = enc.decode(output_ids[0].tolist())
         print(f"\n--- Sample {i+1} ---")

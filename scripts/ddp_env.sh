@@ -12,8 +12,8 @@ export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib:$LD_LIBRARY_PATH
 # Machine 1: needs its own build or a copy of librccl.so.1.0
 export LD_PRELOAD=$HOME/Desktop/ai_lab/autokernel-halo-strix/external/rccl/build/release/librccl.so.1.0
 
-export NCCL_SOCKET_IFNAME=thunderbol0
-export GLOO_SOCKET_IFNAME=thunderbol0
+export NCCL_SOCKET_IFNAME=thunderbolt0
+export GLOO_SOCKET_IFNAME=thunderbolt0
 export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 export NCCL_SOCKET_NTHREADS=4

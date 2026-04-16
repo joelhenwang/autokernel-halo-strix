@@ -41,7 +41,8 @@ tags: [%index, %navigation, %knowledge-graph]
 - [Hypothesis Ranking](knowledge/architectures/Estimation_Hypothesis_Ranking.md) — all 30 hypotheses ranked by estimated MFU and feasibility
 - [Reliable Small LM Insights](knowledge/architectures/reliable_small_lm_insights.md) — 6 gaps in small model training, best practices
 - [PLE Ablation](knowledge/architectures/ple_ablation_results.md) — Path A wins quality, MatFormer free, B/AB no benefit
-- [Architecture Plans](mad_llm_scientist/plans/) — 30 hypothesis designs (AMADEUS, TEMPEST, ARGUS-PRIME, LAZARUS, etc.)
+- [Architecture Plans](mad_llm_scientist/plans/) — 30+ hypothesis designs (AMADEUS, TEMPEST, ARGUS-PRIME, JORMUNGANDR, etc.)
+- [JORMUNGANDR Plan](mad_llm_scientist/plans/JORMUNGANDR.md) — Parcae-stable looped ShortConv, staged activation, Poisson depth
 - [COOKBOOK](mad_llm_scientist/COOKBOOK.md) — shared modules, implementation patterns for all architectures
 
 ## Design Specs (Decisions Made)
@@ -60,6 +61,8 @@ tags: [%index, %navigation, %knowledge-graph]
 - [Backward Pass Optimization](docs/superpowers/specs/2026-04-10-backward-pass-optimization-design.md) — backward fusion, chunked CE
 - [Compile-Optimized Griffin](docs/superpowers/specs/2026-04-12-compile-optimized-griffin-design.md) — FusedGriffinBlock, 3.52x improvement
 - [Knowledge Graph Reorg](docs/superpowers/specs/2026-04-15-knowledge-graph-reorg-design.md) — this reorganization
+- [Training Monitor](docs/superpowers/specs/2026-04-15-training-monitor-design.md) — live dashboard + checkpoint analyzer + callbacks
+- [JORMUNGANDR-HALO](docs/superpowers/specs/2026-04-16-jormungandr-halo-design.md) — L2-resident d=512 core loop, 43K tok/s
 
 ## Operations
 

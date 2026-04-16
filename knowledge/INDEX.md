@@ -45,3 +45,5 @@ tags: [%index, %knowledge]
 | [Estimation_Hypothesis_Ranking.md](architectures/Estimation_Hypothesis_Ranking.md) | All 30 hypotheses ranked by MFU and feasibility |
 | [reliable_small_lm_insights.md](architectures/reliable_small_lm_insights.md) | 6 gaps in small model training, best practices |
 | [ple_ablation_results.md](architectures/ple_ablation_results.md) | PLE Path A wins, MatFormer free, B/AB no benefit |
+| [parcae_stable_looped_models.md](architectures/parcae_stable_looped_models.md) | Parcae (Together AI, 2026): stable looped transformers, 2x param efficiency, MuonAdamW recipe |
+| [looped_model_design_lessons.md](architectures/looped_model_design_lessons.md) | 13 lessons from OUROBOROS->JORMUNGANDR: momentum risk, staged activation, L2 estimates |

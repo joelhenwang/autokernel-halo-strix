@@ -59,10 +59,11 @@ python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --
 ## Key Directories
 
 - `kernels/hip/` — 20+ HIP kernel types + `_compile.py` (compilation) + `_torch_ops.py` (torch.library custom ops)
-- `models/` — Self-contained model definitions (LLaMA, GPT-2, AMADEUS, TEMPEST, ARGUS-PRIME, etc.)
+- `models/` — Self-contained model definitions (LLaMA, GPT-2, AMADEUS, TEMPEST, ARGUS-PRIME, JORMUNGANDR-HALO, etc.)
 - `halo_training/` — Composable training stack (Mode A/B), CLI: `python -m halo_training`
 - `autokernel/` — Library API (`autokernel.optimize()`) with pattern matching + kernel replacement
 - `knowledge/` — Organized reference docs (hardware/, kernels/, training/, architectures/)
+- `scripts/nvidia/` — Standalone NVIDIA GPU training (no ROCm deps): `train_nvidia.py` + `argus_prime_standalone.py`
 
 ## Key Constraints (always remember)
 
@@ -73,9 +74,11 @@ python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --
 - **autokernel breaks d<=256** — skip `--optimize-kernels` for small hidden dims
 - **Don't break autokernel FusedQKV+RoPE pattern** — manual QKV fusion loses 3.7x speedup
 - **torch.compile model only**, never the optimizer (29GB memory blowup)
+- **Per-zone compile for looped models** — compile each ShortConvBlock independently, not the full model (Python loops break compile). Use `model.compile_zones()` for JORMUNGANDR-HALO.
 - **Check train_log.jsonl** for progress, don't rely on SSH stdout for long runs
 - **EOS token** (50256, `<|endoftext|>`) inserted between documents in `halo_training/data.py`
 - **Autokernel before checkpoint load** — fused QKV keys must exist before `load_state_dict()`
+- **Checkpoints are fp32** — fp16/bf16 only exists inside AMP autocast. Safe to load across hardware (AMD→NVIDIA).
 
 ## Training Target
 
@@ -97,3 +100,12 @@ Start with **[KNOWLEDGE_GRAPH.md](KNOWLEDGE_GRAPH.md)** — master index of all 
 | Operational guides, commands, runbooks | `docs/halo-strix-apu/` |
 | Architecture plans (30 hypotheses) | `mad_llm_scientist/plans/` |
 | Canonical results summary | `REPORT.md` |
+
+## graphify
+
+This project has a graphify knowledge graph at graphify-out/.
+
+Rules:
+- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
+- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
+- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current

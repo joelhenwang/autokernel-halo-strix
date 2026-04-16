@@ -208,6 +208,45 @@ Tested with `scripts/generate_text.py` (top-k=40, top-p=0.9, temp=0.7-0.8):
 
 Checkpoints at: `checkpoints/argus_prime_wikitext103/step_{100..7200}.pt`
 
+## Common Crawl DDP Training (2026-04-14 to 2026-04-16)
+
+**Dataset:** Common Crawl high-quality sample, pre-tokenized to 2.37B tokens (4.74 GB .bin file via `scripts/pretokenize.py`). 46 categories × 2 crawl years, 1.55M documents, zstd-compressed JSONL source.
+
+**Training:** 2× Strix Halo DDP via TB4, resumed from WikiText-103 CPT checkpoint (step_7200).
+Config: B0, lr=0.0012, Muon, block=256, batch=16×8 (effective 256 per step), accum_steps=8, async overlap + fp16 gradient compression.
+
+| Metric | Value |
+|--------|-------|
+| tok/s | 34,885 |
+| MFU | 29.6% |
+| Steps | 72,076 |
+| Tokens | ~4.74B (2.37B × 2 epochs) |
+| Time | ~38 hours |
+| Final loss | 3.80 |
+| Memory | 6.8 GB per machine |
+
+### Data Pipeline
+
+- `scripts/pretokenize.py` — tokenizes .jsonl.zst to flat uint16 .bin (pre-tokenize once, memory-map for training)
+- `halo_training/data.py` — supports .bin files directly via `BabyLMDataset(root="path.bin")`
+- `--checkpoint-interval` flag decoupled from log_interval for flexible checkpoint scheduling
+
+### KV-Cached Inference (2026-04-16)
+
+`scripts/generate_cached.py` — pre-allocated KV-cache + conv state for autoregressive generation. Handles both standard Attention and autokernel's fused QKV replacement.
+
+| Mode | tok/s | Notes |
+|------|-------|-------|
+| Eager, no cache | 101 | Baseline (recomputes all K/V every step) |
+| **KV-cache** | **218-220** | 2.17x improvement, steady-state decode |
+| Compiled, no cache | 3 | Broken — shape recompilation per step |
+
+Cache memory at max_seq_len=512: ~1.5 MB KV + ~20 KB conv state — negligible.
+
+### Generation Quality (step_72076, Common Crawl checkpoint)
+
+The model produces coherent text but with web formatting artifacts (whitespace, HTML patterns) from raw Common Crawl data. Data quality filtering would improve generation quality. The model has seen ~5.1B total tokens across 3 training stages (GPT-training-small → WikiText-103 → Common Crawl).
+
 ## Dolma 10B Training Projection
 
 | Setup | tok/s | 1 epoch (10B) | 2 epochs (20B) |

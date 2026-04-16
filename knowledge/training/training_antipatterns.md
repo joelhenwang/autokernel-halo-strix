@@ -36,6 +36,9 @@ tags: [%antipatterns, %optimization, %patterns, %rocblas, %rocm, %hip, %training
 - **Python for-loops in chunked scan**: Causes torch.compile graph breaks. Use vectorized cross-chunk propagation via cumulative products instead (see `models/tempest.py`).
 - **Adaptive softmax for training**: 3 tier matmuls is 4% slower than 1 large matmul on memory-bound hardware. Single LM head for training.
 - **SSM state explosion**: Init: A_log=log(arange(1,N+1)), dt_proj bias=-4.0, dt clamped [1e-4, 0.5], B/C normalized by max(norm, 1.0).
+- **torch.compile on full looped models**: Python loops with variable depth + no_grad/grad switching cause graph breaks. Compile gives 0% or negative benefit. **Fix:** compile each layer/zone independently (`model.compile_zones()`). JORMUNGANDR-HALO: 14K (eager) → 43K (AK + per-zone compile), 3.07x.
+- **Passing kwargs to autokernel-replaced modules**: Autokernel's fused replacements don't accept extra kwargs (e.g., `value_bias`). Guard with `if value_bias is not None: attn(x, freqs, value_bias=value_bias) else: attn(x, freqs)`.
+- **Checkpoints are always fp32**: AMP dtype (fp16/bf16) only exists transiently inside autocast. Checkpoints save fp32 master weights. Safe to load across fp16 (AMD) → bf16 (NVIDIA) training.
 
 ## rocBLAS / BLAS Optimization
 
