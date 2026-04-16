@@ -36,6 +36,7 @@ tags: [%index, %knowledge]
 | [argus_prime_results.md](training/argus_prime_results.md) | ARGUS-PRIME: 18K single, 35K DDP, WikiText-103 CPT |
 | [training_antipatterns.md](training/training_antipatterns.md) | Optimization patterns, anti-patterns, rocBLAS, ROCm dev reference |
 | [compressm_in_training_ssm_compression.md](training/compressm_in_training_ssm_compression.md) | CompreSSM (ICLR 2026): balanced truncation for in-training SSM state compression, math + PyTorch code |
+| [sft_pipeline.md](training/sft_pipeline.md) | SFT pipeline: EOS warm-up, ChatML, staged instruction tuning (C→A→B), decoding params |
 
 ## architectures/
 

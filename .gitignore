@@ -41,3 +41,6 @@ sync_remote.sh
 
 # Claude local settings
 .claude/settings.local.json
+run_remote_b.sh
+sync_remote_b.sh
+.claude/settings.json

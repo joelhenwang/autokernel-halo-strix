@@ -58,11 +58,53 @@ def main():
     parser.add_argument("--log-interval", type=int, default=10, help="Log every N steps")
     parser.add_argument("--resume-from", default=None, help="Checkpoint path for continued pre-training (loads weights only, fresh optimizer)")
 
+    # SFT arguments
+    parser.add_argument("--phase", default="pretrain", choices=["pretrain", "eos-warmup", "sft"],
+                        help="Training phase: pretrain (default), eos-warmup (Phase 0), sft (Stages C/A/B)")
+    parser.add_argument("--sft-dataset", default=None,
+                        help="SFT dataset: 'alpaca', 'openhermes', or path to local JSONL/parquet")
+    parser.add_argument("--sft-format", default="alpaca", choices=["alpaca", "sharegpt", "chatml"],
+                        help="Dataset format adapter")
+    parser.add_argument("--eos-weight", type=float, default=1.0,
+                        help="EOS token loss weight multiplier (default 1.0, use 5.0 for Phase 0)")
+    parser.add_argument("--warmup-steps", type=int, default=100, help="LR warmup steps")
+    parser.add_argument("--system-prompt", default="You are a helpful assistant.",
+                        help="System prompt for ChatML formatting")
+    parser.add_argument("--no-packing", action="store_true",
+                        help="Disable conversation packing (pad each conversation individually)")
+
     args = parser.parse_args()
 
     # Load model
     sys.path.insert(0, ".")
     model = load_model_from_file(args.model, args.class_name)
+
+    # --- Phase-specific setup ---
+    loss_fn = None
+    dataset_obj = None
+    resize_vocab = None
+
+    if args.phase == "eos-warmup":
+        from halo_training.sft_loss import build_sft_loss_fn
+        loss_fn = build_sft_loss_fn(eos_weight=args.eos_weight)
+
+    elif args.phase == "sft":
+        from halo_training.chat_template import build_tokenizer
+        from halo_training.sft_data import SFTDataset
+        from halo_training.sft_loss import build_sft_loss_fn
+
+        tokenizer = build_tokenizer(phase="sft")
+        resize_vocab = tokenizer.vocab_size
+
+        dataset_obj = SFTDataset(
+            data_path=args.sft_dataset or args.dataset,
+            tokenizer=tokenizer,
+            format=args.sft_format,
+            block_size=args.block_size,
+            system_prompt=args.system_prompt,
+            pack=not args.no_packing,
+        )
+        loss_fn = build_sft_loss_fn(eos_weight=args.eos_weight)
 
     if args.smoke:
         from halo_training.smoke import run_smoke_test
@@ -79,13 +121,14 @@ def main():
     from halo_training.trainer import train
     stats = train(
         model,
-        dataset=args.dataset,
+        dataset=dataset_obj if dataset_obj else args.dataset,
         epochs=args.epochs,
         time_budget_minutes=args.time_budget,
         batch_size=args.batch_size,
         block_size=args.block_size,
         accum_steps=args.accum_steps,
         base_lr=args.lr,
+        loss_fn=loss_fn,
         compile=args.compile,
         optimize_kernels=args.optimize_kernels,
         mode=args.mode,
@@ -95,6 +138,8 @@ def main():
         use_muon=args.muon,
         use_bf16=args.bf16,
         resume_from=args.resume_from,
+        resize_vocab=resize_vocab,
+        warmup_steps=args.warmup_steps,
     )
 
     print(f"\nFinal stats: {stats}")

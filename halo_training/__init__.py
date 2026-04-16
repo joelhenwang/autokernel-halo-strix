@@ -18,6 +18,9 @@ from halo_training.smoke import run_smoke_test
 from halo_training.streaming import LayerStreamingTrainer
 from halo_training.memory import MemoryBudget, suggest_mode
 from halo_training.evaluate import evaluate_bpb, benchmark_inference
+from halo_training.chat_template import ChatMLTokenizer, build_tokenizer, resize_embeddings
+from halo_training.sft_data import SFTDataset
+from halo_training.sft_loss import WeightedCrossEntropyLoss, build_sft_loss_fn
 
 __all__ = [
     "train",
@@ -41,4 +44,10 @@ __all__ = [
     "suggest_mode",
     "evaluate_bpb",
     "benchmark_inference",
+    "ChatMLTokenizer",
+    "build_tokenizer",
+    "resize_embeddings",
+    "SFTDataset",
+    "WeightedCrossEntropyLoss",
+    "build_sft_loss_fn",
 ]

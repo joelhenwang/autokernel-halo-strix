@@ -26,17 +26,20 @@ def load_model(model_path, class_name):
 
 
 def generate(model, prompt_ids, max_tokens=200, temperature=0.8, top_k=40, top_p=0.9,
-             repetition_penalty=1.0, frequency_penalty=0.0):
+             repetition_penalty=1.0, frequency_penalty=0.0, stop_tokens=None,
+             max_seq_len=2048, vocab_size=50257):
     """Autoregressive generation with top-k + top-p + repetition/frequency penalties."""
+    if stop_tokens is None:
+        stop_tokens = {50256}  # <|endoftext|>
     device = next(model.parameters()).device
     ids = prompt_ids.to(device)
-    token_counts = torch.zeros(1, 50257, device=device)
+    token_counts = torch.zeros(1, vocab_size, device=device)
 
     model.eval()
     with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.float16):
         for _ in range(max_tokens):
             # Truncate to max_seq_len if needed
-            context = ids[:, -1024:]  # use last 1024 tokens
+            context = ids[:, -max_seq_len:]
             logits = model(context)
             logits = logits[:, -1, :]
 
@@ -76,10 +79,11 @@ def generate(model, prompt_ids, max_tokens=200, temperature=0.8, top_k=40, top_p
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             ids = torch.cat([ids, next_token], dim=1)
-            token_counts[0, next_token.item()] += 1
+            tok_id = next_token.item()
+            if tok_id < vocab_size:
+                token_counts[0, tok_id] += 1
 
-            # Stop on EOS
-            if next_token.item() == 50256:
+            if tok_id in stop_tokens:
                 break
 
     return ids
@@ -100,6 +104,12 @@ def main():
                         help="Penalize repeated tokens (1.0=off, 1.1-1.5=typical)")
     parser.add_argument("--frequency-penalty", type=float, default=0.0,
                         help="Subtract penalty*count from logits (0.0=off, 0.5-2.0=typical)")
+    parser.add_argument("--chat", action="store_true",
+                        help="Chat mode: wrap prompt in ChatML, stop on <|im_end|>")
+    parser.add_argument("--system-prompt", default="You are a helpful assistant.",
+                        help="System prompt for chat mode")
+    parser.add_argument("--max-seq-len", type=int, default=2048,
+                        help="Max sequence length for context window")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -131,25 +141,58 @@ def main():
     else:
         model.load_state_dict(ckpt, strict=False)
 
-    # Tokenize prompt
-    enc = tiktoken.get_encoding("gpt2")
-    prompt_tokens = enc.encode(args.prompt)
-    prompt_ids = torch.tensor([prompt_tokens], dtype=torch.long)
+    # Chat mode setup
+    stop_tokens = {50256}  # <|endoftext|>
+    vocab_size = 50257
+
+    if args.chat:
+        from halo_training.chat_template import build_tokenizer, resize_embeddings
+        chat_tok = build_tokenizer(phase="sft")
+        model = resize_embeddings(model, chat_tok.vocab_size)
+        vocab_size = chat_tok.vocab_size
+        stop_tokens = {chat_tok.im_end_id}  # stop on <|im_end|>
+
+        # Build ChatML prompt
+        messages = [
+            {"role": "system", "content": args.system_prompt},
+            {"role": "user", "content": args.prompt},
+        ]
+        prompt_tokens = chat_tok.encode_chatml(messages) + chat_tok.start_assistant_turn()
+        prompt_ids = torch.tensor([prompt_tokens], dtype=torch.long)
+        enc_decode = chat_tok.decode
+    else:
+        enc = tiktoken.get_encoding("gpt2")
+        prompt_tokens = enc.encode(args.prompt)
+        prompt_ids = torch.tensor([prompt_tokens], dtype=torch.long)
+        enc_decode = enc.decode
 
     print(f"\nPrompt: {args.prompt}")
     print(f"Config: temp={args.temperature}, top_k={args.top_k}, top_p={args.top_p}, "
-          f"rep_pen={args.repetition_penalty}, freq_pen={args.frequency_penalty}")
+          f"rep_pen={args.repetition_penalty}, freq_pen={args.frequency_penalty}"
+          f"{', mode=chat' if args.chat else ''}")
     print("=" * 60)
 
     for i in range(args.num_samples):
         output_ids = generate(
             model, prompt_ids, args.max_tokens,
             args.temperature, args.top_k, args.top_p,
-            args.repetition_penalty, args.frequency_penalty
+            args.repetition_penalty, args.frequency_penalty,
+            stop_tokens=stop_tokens, max_seq_len=args.max_seq_len,
+            vocab_size=vocab_size,
         )
-        text = enc.decode(output_ids[0].tolist())
+        raw_text = enc_decode(output_ids[0].tolist())
         print(f"\n--- Sample {i+1} ---")
-        print(text)
+        if args.chat:
+            # Extract only the assistant's response
+            marker = "assistant\n"
+            parts = raw_text.split(marker)
+            if len(parts) > 1:
+                response = parts[-1].replace("<|im_end|>", "").strip()
+            else:
+                response = raw_text
+            print(response)
+        else:
+            print(raw_text)
 
     print("\n" + "=" * 60)
 
