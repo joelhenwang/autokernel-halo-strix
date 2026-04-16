@@ -66,7 +66,18 @@ Tested on BabyLM 1 epoch, compile + autokernel, Muon, batch=16, block=256:
 | XSA+DC (99.2M) | 10.529 | **6.563** | 10.520 | 33,722 |
 | Full (103.5M) | 12.044 | 6.797 | 10.896 | 33,456 |
 
-XSA+DC wins by -0.234 loss (-3.4%) on WikiText-103 at ctx=256. Full's extra 4.3M params (FiLM+VE+TTT) don't help at short context. TTT may need longer context (1024+) to show benefit — ctx=1024 ablation pending.
+XSA+DC wins by -0.234 loss (-3.4%) on WikiText-103 at ctx=256. Full's extra 4.3M params (FiLM+VE+TTT) don't help at short context.
+
+### WikiText-103 Context Length Ablation (1 epoch, 119M tokens, from BabyLM checkpoints)
+
+| Context | Config | Start Loss | Final Loss | tok/s |
+|---------|--------|-----------|------------|-------|
+| 256 | XSA+DC (99.2M) | 10.529 | **6.563** | 33,722 |
+| 256 | Full (103.5M) | 12.044 | 6.797 | 33,456 |
+| 1024 | XSA+DC (99.2M) | 10.713 | 6.852 | 34,650 |
+| 1024 | Full (103.5M) | 12.057 | **6.805** | 33,880 |
+
+**TTT/FiLM/VE crossover between ctx=256 and ctx=1024.** At 256, XSA+DC wins by -3.4%. At 1024, Full wins by -0.7%. TTT needs sufficient context to adapt — at 256 tokens it's dead weight, at 1024 it has enough material. **Recommendation:** use Full config for ctx≥512, XSA+DC for ctx≤256.
 
 ## rocBLAS / BLAS Optimization
 

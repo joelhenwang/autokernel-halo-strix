@@ -397,7 +397,18 @@ XSA and Depth MC are additive (-4.3% combined). Full's extra components (FiLM+VE
 | XSA+DC (99.2M) | 10.529 | **6.563** | 10.520 | 33,722 |
 | Full (103.5M) | 12.044 | 6.797 | 10.896 | 33,456 |
 
-XSA+DC wins by -3.4% on a larger dataset. Confirms BabyLM finding scales. TTT/FiLM/VE may need longer context (1024+) to differentiate — ctx=1024 ablation pending.
+XSA+DC wins by -3.4% on a larger dataset at ctx=256.
+
+### WikiText-103 Context Length Ablation (1 epoch, 119M tokens, from BabyLM)
+
+| Context | Config | Start Loss | Final Loss | tok/s |
+|---------|--------|-----------|------------|-------|
+| 256 | XSA+DC (99.2M) | 10.529 | **6.563** | 33,722 |
+| 256 | Full (103.5M) | 12.044 | 6.797 | 33,456 |
+| 1024 | XSA+DC (99.2M) | 10.713 | 6.852 | 34,650 |
+| 1024 | Full (103.5M) | 12.057 | **6.805** | 33,880 |
+
+**TTT crossover confirmed.** At ctx=256, XSA+DC wins (-3.4%). At ctx=1024, Full overtakes (-0.7%). TTT/FiLM/VE are dead weight at short context but provide genuine benefit at 1024 tokens where TTT has enough material to adapt. Crossover is between 256-1024. **Use Full config for production training at ctx≥512.**
 
 ---
 
@@ -411,7 +422,7 @@ XSA+DC wins by -3.4% on a larger dataset. Confirms BabyLM finding scales. TTT/Fi
 | **JORMUNGANDR-HALO XSA+DC** | **99.2M** | **147M** | **34K** | **6.563** |
 | **JORMUNGANDR-HALO Full** | **104M** | **152M** | **34K** | **6.797** |
 
-The XSA+DC config is the current best: 1.9x ARGUS-PRIME throughput (34K vs 18K tok/s), 38% fewer unique params, and better loss than the Full config. Includes XSA (zero-cost quality) and Depth MC (32K params, per-position depth selection).
+**Config recommendation:** Full (JormungandrHalo) for ctx≥512 production training. XSA+DC for quick ablation at ctx=256. Both include XSA (zero-cost) and Depth MC (32K params). Full adds TTT/FiLM/VE (+4.3M params) which activate at longer context.
 
 ---
 
