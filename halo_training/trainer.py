@@ -39,6 +39,8 @@ def train(
     use_muon: bool = False,
     use_bf16: bool = False,
     resume_from: Optional[str] = None,
+    resize_vocab: Optional[int] = None,
+    warmup_steps: int = 100,
 ) -> Dict[str, Any]:
     """Train a model using Mode A (direct) or Mode B (layer-streaming).
 
@@ -103,6 +105,12 @@ def train(
         print(f"  Fresh optimizer + LR schedule (Approach B warm restart)")
         del ckpt, state_dict
 
+    # --- Resize embeddings for SFT (after checkpoint load, before autokernel) ---
+    if resize_vocab:
+        from halo_training.chat_template import resize_embeddings
+        model = resize_embeddings(model, resize_vocab)
+        print(f"  Resized embeddings to vocab_size={resize_vocab}")
+
     model.train()
 
     if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
@@ -153,7 +161,7 @@ def train(
     optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon)
 
     total_steps = len(dataloader) * epochs // accum_steps
-    scheduler = build_scheduler(optimizer, total_steps)
+    scheduler = build_scheduler(optimizer, total_steps, warmup_steps=warmup_steps)
 
     # --- Setup loss ---
     chunked_ce = None
@@ -167,7 +175,7 @@ def train(
             except Exception:
                 pass
 
-        ce_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        ce_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing, ignore_index=-100)
 
         def default_loss_fn(output, batch):
             _, targets = batch
@@ -341,6 +349,11 @@ def train(
 
     except KeyboardInterrupt:
         print(f"\nInterrupted at step {global_step}")
+
+    # Always save final checkpoint
+    if checkpoint_dir and global_step > 0:
+        _save_checkpoint(model, optimizer, global_step, checkpoint_dir, total_tokens)
+        print(f"Final checkpoint saved at step {global_step}")
 
     # Final stats
     elapsed = time.time() - start_time

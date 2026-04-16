@@ -79,6 +79,9 @@ python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --
 - **EOS token** (50256, `<|endoftext|>`) inserted between documents in `halo_training/data.py`
 - **Autokernel before checkpoint load** — fused QKV keys must exist before `load_state_dict()`
 - **Checkpoints are fp32** — fp16/bf16 only exists inside AMP autocast. Safe to load across hardware (AMD→NVIDIA).
+- **Final checkpoint always saved** — trainer auto-saves at end of training (including time-budget cutoff). Use `--checkpoint-interval 999999` to skip intermediate saves.
+- **Autokernel + value_bias** — detect fused replacement with `hasattr(self.attn, 'w_qkv')` before passing extra kwargs.
+- **Loss reporting** — logged loss is accumulated over `accum_steps`. Divide by accum_steps for actual per-token CE.
 
 ## Training Target
 

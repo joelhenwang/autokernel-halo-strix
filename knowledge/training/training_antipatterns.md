@@ -57,7 +57,16 @@ Tested on BabyLM 1 epoch, compile + autokernel, Muon, batch=16, block=256:
 **XSA** (Exclusive Self Attention, Zhai 2026): removes self-value projection from attention output. Zero params, zero compute. -0.9% alone.
 **Depth MC** (Memory Caching GRM, Behrouz et al. 2026): caches loop iteration states, content-dependent gated aggregation. 32K params. -2.5% alone.
 **Additive**: XSA+DC combined = -4.3%, nearly exact sum of individual effects. No interference.
-**FiLM+VE+TTT add no further benefit** on small BabyLM (may differentiate on larger data).
+**FiLM+VE+TTT add no further benefit** on BabyLM or WikiText-103 at ctx=256 (see below).
+
+### WikiText-103 Comparison (ctx=256, 1 epoch, 119M tokens, resumed from BabyLM)
+
+| Config | Start Loss | Final Loss | BPB | tok/s |
+|--------|-----------|------------|-----|-------|
+| XSA+DC (99.2M) | 10.529 | **6.563** | 10.520 | 33,722 |
+| Full (103.5M) | 12.044 | 6.797 | 10.896 | 33,456 |
+
+XSA+DC wins by -0.234 loss (-3.4%) on WikiText-103 at ctx=256. Full's extra 4.3M params (FiLM+VE+TTT) don't help at short context. TTT may need longer context (1024+) to show benefit — ctx=1024 ablation pending.
 
 ## rocBLAS / BLAS Optimization
 

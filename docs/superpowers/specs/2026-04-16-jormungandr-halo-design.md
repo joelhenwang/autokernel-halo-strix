@@ -376,17 +376,42 @@ if total_tokens > 5_000_000 and loss > 6.0:
 
 ---
 
+## Ablation Results
+
+### BabyLM (1 epoch, ctx=256, compile + autokernel, Muon)
+
+| Config | Actual Loss | Δ vs Bare | Params added |
+|--------|------------|-----------|-------------|
+| Bare (baseline) | 6.028 | — | — |
+| +XSA | 5.973 | -0.9% | 0 |
+| +Depth MC (GRM) | 5.879 | -2.5% | 32K |
+| +XSA+DC | 5.770 | -4.3% | 32K |
+| Full (FiLM+VE+TTT+XSA+DC) | 5.770 | -4.3% | 4.3M |
+
+XSA and Depth MC are additive (-4.3% combined). Full's extra components (FiLM+VE+TTT, +4.3M params) add no further benefit at ctx=256.
+
+### WikiText-103 (1 epoch, ctx=256, 119M tokens, resumed from BabyLM)
+
+| Config | Start Loss | Final Loss | BPB | tok/s |
+|--------|-----------|------------|-----|-------|
+| XSA+DC (99.2M) | 10.529 | **6.563** | 10.520 | 33,722 |
+| Full (103.5M) | 12.044 | 6.797 | 10.896 | 33,456 |
+
+XSA+DC wins by -3.4% on a larger dataset. Confirms BabyLM finding scales. TTT/FiLM/VE may need longer context (1024+) to differentiate — ctx=1024 ablation pending.
+
+---
+
 ## Comparison to Baselines
 
-| Model | Unique | Effective | tok/s | Quality (BabyLM) |
-|-------|--------|-----------|-------|-------------------|
-| ARGUS-PRIME B0 | 168M | 168M | 18K | ~3.00 |
-| AMADEUS | 157M | 157M | 13.2K | 2.90 (best) |
+| Model | Unique | Effective | tok/s | Quality (WT103 loss) |
+|-------|--------|-----------|-------|----------------------|
+| ARGUS-PRIME B0 | 168M | 168M | 18K | TBD |
+| AMADEUS | 157M | 157M | 13.2K | TBD |
 | JORMUNGANDR (original) | 124M | 341M (8×) | 15-19K (est) | TBD |
-| **JORMUNGANDR-HALO (4 iter)** | **104M** | **152M** | **43K (measured)** | **TBD** |
-| **JORMUNGANDR-HALO (8 iter)** | **104M** | **200M** | **~25K (est)** | **TBD** |
+| **JORMUNGANDR-HALO XSA+DC** | **99.2M** | **147M** | **34K** | **6.563** |
+| **JORMUNGANDR-HALO Full** | **104M** | **152M** | **34K** | **6.797** |
 
-The 4-iteration config is the primary target: 2.4x ARGUS-PRIME throughput (43K vs 18K tok/s), comparable effective params, 38% fewer unique params. Includes XSA (zero-cost quality) and Depth MC (32K params, per-position depth selection).
+The XSA+DC config is the current best: 1.9x ARGUS-PRIME throughput (34K vs 18K tok/s), 38% fewer unique params, and better loss than the Full config. Includes XSA (zero-cost quality) and Depth MC (32K params, per-position depth selection).
 
 ---
 
