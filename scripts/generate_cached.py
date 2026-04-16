@@ -52,8 +52,9 @@ def create_cache(model, batch_size, max_seq_len, device, dtype):
     cache = InferenceCache()
 
     for name, module in model.named_modules():
-        # KV-cache for attention layers
-        if hasattr(module, 'wq') and hasattr(module, 'wk') and hasattr(module, 'wv'):
+        # KV-cache for attention layers (standard or autokernel fused)
+        is_attn = (hasattr(module, 'wq') and hasattr(module, 'wk')) or hasattr(module, 'w_qkv')
+        if is_attn and hasattr(module, 'n_kv_heads') and hasattr(module, 'head_dim'):
             n_kv = module.n_kv_heads
             hd = module.head_dim
             k_cache = torch.zeros(batch_size, n_kv, max_seq_len, hd, device=device, dtype=dtype)
@@ -75,27 +76,47 @@ def create_cache(model, batch_size, max_seq_len, device, dtype):
 # ---------------------------------------------------------------------------
 
 def attention_cached(attn, x, freqs_cis, cache, cache_key, value_bias=None):
-    """GQA attention with KV-cache. x is (B, T_new, D)."""
+    """GQA attention with KV-cache. x is (B, T_new, D).
+
+    Handles both standard Attention (separate wq/wk/wv) and autokernel's
+    _FusedQKVAttentionReplacement (fused w_qkv + rotary_fn).
+    """
     from models.argus import apply_rotary_emb
 
     B, T_new, _ = x.shape
-    q = attn.wq(x).view(B, T_new, attn.n_heads, attn.head_dim)
-    k = attn.wk(x).view(B, T_new, attn.n_kv_heads, attn.head_dim)
-    v = attn.wv(x).view(B, T_new, attn.n_kv_heads, attn.head_dim)
+    n_heads = attn.n_heads
+    n_kv = attn.n_kv_heads
+    hd = attn.head_dim
+    n_rep = attn.n_rep
+
+    if hasattr(attn, 'w_qkv'):
+        # Autokernel fused QKV path
+        qkv = attn.w_qkv(x)
+        q_size = attn.q_size
+        k_size = attn.k_size
+        q = qkv[:, :, :q_size].view(B, T_new, n_heads, hd)
+        k = qkv[:, :, q_size:q_size + k_size].view(B, T_new, n_kv, hd)
+        v = qkv[:, :, q_size + k_size:].view(B, T_new, n_kv, hd)
+    else:
+        # Standard separate Q/K/V path
+        q = attn.wq(x).view(B, T_new, n_heads, hd)
+        k = attn.wk(x).view(B, T_new, n_kv, hd)
+        v = attn.wv(x).view(B, T_new, n_kv, hd)
 
     if value_bias is not None:
-        v = v + value_bias.view(B, T_new, attn.n_kv_heads, attn.head_dim)
+        v = v + value_bias.view(B, T_new, n_kv, hd)
 
     q, k = apply_rotary_emb(q, k, freqs_cis)
     q = q.transpose(1, 2)  # (B, n_heads, T_new, hd)
     k = k.transpose(1, 2)  # (B, n_kv, T_new, hd)
     v = v.transpose(1, 2)
 
-    if attn.qk_norm:
+    # QK-Norm if present
+    if hasattr(attn, 'qk_norm') and attn.qk_norm:
         q = F.normalize(q, dim=-1) * attn.q_scale
         k = F.normalize(k, dim=-1) * attn.k_scale
 
-    # Update KV-cache
+    # Update KV-cache (store un-expanded K/V)
     k_cache, v_cache = cache.kv_caches[cache_key]
     pos = cache.seq_pos
     k_cache[:, :, pos:pos + T_new, :] = k
@@ -105,9 +126,9 @@ def attention_cached(attn, x, freqs_cis, cache, cache_key, value_bias=None):
     k_full = k_cache[:, :, :pos + T_new, :]
     v_full = v_cache[:, :, :pos + T_new, :]
 
-    if attn.n_rep > 1:
-        k_full = k_full.repeat_interleave(attn.n_rep, dim=1)
-        v_full = v_full.repeat_interleave(attn.n_rep, dim=1)
+    if n_rep > 1:
+        k_full = k_full.repeat_interleave(n_rep, dim=1)
+        v_full = v_full.repeat_interleave(n_rep, dim=1)
 
     y = F.scaled_dot_product_attention(q, k_full, v_full, is_causal=(T_new > 1))
     return attn.wo(y.transpose(1, 2).contiguous().view(B, T_new, -1))
