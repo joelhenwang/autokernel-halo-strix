@@ -153,7 +153,12 @@ class CodaGQABlock(nn.Module):
         if self.value_embedding is not None and input_ids is not None:
             value_bias = self.value_embedding(input_ids)
 
-        attn_out = self.attn(self.pre_norm(x), freqs_cis, value_bias=value_bias)
+        # Call attention — avoid passing value_bias kwarg when None
+        # (autokernel's fused replacement doesn't accept it)
+        if value_bias is not None:
+            attn_out = self.attn(self.pre_norm(x), freqs_cis, value_bias=value_bias)
+        else:
+            attn_out = self.attn(self.pre_norm(x), freqs_cis)
 
         # Inlined momentum
         beta = torch.sigmoid(self.log_beta)
@@ -337,6 +342,20 @@ class JormungandrHaloBase(nn.Module):
         # but xavier above may have overwritten it)
         if self.value_embedding is not None:
             nn.init.zeros_(self.value_embedding.embed.weight)
+
+    def compile_zones(self):
+        """Compile each zone independently for per-layer fusion.
+
+        Call AFTER autokernel.optimize() and BEFORE training.
+        The Python loop stays uncompiled; each layer becomes a fused kernel.
+        """
+        self.prelude_conv = torch.compile(self.prelude_conv, mode="default")
+        for i in range(len(self.core_layers)):
+            self.core_layers[i] = torch.compile(self.core_layers[i], mode="default")
+        for i in range(len(self.coda_layers)):
+            if not isinstance(self.coda_layers[i], CodaGQABlock):
+                self.coda_layers[i] = torch.compile(self.coda_layers[i], mode="default")
+        return self
 
     def sample_loop_depth(self, step: int) -> Tuple[int, int]:
         """Parcae-style Poisson depth sampling with 1-sqrt curriculum."""
