@@ -804,6 +804,343 @@ class GriffinHaloOpt_fixC(GriffinHaloBase):
                          d_core=768, **kw)
 
 
+# ---------------------------------------------------------------------------
+# Idea 1: Lean GRIFFIN-HALO — fewer unique layers, same core width
+# ---------------------------------------------------------------------------
+
+class GriffinHaloLean(nn.Module):
+    """Lean: 1 Prelude GQA + 3 Griffin iters + 2 Coda layers.
+
+    Cuts 4 unique layers (1 Prelude ShortConv + 2 Coda layers) to reduce
+    fixed overhead from ~52% to ~35% of forward time. Targets ~33-37K tok/s
+    at d=768 quality.
+    """
+
+    def __init__(self, vocab_size=50257, d_model=768, ffn_core=2048,
+                 d_conv_core=384, d_griffin=384, ffn_prelude=2816,
+                 d_conv_prelude=512, n_heads=12, n_kv_heads=4,
+                 conv_kernel=3, n_iters=3, backprop_depth=2,
+                 curriculum_steps=5000, momentum_beta_init=0.5,
+                 max_seq_len=1024, d_gate=64, **kw):
+        super().__init__()
+        self.d_model = d_model
+        self.d_core = d_model
+        self.n_iters = n_iters
+        self.backprop_depth = backprop_depth
+        self.curriculum_steps = curriculum_steps
+        self.max_seq_len = max_seq_len
+
+        # Embedding + tied output
+        self.tok_embeddings = nn.Embedding(vocab_size, d_model)
+        self.norm = RMSNorm(d_model)
+        self.output = nn.Linear(d_model, vocab_size, bias=False)
+        self.output.weight = self.tok_embeddings.weight
+
+        head_dim = d_model // n_heads
+        self.register_buffer("freqs_cis",
+            precompute_freqs_cis(head_dim, max_seq_len * 2), persistent=False)
+        self.register_buffer("step_counter", torch.tensor(0, dtype=torch.long))
+
+        # === LEAN PRELUDE: just 1 GQA layer (no ShortConv) ===
+        self.prelude_gqa = GQABlock(
+            d_model, ffn_prelude, n_heads, n_kv_heads,
+            momentum_beta_init, ttt_mode="none",
+        )
+
+        # === PARCAE (uniform d, no proj) ===
+        self.injection = SimpleParcaeInjection(d_model)
+
+        # === CORE: 1 GriffinConvBlock × n_iters ===
+        self.core_block = GriffinConvBlock(
+            d_model, d_conv_core, d_griffin, ffn_core,
+            conv_kernel, momentum_beta_init,
+        )
+        self.iter_norm = RMSNorm(d_model)
+
+        # === DMC ===
+        self.dmc = DepthMemoryCache(d_model, d_gate)
+
+        # === LEAN CODA: just 2 layers (ShortConv + GQA with XSA+TTT) ===
+        kv_dim = n_kv_heads * head_dim
+        ve = ValueEmbedding(vocab_size, 64, kv_dim)
+
+        self.coda_layers = nn.ModuleList([
+            ShortConvBlock(d_model, d_conv_prelude, ffn_prelude,
+                           conv_kernel, momentum_beta_init),
+            CodaGQABlock(d_model, ffn_prelude, n_heads, n_kv_heads,
+                         momentum_beta_init, ttt_mode="single",
+                         value_embedding=ve, exclusive=True),
+        ])
+        self.value_embedding = ve
+
+        self._init_weights()
+        n_params = sum(p.numel() for p in self.parameters())
+        print(f"{self.__class__.__name__}: {n_params / 1e6:.1f}M parameters")
+
+    def _init_weights(self):
+        for name, p in self.named_parameters():
+            if p.dim() >= 2:
+                nn.init.xavier_uniform_(p)
+        for layer in self.coda_layers:
+            if isinstance(layer, CodaGQABlock) and hasattr(layer.ffn, '_init_ttt_weights'):
+                layer.ffn._init_ttt_weights()
+        if self.value_embedding is not None:
+            nn.init.zeros_(self.value_embedding.embed.weight)
+
+    def compile_zones(self):
+        self.core_block = torch.compile(self.core_block, mode="default")
+        for i in range(len(self.coda_layers)):
+            if not isinstance(self.coda_layers[i], CodaGQABlock):
+                self.coda_layers[i] = torch.compile(self.coda_layers[i], mode="default")
+        return self
+
+    def forward(self, input_ids, targets=None):
+        B, T = input_ids.shape
+        if torch.is_autocast_enabled() and torch.get_autocast_gpu_dtype() == torch.bfloat16:
+            raise RuntimeError("bf16 is 24% slower on gfx1151. Use fp16.")
+
+        h = self.tok_embeddings(input_ids)
+        freqs_cis = self.freqs_cis[:T]
+
+        # Lean Prelude: 1 GQA layer
+        velocity = torch.zeros_like(h)
+        h, velocity = self.prelude_gqa(h, velocity, freqs_cis, ttt_target=None)
+        input_embed = h
+
+        # Parcae entry
+        h_core = self.injection(h, input_embed)
+
+        # Core loop
+        vel_core = torch.zeros_like(h_core)
+        cached_states = []
+
+        if self.training:
+            step = self.step_counter.item()
+            progress = min(step / max(self.curriculum_steps, 1), 1.0)
+            eff = 1 - math.sqrt(1 - progress)
+            t_full = max(self.n_iters - self.backprop_depth, 0)
+            t = max(math.ceil(eff * t_full), 0)
+            n_det = min(torch.poisson(torch.tensor([float(t)])).long().item(), 2 * max(t, 1))
+            n_grad = self.backprop_depth
+            self.step_counter += 1
+        else:
+            n_det, n_grad = 0, self.n_iters
+
+        for t in range(n_det):
+            with torch.no_grad():
+                h_core = self.injection(h_core, input_embed)
+                h_core, vel_core = self.core_block(h_core, vel_core)
+                h_core = self.iter_norm(h_core)
+                cached_states.append(h_core.detach())
+
+        for t in range(n_grad):
+            h_core = self.injection(h_core, input_embed)
+            h_core, vel_core = self.core_block(h_core, vel_core)
+            h_core = self.iter_norm(h_core)
+            cached_states.append(h_core)
+
+        # DMC
+        h = self.dmc(cached_states) if len(cached_states) > 1 else h_core
+
+        # Lean Coda: 2 layers
+        velocity = torch.zeros_like(h)
+        for i, layer in enumerate(self.coda_layers):
+            if isinstance(layer, CodaGQABlock):
+                ttt_target = h if layer.ttt_mode != "none" else None
+                h, velocity = layer(h, velocity, freqs_cis,
+                                    ttt_target=ttt_target, input_ids=input_ids)
+            else:
+                h, velocity = layer(h, velocity)
+
+        return self.output(self.norm(h))
+
+
+# ---------------------------------------------------------------------------
+# Idea 2: Progressive Narrowing — d=768 iter 1, d=512 iters 2-4
+# ---------------------------------------------------------------------------
+
+class GriffinHaloProgressive(nn.Module):
+    """Progressive: d=768 Griffin iter 1 → d=512 ShortConv iters 2-4.
+
+    First iteration at d=768 establishes rich global representation.
+    Remaining iterations at d=512 refine cheaply with compile-friendly
+    ShortConvBlocks (3 per iteration, like JORMUNGANDR-HALO).
+    Nearly identical core FLOP to JORMUNGANDR-HALO.
+    """
+
+    def __init__(self, vocab_size=50257, d_model=768, d_narrow=512,
+                 ffn_wide=2048, ffn_narrow=1792,
+                 d_conv_wide=384, d_griffin=384,
+                 d_conv_narrow=512, d_conv_prelude=512,
+                 ffn_prelude=2816, n_heads=12, n_kv_heads=4,
+                 conv_kernel=3, n_narrow_iters=3,
+                 backprop_depth=3, curriculum_steps=5000,
+                 momentum_beta_init=0.5, max_seq_len=1024,
+                 d_gate=64, **kw):
+        super().__init__()
+        self.d_model = d_model
+        self.d_narrow = d_narrow
+        self.n_narrow_iters = n_narrow_iters
+        self.backprop_depth = backprop_depth
+        self.curriculum_steps = curriculum_steps
+        self.max_seq_len = max_seq_len
+
+        # Embedding + tied output
+        self.tok_embeddings = nn.Embedding(vocab_size, d_model)
+        self.norm = RMSNorm(d_model)
+        self.output = nn.Linear(d_model, vocab_size, bias=False)
+        self.output.weight = self.tok_embeddings.weight
+
+        head_dim = d_model // n_heads
+        self.register_buffer("freqs_cis",
+            precompute_freqs_cis(head_dim, max_seq_len * 2), persistent=False)
+        self.register_buffer("step_counter", torch.tensor(0, dtype=torch.long))
+
+        # === PRELUDE (d=768) ===
+        self.prelude_conv = ShortConvBlock(
+            d_model, d_conv_prelude, ffn_prelude, conv_kernel, momentum_beta_init)
+        self.prelude_gqa = GQABlock(
+            d_model, ffn_prelude, n_heads, n_kv_heads,
+            momentum_beta_init, ttt_mode="none")
+
+        # === WIDE ITERATION (d=768, Griffin, 1 pass) ===
+        self.wide_injection = SimpleParcaeInjection(d_model)
+        self.wide_block = GriffinConvBlock(
+            d_model, d_conv_wide, d_griffin, ffn_wide,
+            conv_kernel, momentum_beta_init)
+        self.wide_norm = RMSNorm(d_model)
+
+        # === DIMENSION ADAPTER ===
+        self.proj_down = nn.Linear(d_model, d_narrow, bias=False)
+        self.proj_up = nn.Linear(d_narrow, d_model, bias=False)
+
+        # === NARROW ITERATIONS (d=512, 3 ShortConvBlocks each, compile-friendly) ===
+        self.narrow_injection = SimpleParcaeInjection(d_narrow)
+        self.narrow_layers = nn.ModuleList([
+            ShortConvBlock(d_narrow, d_conv_narrow, ffn_narrow,
+                           conv_kernel, momentum_beta_init)
+            for _ in range(3)
+        ])
+        self.narrow_norm = RMSNorm(d_narrow)
+
+        # === DMC at d=512 (aggregates narrow iteration states) ===
+        self.dmc = DepthMemoryCache(d_narrow, d_gate)
+
+        # === CODA (d=768, 4 layers) ===
+        kv_dim = n_kv_heads * head_dim
+        ve = ValueEmbedding(vocab_size, 64, kv_dim)
+
+        self.coda_layers = nn.ModuleList([
+            ShortConvBlock(d_model, d_conv_prelude, ffn_prelude,
+                           conv_kernel, momentum_beta_init),
+            CodaGQABlock(d_model, ffn_prelude, n_heads, n_kv_heads,
+                         momentum_beta_init, ttt_mode="none", exclusive=True),
+            ShortConvBlock(d_model, d_conv_prelude, ffn_prelude,
+                           conv_kernel, momentum_beta_init),
+            CodaGQABlock(d_model, ffn_prelude, n_heads, n_kv_heads,
+                         momentum_beta_init, ttt_mode="single",
+                         value_embedding=ve, exclusive=True),
+        ])
+        self.value_embedding = ve
+
+        self._init_weights()
+        n_params = sum(p.numel() for p in self.parameters())
+        print(f"{self.__class__.__name__}: {n_params / 1e6:.1f}M parameters")
+
+    def _init_weights(self):
+        for name, p in self.named_parameters():
+            if p.dim() >= 2:
+                nn.init.xavier_uniform_(p)
+        for layer in self.coda_layers:
+            if isinstance(layer, CodaGQABlock) and hasattr(layer.ffn, '_init_ttt_weights'):
+                layer.ffn._init_ttt_weights()
+        if self.value_embedding is not None:
+            nn.init.zeros_(self.value_embedding.embed.weight)
+
+    def compile_zones(self):
+        self.wide_block = torch.compile(self.wide_block, mode="default")
+        for i in range(len(self.narrow_layers)):
+            self.narrow_layers[i] = torch.compile(self.narrow_layers[i], mode="default")
+        self.prelude_conv = torch.compile(self.prelude_conv, mode="default")
+        for i in range(len(self.coda_layers)):
+            if not isinstance(self.coda_layers[i], CodaGQABlock):
+                self.coda_layers[i] = torch.compile(self.coda_layers[i], mode="default")
+        return self
+
+    def forward(self, input_ids, targets=None):
+        B, T = input_ids.shape
+        if torch.is_autocast_enabled() and torch.get_autocast_gpu_dtype() == torch.bfloat16:
+            raise RuntimeError("bf16 is 24% slower on gfx1151. Use fp16.")
+
+        h = self.tok_embeddings(input_ids)
+        freqs_cis = self.freqs_cis[:T]
+
+        # Prelude (d=768)
+        velocity = torch.zeros_like(h)
+        h, velocity = self.prelude_conv(h, velocity)
+        h, velocity = self.prelude_gqa(h, velocity, freqs_cis, ttt_target=None)
+        input_embed_wide = h
+
+        # === WIDE ITERATION 1 (d=768, Griffin) ===
+        h_wide = self.wide_injection(h, input_embed_wide)
+        vel_wide = torch.zeros_like(h_wide)
+        h_wide, vel_wide = self.wide_block(h_wide, vel_wide)
+        h_wide = self.wide_norm(h_wide)
+
+        # === PROJ DOWN (768 → 512) ===
+        h_narrow = self.proj_down(h_wide)
+        input_embed_narrow = self.proj_down(input_embed_wide)
+
+        # === NARROW ITERATIONS 2-4 (d=512, 3 ShortConvBlocks each) ===
+        vel_narrow = torch.zeros(B, T, self.d_narrow, device=h.device, dtype=h.dtype)
+        cached_states = [h_narrow]  # include post-wide state
+
+        if self.training:
+            step = self.step_counter.item()
+            progress = min(step / max(self.curriculum_steps, 1), 1.0)
+            eff = 1 - math.sqrt(1 - progress)
+            t_full = max(self.n_narrow_iters - self.backprop_depth, 0)
+            t = max(math.ceil(eff * t_full), 0)
+            n_det = min(torch.poisson(torch.tensor([float(t)])).long().item(), 2 * max(t, 1))
+            n_grad = self.backprop_depth
+            self.step_counter += 1
+        else:
+            n_det, n_grad = 0, self.n_narrow_iters
+
+        for t in range(n_det):
+            with torch.no_grad():
+                h_narrow = self.narrow_injection(h_narrow, input_embed_narrow)
+                for layer in self.narrow_layers:
+                    h_narrow, vel_narrow = layer(h_narrow, vel_narrow)
+                h_narrow = self.narrow_norm(h_narrow)
+                cached_states.append(h_narrow.detach())
+
+        for t in range(n_grad):
+            h_narrow = self.narrow_injection(h_narrow, input_embed_narrow)
+            for layer in self.narrow_layers:
+                h_narrow, vel_narrow = layer(h_narrow, vel_narrow)
+            h_narrow = self.narrow_norm(h_narrow)
+            cached_states.append(h_narrow)
+
+        # DMC at d=512
+        h_agg = self.dmc(cached_states) if len(cached_states) > 1 else h_narrow
+
+        # === PROJ UP (512 → 768) ===
+        h = self.proj_up(h_agg)
+
+        # Coda (d=768, 4 layers)
+        velocity = torch.zeros_like(h)
+        for i, layer in enumerate(self.coda_layers):
+            if isinstance(layer, CodaGQABlock):
+                ttt_target = h if layer.ttt_mode != "none" else None
+                h, velocity = layer(h, velocity, freqs_cis,
+                                    ttt_target=ttt_target, input_ids=input_ids)
+            else:
+                h, velocity = layer(h, velocity)
+
+        return self.output(self.norm(h))
+
+
 class GriffinHaloMini(GriffinHaloBase):
     """Tiny config for smoke testing (~4M params)."""
     def __init__(self):

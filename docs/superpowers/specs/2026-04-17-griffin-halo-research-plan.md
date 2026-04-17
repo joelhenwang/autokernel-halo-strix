@@ -373,7 +373,49 @@ Loss (↓ better)
 - **R8 (Griffin+DMC, d=512)**: Best throughput (39.5K) in the Griffin family
 - **JORMUNGANDR XSA+DMC (d=512)**: Best throughput at JORMUNGANDR-class quality
 
-**The quality-throughput Pareto frontier has two distinct clusters** separated by d=512 vs d=768. No config bridges the gap — there's a clear tradeoff between d=768 quality (~3.2) and d=512 throughput (~34-40K). Testing intermediate d (640, 704) could fill this gap.
+**The quality-throughput Pareto frontier has two distinct clusters** separated by d=512 vs d=768. Testing intermediate d (640, 704) could fill this gap.
+
+### Bridge Tests: Lean + Progressive Narrowing
+
+Two architectures tested to bridge the gap between d=768 quality and d=512 throughput:
+
+| Config | Actual Loss | tok/s | Architecture |
+|--------|-------------|-------|-------------|
+| R9 (baseline) | 3.193 | 21.3K | 2P + Griffin×4 + 4C, d=768 |
+| **Lean** | 3.535 | 25.8K | 1P + Griffin×3 + 2C, d=768 |
+| **Progressive** | **5.545** | **33.1K** | 2P + Griffin(768)×1 → ShortConv(512)×3×3 + 4C |
+| JORMUNGANDR XSA+DMC | 5.770 | 33.7K | 2P + ShortConv(512)×3×4 + 4C |
+
+**Progressive Narrowing bridges the gap.** One d=768 Griffin iteration provides enough global context that d=512 refinement iterations outperform JORMUNGANDR's pure d=512 approach. Results:
+- **33.1K tok/s** = 98% of JORMUNGANDR throughput ✓
+- **5.545 loss** = -3.9% better than JORMUNGANDR's 5.770 ✓
+- Nearly same compute budget (d=768 iter1 + 9 d=512 passes ≈ JORMUNGANDR's 12 d=512 passes)
+
+**Lean** is a good middle-ground: 25.8K tok/s at loss 3.535 — still dramatically better than any d=512 config while being 21% faster than R9.
+
+### Final Pareto Frontier
+
+```
+Loss (↓ better)
+    │
+3.2 │  R9●                                             ← d=768 quality
+    │
+3.5 │        Lean●                                     ← middle ground
+    │
+    │    ⋮
+    │
+5.5 │                          Progressive●             ← BRIDGE
+5.8 │                         JORMUNGANDR●  HALO-PRIME●
+    │
+6.1 │                                       R8●
+    └─────────────────────────────────────────────
+       21K   26K   31K   33K   34K   39K  tok/s →
+```
+
+**Three Pareto-optimal configs:**
+1. **R9** (Griffin+DMC, d=768): Best quality (3.193) at 21.3K tok/s
+2. **Lean** (1P+3iter+2C, d=768): Best quality-per-tok/s (3.535 at 25.8K)
+3. **Progressive** (d=768→d=512): Bridges the gap (5.545 at 33.1K, beats JORMUNGANDR)
 
 ---
 

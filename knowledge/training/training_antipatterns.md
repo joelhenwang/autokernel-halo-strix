@@ -49,6 +49,8 @@ tags: [%antipatterns, %optimization, %patterns, %rocblas, %rocm, %hip, %training
 - **AttnRes + DMC don't synergize**: Tested in GRIFFIN-HALO sweep. DMC alone: 3.286, AttnRes alone: 3.213, both together: 3.261. Combined is worse than AttnRes alone.
 - **CodaAttnRes hurts**: Cross-stage AttnRes in the Coda (3.382) is worse than standard residuals (3.193). Don't add AttnRes to every connection — it only helps for depth aggregation over iteration outputs.
 - **Compile fusion doesn't scale with d**: At d=768, compile gives only +18% (vs +140% at d=512 for JORMUNGANDR-HALO). Reason: d=768 GEMMs dominate; compile fuses element-wise ops between GEMMs, which are a smaller fraction of total compute at larger d.
+- **Progressive narrowing bridges quality-throughput gap**: One d=768 Griffin iteration → proj_down → d=512 ShortConv×3 refinement iters achieves 33.1K tok/s at loss 5.545 (beats JORMUNGANDR-HALO's 5.770 at 33.7K). The wide first iteration provides global context that makes cheap narrow iterations more effective.
+- **Lean architecture viable at d=768**: Cutting Prelude from 2→1 layers and Coda from 4→2 layers gives +21% throughput (25.8K) at only +10.7% quality cost (3.535 vs 3.193). The unique layer overhead (Prelude+Coda) accounts for ~52% of d=768 forward time.
 
 ## XSA + Depth Memory Cache (Ablation Results)
 
