@@ -41,6 +41,7 @@ def train(
     resume_from: Optional[str] = None,
     resize_vocab: Optional[int] = None,
     warmup_steps: int = 100,
+    max_steps: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Train a model using Mode A (direct) or Mode B (layer-streaming).
 
@@ -88,12 +89,36 @@ def train(
     # --- Setup model ---
     model = model.to(device)
 
+    # --- Apply autokernel BEFORE checkpoint load ---
+    # Fused QKV keys must exist before load_state_dict() (CLAUDE.md constraint).
+    # Checkpoints saved with autokernel have w_qkv; without it, model has wq/wk/wv.
+    if optimize_kernels:
+        try:
+            import autokernel
+            model = autokernel.optimize(model, training=True)
+            print("autokernel optimizations applied")
+        except Exception as e:
+            print(f"autokernel.optimize() failed ({e}), continuing without")
+
     # --- Continued pre-training: load weights from checkpoint (fresh optimizer) ---
+    # If resize_vocab is set, detect whether checkpoint already has the resized vocab
+    # and resize model accordingly before or after loading.
     prev_tokens = 0
     if resume_from:
         print(f"Loading checkpoint for continued pre-training: {resume_from}")
         ckpt = torch.load(resume_from, map_location=device, weights_only=False)
         state_dict = ckpt.get("model_state_dict", ckpt)
+
+        # Check if checkpoint has resized vocab (SFT checkpoint)
+        if resize_vocab:
+            from halo_training.chat_template import resize_embeddings
+            ckpt_vocab = state_dict.get("tok_embeddings.weight", state_dict.get("output.weight"))
+            if ckpt_vocab is not None and ckpt_vocab.shape[0] == resize_vocab:
+                # Checkpoint already resized — resize model first, then load
+                model = resize_embeddings(model, resize_vocab)
+                print(f"  Resized embeddings to {resize_vocab} (matching checkpoint)")
+                resize_vocab = None  # already done
+
         try:
             model.load_state_dict(state_dict)
         except RuntimeError:
@@ -105,7 +130,7 @@ def train(
         print(f"  Fresh optimizer + LR schedule (Approach B warm restart)")
         del ckpt, state_dict
 
-    # --- Resize embeddings for SFT (after checkpoint load, before autokernel) ---
+    # --- Resize embeddings for SFT (after checkpoint load, before compile) ---
     if resize_vocab:
         from halo_training.chat_template import resize_embeddings
         model = resize_embeddings(model, resize_vocab)
@@ -116,14 +141,6 @@ def train(
     if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable()
         print("Gradient checkpointing enabled")
-
-    if optimize_kernels:
-        try:
-            import autokernel
-            model = autokernel.optimize(model, training=True)
-            print("autokernel optimizations applied")
-        except Exception as e:
-            print(f"autokernel.optimize() failed ({e}), continuing without")
 
     if use_streaming:
         from halo_training.streaming import LayerStreamingTrainer
@@ -202,7 +219,7 @@ def train(
     total_tokens = 0
     running_loss = 0.0
     start_time = time.time()
-    deadline = start_time + time_budget_minutes * 60 if time_budget_minutes else None
+    deadline = start_time + time_budget_minutes * 60 if (time_budget_minutes and not max_steps) else None
     best_loss = float("inf")
 
     stats = {
@@ -230,9 +247,12 @@ def train(
     try:
         for epoch in range(epochs):
             for batch_idx, batch in enumerate(dataloader):
-                # Check time budget
+                # Check stopping criteria
                 if deadline and time.time() > deadline:
                     print(f"Time budget reached at step {global_step}")
+                    break
+                if max_steps and global_step >= max_steps:
+                    print(f"Max steps reached: {global_step}")
                     break
 
                 # Callbacks (phase scheduling, memory monitoring, etc.)

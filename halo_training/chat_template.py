@@ -167,12 +167,17 @@ def resize_embeddings(model: nn.Module, new_vocab_size: int) -> nn.Module:
     if new_vocab_size == old_vocab:
         return model
 
-    # Create new embedding with zero-initialized new rows
+    # Create new embedding — initialize new rows from mean of existing embeddings
+    # so they produce reasonable hidden states from step 1 (zero-init causes
+    # RMSNorm/attention corruption and training divergence)
     new_embed = nn.Embedding(new_vocab_size, d_model, device=old_embed.weight.device,
                              dtype=old_embed.weight.dtype)
     with torch.no_grad():
         new_embed.weight[:old_vocab] = old_embed.weight
-        new_embed.weight[old_vocab:] = 0
+        embed_mean = old_embed.weight.mean(dim=0)
+        embed_std = old_embed.weight.std()
+        for i in range(old_vocab, new_vocab_size):
+            new_embed.weight[i] = embed_mean + torch.randn_like(embed_mean) * (embed_std * 0.01)
 
     model.tok_embeddings = new_embed
 

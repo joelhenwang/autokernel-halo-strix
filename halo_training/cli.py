@@ -42,7 +42,8 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="Run smoke test instead of training")
 
     # Training params
-    parser.add_argument("--time-budget", type=float, default=45.0, help="Training time budget in minutes")
+    parser.add_argument("--time-budget", type=float, default=45.0, help="Training time budget in minutes (ignored if --max-steps set)")
+    parser.add_argument("--max-steps", type=int, default=None, help="Stop after N optimizer steps (overrides --time-budget)")
     parser.add_argument("--batch-size", type=int, default=16, help="Microbatch size")
     parser.add_argument("--block-size", type=int, default=1024, help="Sequence length")
     parser.add_argument("--accum-steps", type=int, default=4, help="Gradient accumulation steps")
@@ -140,6 +141,7 @@ def main():
         resume_from=args.resume_from,
         resize_vocab=resize_vocab,
         warmup_steps=args.warmup_steps,
+        max_steps=args.max_steps,
     )
 
     print(f"\nFinal stats: {stats}")

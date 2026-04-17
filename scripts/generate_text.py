@@ -119,6 +119,18 @@ def main():
     model = load_model(args.model, args.class_name)
     model = model.to(device)
 
+    # Chat mode: resize embeddings BEFORE autokernel and checkpoint load
+    # (SFT checkpoints have vocab_size=50260, model starts at 50257)
+    stop_tokens = {50256}  # <|endoftext|>
+    vocab_size = 50257
+
+    if args.chat:
+        from halo_training.chat_template import build_tokenizer, resize_embeddings
+        chat_tok = build_tokenizer(phase="sft")
+        model = resize_embeddings(model, chat_tok.vocab_size)
+        vocab_size = chat_tok.vocab_size
+        stop_tokens = {chat_tok.im_end_id}  # stop on <|im_end|>
+
     # Apply autokernel (checkpoint was saved with autokernel-optimized model)
     try:
         import autokernel
@@ -141,17 +153,8 @@ def main():
     else:
         model.load_state_dict(ckpt, strict=False)
 
-    # Chat mode setup
-    stop_tokens = {50256}  # <|endoftext|>
-    vocab_size = 50257
-
+    # Tokenize prompt
     if args.chat:
-        from halo_training.chat_template import build_tokenizer, resize_embeddings
-        chat_tok = build_tokenizer(phase="sft")
-        model = resize_embeddings(model, chat_tok.vocab_size)
-        vocab_size = chat_tok.vocab_size
-        stop_tokens = {chat_tok.im_end_id}  # stop on <|im_end|>
-
         # Build ChatML prompt
         messages = [
             {"role": "system", "content": args.system_prompt},
