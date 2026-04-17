@@ -267,8 +267,9 @@ def split_params_for_muon(model: nn.Module):
             adamw_params.append((name, param))
             continue
 
-        # 2D weight matrices → Muon (MLP, attention, projection weights)
-        if param.ndim >= 2:
+        # Exactly 2D weight matrices → Muon (MLP, attention, projection weights)
+        # Newton-Schulz requires ndim == 2; 3D+ params (e.g. QK-Norm scales) go to AdamW
+        if param.ndim == 2:
             muon_params.append(param)
         else:
             adamw_params.append((name, param))
