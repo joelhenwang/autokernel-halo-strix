@@ -408,7 +408,18 @@ XSA+DC wins by -3.4% on a larger dataset at ctx=256.
 | 1024 | XSA+DC (99.2M) | 10.713 | 6.852 | 34,650 |
 | 1024 | Full (103.5M) | 12.057 | **6.805** | 33,880 |
 
-**TTT crossover confirmed.** At ctx=256, XSA+DC wins (-3.4%). At ctx=1024, Full overtakes (-0.7%). TTT/FiLM/VE are dead weight at short context but provide genuine benefit at 1024 tokens where TTT has enough material to adapt. Crossover is between 256-1024. **Use Full config for production training at ctx≥512.**
+**TTT crossover confirmed.** At ctx=256, XSA+DC wins (-3.4%). At ctx=1024, Full overtakes (-0.7%). Crossover is between 256-1024.
+
+### GPT-Training-Small (2 epochs, ctx=1024, lr=0.0004, 585M tokens, from WT103 ckpt)
+
+| Config | Start Loss | Final Loss | tok/s |
+|--------|-----------|------------|-------|
+| Full (103.5M) | 11.126 | **7.021** | 34,059 |
+| XSA+DC (99.2M) | 11.147 | 7.036 | 34,766 |
+
+Full wins by -0.2% on larger data at ctx=1024. Margin is small but consistent. Both models still too high loss (~7.0) for coherent generation — need ~4B+ tokens to reach the ~3.5-4.0 threshold (ARGUS-PRIME needed 4.7B tokens for loss 3.8).
+
+**Use Full config for production training at ctx≥512.**
 
 ---
 

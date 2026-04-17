@@ -79,6 +79,17 @@ XSA+DC wins by -0.234 loss (-3.4%) on WikiText-103 at ctx=256. Full's extra 4.3M
 
 **TTT/FiLM/VE crossover between ctx=256 and ctx=1024.** At 256, XSA+DC wins by -3.4%. At 1024, Full wins by -0.7%. TTT needs sufficient context to adapt — at 256 tokens it's dead weight, at 1024 it has enough material. **Recommendation:** use Full config for ctx≥512, XSA+DC for ctx≤256.
 
+### GPT-Training-Small (2 epochs, ctx=1024, lr=0.0004, 585M tokens)
+
+| Config | Start Loss | Final Loss | tok/s |
+|--------|-----------|------------|-------|
+| Full (103.5M) | 11.126 | **7.021** | 34,059 |
+| XSA+DC (99.2M) | 11.147 | 7.036 | 34,766 |
+
+Full wins by -0.2% — consistent with ctx=1024 trend. Both models at loss ~7.0, still too high for coherent text (need ~3.5-4.0). Total tokens seen: ~730M. ARGUS-PRIME needed 4.7B tokens to reach loss 3.8.
+
+**CPT LR note:** lr=0.0012 caused early plateau at ~7.1 (1 epoch). Reducing to lr=0.0004 + 2 epochs pushed through to 7.0. For continued pre-training, use 3-5x lower LR than pretraining base.
+
 ## rocBLAS / BLAS Optimization
 
 rocBLAS uses Tensile scalar FMA on gfx1151. Can't beat it — shape workloads to help it:
