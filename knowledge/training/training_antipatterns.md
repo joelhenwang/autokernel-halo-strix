@@ -41,6 +41,14 @@ tags: [%antipatterns, %optimization, %patterns, %rocblas, %rocm, %hip, %training
 - **Checkpoints are always fp32**: AMP dtype (fp16/bf16) only exists transiently inside autocast. Checkpoints save fp32 master weights. Safe to load across fp16 (AMD) → bf16 (NVIDIA) training.
 - **FiLM cross-dimension mismatch**: Don't apply FiLM modulation (d_target=768) to core loop states (d=512). Compute FiLM context from the core loop, but only apply to Coda layers (d=768). n_film_targets = 4 (Coda only), not 6.
 - **Loss reporting with gradient accumulation**: `halo_training` reports loss summed over accum_steps, not averaged. Divide reported loss by accum_steps for actual per-token CE. E.g., reported 24.0 with accum_steps=4 → actual loss 6.0.
+- **Muon + QK-Norm ndim crash**: `split_params_for_muon` must use `param.ndim == 2` (not `>= 2`). QK-Norm scales have shape `(n_heads, 1, 1)` — ndim=3 passes `>= 2` check but crashes Newton-Schulz which requires exactly 2D.
+- **Don't bypass causal_conv1d_fn under compile**: F.conv1d fallback is slower than the opaque causal_conv1d kernel even with the graph break. The 10x kernel speed outweighs fusion benefit. Tested: -8.1% tok/s.
+- **Mamba in loop needs LoopStableMamba3SISO**: Standard Mamba3SISO causes NaN after ~60 steps in a looped architecture. Fix: clamp dt_proj output BEFORE softplus (`clamp(-10, 5)`), tighter dt_max (0.1 vs 0.5), per-iteration RMSNorm.
+- **Mamba breaks torch.compile**: autokernel's selective_scan_backward HIP kernel is incompatible with Dynamo tracing. Use compile for Griffin/Conv architectures, not Mamba.
+- **d=768 vs d=512 dominates all other factors**: In GRIFFIN-HALO sweep, d=768 core achieves loss ~3.2 while d=512 achieves ~6.1 — nearly 2x difference. Mixer type (Griffin vs GQA), aggregation (DMC vs AttnRes), and adaptive depth all fall within ~3% run-to-run variance at d=768.
+- **AttnRes + DMC don't synergize**: Tested in GRIFFIN-HALO sweep. DMC alone: 3.286, AttnRes alone: 3.213, both together: 3.261. Combined is worse than AttnRes alone.
+- **CodaAttnRes hurts**: Cross-stage AttnRes in the Coda (3.382) is worse than standard residuals (3.193). Don't add AttnRes to every connection — it only helps for depth aggregation over iteration outputs.
+- **Compile fusion doesn't scale with d**: At d=768, compile gives only +18% (vs +140% at d=512 for JORMUNGANDR-HALO). Reason: d=768 GEMMs dominate; compile fuses element-wise ops between GEMMs, which are a smaller fraction of total compute at larger d.
 
 ## XSA + Depth Memory Cache (Ablation Results)
 

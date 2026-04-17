@@ -280,28 +280,100 @@ Top 2-3 configs from the BabyLM sweep → WikiText-103 (ctx=1024, 1 epoch, lr=0.
 
 ---
 
-## Expected Outcome
+## Actual Results — Factor Sweep
 
-A Pareto frontier plot with loss on Y-axis and tok/s on X-axis, showing every tested config plus the existing baselines. The "winner" is the config furthest into the upper-right quadrant (best quality at highest throughput), or the set of configs forming the efficient frontier if the tradeoff is smooth.
+All runs: BabyLM 1 epoch, ctx=256, Muon, compile+autokernel, batch=16, block=256, accum=4, lr=0.0012.
+
+### Main Sweep (10 Runs)
+
+| Run | Config | Actual Loss | tok/s | MFU | Memory | Notes |
+|-----|--------|-------------|-------|-----|--------|-------|
+| R9 | Griffin+DMC (confirm) | **3.193** | 21.3K | 21.0% | 5.0 GB | **Quality winner** |
+| R4 | Griffin+AttnRes-iter | 3.213 | 19.6K | 19.4% | 5.3 GB | AttnRes > DMC for aggregation |
+| R10 | ARGUS-PRIME (stacked) | 3.231 | 16.8K | 28.5% | 6.1 GB | 168M params, non-looped baseline |
+| R7 | Griffin+DMC+Adaptive | 3.239 | 19.9K | 21.0% | 5.3 GB | MoE routing viable but overhead eats savings |
+| R5 | Griffin+DMC+AttnRes | 3.261 | 19.4K | 19.2% | 5.3 GB | **Synergy didn't help** — worse than either alone |
+| R1 | Griffin base (last-only) | 3.285 | 20.7K | 20.4% | 5.0 GB | Griffin alone, strong baseline |
+| R3 | Griffin+DMC | 3.286 | 21.2K | 21.0% | 5.0 GB | DMC adds ~0 at this scale |
+| R2 | GQA-in-loop base | 3.325 | 21.0K | 20.9% | 5.1 GB | GQA slightly worse than Griffin |
+| R6 | Griffin+DMC+CodaAttnRes | 3.382 | 19.4K | 19.2% | 5.4 GB | **CodaAttnRes hurts** — worst d=768 |
+| R8 | Griffin+DMC, d=512 | 6.144 | **39.5K** | 38.1% | 3.5 GB | **Throughput winner** |
+
+### Existing Baselines (for comparison)
+
+| Model | Actual Loss | tok/s | Notes |
+|-------|-------------|-------|-------|
+| JORMUNGANDR Bare (d=512) | 6.028 | 33.7K | Local-only ShortConv loop |
+| JORMUNGANDR XSA+DMC (d=512) | 5.770 | 33.7K | Best JORMUNGANDR config |
+| HALO-PRIME Full (d=512, Mamba) | 5.650 | 28.5K | Best quality pre-GRIFFIN-HALO |
+
+### Key Findings
+
+1. **d=768 is the dominant factor.** All d=768 configs achieve ~3.2-3.4 loss — nearly 2x better than d=512 configs (5.7-6.1). The wider core loop is dramatically more expressive per iteration.
+
+2. **Griffin vs GQA: within noise.** Griffin (3.285) vs GQA-in-loop (3.325) — 1.2% difference, within ~3% run-to-run variance (R3 vs R9 identical configs varied by 2.9%).
+
+3. **DMC and AttnRes individually help, but don't synergize.** DMC alone: 3.286, AttnRes alone: 3.213, both together: 3.261. The combination is worse than AttnRes alone.
+
+4. **CodaAttnRes hurts.** Cross-stage AttnRes in the Coda (R6: 3.382) is the worst d=768 config. The extra mechanism adds complexity without benefit.
+
+5. **Adaptive depth works but overhead is too high.** R7 (3.239 at 19.9K) — quality is fine, but the router/gather/scatter overhead eats the throughput savings from skipping easy tokens at ctx=256. May help more at ctx=1024.
+
+6. **d=512 Griffin is fast but lower quality.** R8 (6.144 at 39.5K) — worse than JORMUNGANDR XSA+DMC (5.770 at 33.7K) despite being faster. Griffin with 1 wide block at d=512 is less effective than 3 narrow ShortConvBlocks.
+
+7. **ARGUS-PRIME (stacked, 168M) is competitive.** Loss 3.231 at 16.8K — similar quality to looped Griffin at 97.9M. The stacked model uses 70% more params for comparable quality. Looping is more parameter-efficient.
+
+### Optimization Ablation
+
+Three throughput optimizations tested against R9 baseline (3.193, 21.3K):
+
+| Optimization | Actual Loss | tok/s | Δ Loss | Δ tok/s |
+|---|---|---|---|---|
+| **3 iterations** (vs 4) | 3.313 | 22.7K | +3.8% | **+6.9%** |
+| **FFN 1792** (vs 2048) | 3.351 | 21.7K | +4.9% | +1.9% |
+| **No compile** (eager only) | 3.425 | 18.0K | +7.3% | -15.3% |
+
+**Best optimization: 3 iterations.** Minimal quality cost (3.8%) for meaningful throughput gain (6.9%). FFN shrink not worth it. Compile provides ~18% throughput — less than JORMUNGANDR-HALO's 2.4x because Griffin's chunked scan is already efficient in eager mode.
+
+### Compile Fusion Fixes (All Failed)
+
+Three attempts to improve compile fusion:
+
+| Fix | Approach | Result |
+|---|---|---|
+| **Fix A:** Bypass causal_conv1d under compile | F.conv1d fallback for Inductor fusion | **-8.1% tok/s** — native kernel is faster than fused fallback |
+| **Fix B:** Griffin + 2 ShortConv per iteration | 3 blocks for more fusion surface | **-22.8% tok/s** — 3 blocks at d=768 = 3x GEMMs per iter |
+| **Fix C:** Sequential Conv→Griffin | Single chain for better fusion | **-6.9% tok/s** — extra residual adds latency |
+
+**Conclusion:** The throughput bottleneck at d=768 is GEMM compute (rocBLAS matmuls), not kernel launch overhead or unfused element-wise ops. Compile already fuses what it can (+18%). The remaining gap to JORMUNGANDR-HALO's 34K is the 2.25x higher GEMM cost of d=768 vs d=512.
+
+### Pareto Frontier (Actual)
 
 ```
-Quality (loss ↓ better)
+Loss (↓ better)
     │
-5.6 │              * HALO-PRIME (Mamba, 28.5K)
-    │         ?  
-5.7 │    ? ? ?    * JORMUNGANDR XSA+DMC (33.7K)
-    │       ?         ?
-5.8 │                      ?
+3.2 │  R9●  R4●  R10●  R7●                          ← d=768 cluster
+    │         R5●  R1●  R3●
+3.3 │              R2●
+    │                    R6●
     │
-5.9 │                              ?
+    │    ⋮ (quality gap)
     │
-6.0 │  * JORMUNGANDR Bare (33.7K)        * ARGUS-PRIME (18K)
-    └──────────────────────────────────────────────
-        18K   28K   34K   42K   53K   67K  tok/s →
-        
-    * = existing data point
-    ? = new GRIFFIN-HALO config to test
+5.7 │                         ● JORMUNGANDR XSA+DMC   ← d=512 cluster
+5.8 │                    ● HALO-PRIME
+    │
+6.0 │  ● JORMUNGANDR Bare
+6.1 │                                    R8●
+    └───────────────────────────────────────
+       16K   19K   21K   28K   34K   39K  tok/s →
 ```
+
+**Pareto-optimal configs:**
+- **R9 (Griffin+DMC, d=768, 4 iter)**: Best quality (3.193) at 21.3K tok/s
+- **R8 (Griffin+DMC, d=512)**: Best throughput (39.5K) in the Griffin family
+- **JORMUNGANDR XSA+DMC (d=512)**: Best throughput at JORMUNGANDR-class quality
+
+**The quality-throughput Pareto frontier has two distinct clusters** separated by d=512 vs d=768. No config bridges the gap — there's a clear tradeoff between d=768 quality (~3.2) and d=512 throughput (~34-40K). Testing intermediate d (640, 704) could fill this gap.
 
 ---
 

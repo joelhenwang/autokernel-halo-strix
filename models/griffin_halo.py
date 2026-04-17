@@ -370,6 +370,23 @@ class GriffinHaloBase(nn.Module):
                 d_core, d_conv_core, d_griffin, ffn_core,
                 conv_kernel, momentum_beta_init,
             )
+        elif core_mixer == "griffin+conv":
+            # Fix B: 1 Griffin (global) + 2 ShortConv (local, compile-fusable)
+            self.core_block = None
+            self.core_layers = nn.ModuleList([
+                GriffinConvBlock(d_core, d_conv_core, d_griffin, ffn_core,
+                                 conv_kernel, momentum_beta_init),
+                ShortConvBlock(d_core, d_conv_core, ffn_core, conv_kernel,
+                               momentum_beta_init),
+                ShortConvBlock(d_core, d_conv_core, ffn_core, conv_kernel,
+                               momentum_beta_init),
+            ])
+        elif core_mixer == "seq_griffin":
+            # Fix C: Sequential Conv → Griffin (single chain, better fusion)
+            self.core_block = SeqGriffinConvBlock(
+                d_core, d_conv_core, d_griffin, ffn_core,
+                conv_kernel, momentum_beta_init,
+            )
         elif core_mixer == "gqa":
             self.core_block = GQAConvBlock(
                 d_core, d_conv_core, n_heads, n_core_kv_heads,
@@ -605,18 +622,16 @@ class GriffinHaloBase(nn.Module):
 
     def _core_forward(self, h_core, vel_core, freqs_cis):
         """Single core iteration forward (dispatches by mixer type)."""
-        if self.core_mixer == "conv":
+        if self.core_mixer in ("conv", "griffin+conv"):
             for layer in self.core_layers:
-                h_core, vel_core = layer(h_core, vel_core)
+                if isinstance(layer, GQAConvBlock):
+                    h_core, vel_core = layer(h_core, vel_core, freqs_cis)
+                else:
+                    h_core, vel_core = layer(h_core, vel_core)
         elif self.core_mixer == "gqa":
-            # GQA needs freqs_cis
-            fc = freqs_cis
-            if self.d_core != self.d_model:
-                # Would need different head_dim freqs — use d_core head_dim
-                pass  # freqs_cis is precomputed for d_model head_dim
-            h_core, vel_core = self.core_block(h_core, vel_core, fc)
+            h_core, vel_core = self.core_block(h_core, vel_core, freqs_cis)
         else:
-            # Griffin
+            # Griffin or SeqGriffin (single block)
             h_core, vel_core = self.core_block(h_core, vel_core)
         return h_core, vel_core
 
@@ -702,6 +717,89 @@ class GriffinHaloR9(GriffinHaloBase):
     """Run 9: Confirmation of best full config (update after sweep)"""
     def __init__(self, **kw):
         super().__init__(core_mixer="griffin", depth_agg="dmc",
+                         coda_attnres=False, adaptive_depth=False,
+                         d_core=768, **kw)
+
+
+class SeqGriffinConvBlock(nn.Module):
+    """Fix C: Sequential Conv → Griffin (single chain for better compile fusion).
+
+    Instead of parallel (Conv ∥ Griffin) → concat → proj, runs Conv first
+    then Griffin on the conv output. Creates one long sequential chain that
+    Inductor can trace and fuse more aggressively.
+    """
+
+    def __init__(self, d_model: int, d_conv: int, d_griffin: int,
+                 ffn_inner: int, conv_kernel: int = 3,
+                 momentum_beta_init: float = 0.5):
+        super().__init__()
+        self.pre_norm = RMSNorm(d_model)
+        self.conv = GatedConv(d_model, d_conv, conv_kernel)
+        self.conv_proj = nn.Linear(d_conv, d_model, bias=False)
+        self.griffin = GriffinRecurrence(d_model, d_griffin)
+        self.griffin_proj = nn.Linear(d_griffin, d_model, bias=False)
+
+        self.log_beta = nn.Parameter(
+            torch.tensor(math.log(momentum_beta_init / (1 - momentum_beta_init)))
+        )
+        self.ffn_norm = RMSNorm(d_model)
+        self.ffn = SwiGLU(d_model, ffn_inner)
+
+    def forward(self, x: torch.Tensor, velocity: torch.Tensor):
+        normed = self.pre_norm(x)
+
+        # Sequential: Conv (local) → residual → Griffin (global) → residual
+        conv_out = self.conv_proj(self.conv(normed))
+        x = x + conv_out
+
+        griffin_out = self.griffin_proj(self.griffin(x))
+        beta = torch.sigmoid(self.log_beta)
+        velocity = beta * velocity + griffin_out
+        x = x + velocity
+
+        # SwiGLU
+        rms = torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
+        normed = (x.float() * rms).to(x.dtype) * self.ffn_norm.weight
+        x = x + self.ffn(normed)
+        return x, velocity
+
+
+class GriffinHaloOpt_fixA(GriffinHaloBase):
+    """Fix A test: Same as R9 but causal_conv1d bypassed under compile (in amadeus.py)."""
+    def __init__(self, **kw):
+        super().__init__(core_mixer="griffin", depth_agg="dmc",
+                         coda_attnres=False, adaptive_depth=False,
+                         d_core=768, **kw)
+
+
+class GriffinHaloOpt_3iter(GriffinHaloBase):
+    """Optimization test A: 3 iterations instead of 4 (all else = R9)"""
+    def __init__(self, **kw):
+        super().__init__(core_mixer="griffin", depth_agg="dmc",
+                         coda_attnres=False, adaptive_depth=False,
+                         d_core=768, n_iters=3, backprop_depth=2, **kw)
+
+
+class GriffinHaloOpt_ffn1792(GriffinHaloBase):
+    """Optimization test B: FFN 1792 instead of 2048 (all else = R9)"""
+    def __init__(self, **kw):
+        super().__init__(core_mixer="griffin", depth_agg="dmc",
+                         coda_attnres=False, adaptive_depth=False,
+                         d_core=768, ffn_core=1792, **kw)
+
+
+class GriffinHaloOpt_fixB(GriffinHaloBase):
+    """Fix B: Griffin + 2 ShortConv per iteration (more compile fusion surface)."""
+    def __init__(self, **kw):
+        super().__init__(core_mixer="griffin+conv", depth_agg="dmc",
+                         coda_attnres=False, adaptive_depth=False,
+                         d_core=768, **kw)
+
+
+class GriffinHaloOpt_fixC(GriffinHaloBase):
+    """Fix C: Sequential Conv→Griffin (single chain for better fusion)."""
+    def __init__(self, **kw):
+        super().__init__(core_mixer="seq_griffin", depth_agg="dmc",
                          coda_attnres=False, adaptive_depth=False,
                          d_core=768, **kw)
 
