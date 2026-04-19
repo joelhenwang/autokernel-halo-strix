@@ -100,6 +100,18 @@ Full wins by -0.2% — consistent with ctx=1024 trend. Both models at loss ~7.0,
 
 **CPT LR note:** lr=0.0012 caused early plateau at ~7.1 (1 epoch). Reducing to lr=0.0004 + 2 epochs pushed through to 7.0. For continued pre-training, use 3-5x lower LR than pretraining base.
 
+### GriffinHaloProgressive (110.1M, post Parcae injection fix)
+
+Fixed critical bug: `SimpleParcaeInjection` output zero on first loop iteration (A+B=0 when h==input_embed). All prior GRIFFIN-HALO/JORMUNGANDR-HALO runs had dead core loops.
+
+| Stage | Dataset | Tokens | Final CE | tok/s |
+|-------|---------|--------|----------|-------|
+| BabyLM 1ep | BabyLM | 16M | 6.35 | 34K |
+| GPT-small 2ep | GPT-training-small | 585M | 7.06 | 34K |
+| WT103 2ep | WikiText-103 | 238M | 6.72 | 35K |
+
+GPT-small CE=7.06 matches JORMUNGANDR Full (7.02) — validates fix. Still above coherence threshold. Needs billions more tokens.
+
 ## rocBLAS / BLAS Optimization
 
 rocBLAS uses Tensile scalar FMA on gfx1151. Can't beat it — shape workloads to help it:

@@ -82,6 +82,7 @@ python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --
 - **Final checkpoint always saved** — trainer auto-saves at end of training (including time-budget cutoff). Use `--checkpoint-interval 999999` to skip intermediate saves.
 - **Autokernel + value_bias** — detect fused replacement with `hasattr(self.attn, 'w_qkv')` before passing extra kwargs.
 - **Loss reporting** — logged loss is accumulated over `accum_steps`. Divide by accum_steps for actual per-token CE.
+- **Parcae injection skip first iteration** — `SimpleParcaeInjection` and `ParcaeInjection` cancel to zero when `h == input_embed` (true on first loop entry). All loop call sites skip injection on iteration 0, only apply on re-entries.
 
 ## Training Target
 

@@ -60,8 +60,8 @@ def main():
     parser.add_argument("--resume-from", default=None, help="Checkpoint path for continued pre-training (loads weights only, fresh optimizer)")
 
     # SFT arguments
-    parser.add_argument("--phase", default="pretrain", choices=["pretrain", "eos-warmup", "sft"],
-                        help="Training phase: pretrain (default), eos-warmup (Phase 0), sft (Stages C/A/B)")
+    parser.add_argument("--phase", default="pretrain", choices=["pretrain", "eos-warmup", "sft", "dpo"],
+                        help="Training phase: pretrain, eos-warmup, sft, or dpo")
     parser.add_argument("--sft-dataset", default=None,
                         help="SFT dataset: 'alpaca', 'openhermes', or path to local JSONL/parquet")
     parser.add_argument("--sft-format", default="alpaca", choices=["alpaca", "sharegpt", "chatml"],
@@ -73,6 +73,16 @@ def main():
                         help="System prompt for ChatML formatting")
     parser.add_argument("--no-packing", action="store_true",
                         help="Disable conversation packing (pad each conversation individually)")
+    parser.add_argument("--tool-use", action="store_true",
+                        help="Enable tool-use tokens (<tool_call>, </tool_call>) — uses domain-sft tokenizer with vocab 50262")
+
+    # DPO arguments
+    parser.add_argument("--dpo-dataset", default=None,
+                        help="DPO preference dataset (JSONL with chosen/rejected pairs)")
+    parser.add_argument("--dpo-beta", type=float, default=0.1,
+                        help="DPO beta (KL penalty strength, default 0.1)")
+    parser.add_argument("--dpo-batch-size", type=int, default=4,
+                        help="DPO batch size (smaller than SFT due to 2x model memory)")
 
     args = parser.parse_args()
 
@@ -94,7 +104,8 @@ def main():
         from halo_training.sft_data import SFTDataset
         from halo_training.sft_loss import build_sft_loss_fn
 
-        tokenizer = build_tokenizer(phase="sft")
+        tok_phase = "domain-sft" if args.tool_use else "sft"
+        tokenizer = build_tokenizer(phase=tok_phase)
         resize_vocab = tokenizer.vocab_size
 
         dataset_obj = SFTDataset(
@@ -106,6 +117,63 @@ def main():
             pack=not args.no_packing,
         )
         loss_fn = build_sft_loss_fn(eos_weight=args.eos_weight)
+
+    elif args.phase == "dpo":
+        from halo_training.chat_template import build_tokenizer, resize_embeddings
+        from halo_training.dpo import DPODataset, train_dpo
+
+        tok_phase = "domain-sft" if args.tool_use else "sft"
+        tokenizer = build_tokenizer(phase=tok_phase)
+        resize_vocab = tokenizer.vocab_size
+
+        dpo_data = args.dpo_dataset or args.dataset
+        dpo_dataset = DPODataset(
+            data_path=dpo_data,
+            tokenizer=tokenizer,
+            block_size=args.block_size,
+        )
+
+        # Resize embeddings before loading checkpoint
+        model = resize_embeddings(model, resize_vocab)
+
+        # Apply autokernel if requested
+        if args.optimize_kernels:
+            try:
+                import autokernel
+                model = autokernel.optimize(model, training=True)
+                print("autokernel optimizations applied")
+            except ImportError:
+                print("autokernel not available, skipping")
+
+        # Load checkpoint
+        if args.resume_from:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = model.to(device)
+            import torch
+            ckpt = torch.load(args.resume_from, map_location=device, weights_only=False)
+            if "model_state_dict" in ckpt:
+                try:
+                    model.load_state_dict(ckpt["model_state_dict"])
+                except RuntimeError:
+                    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+                print(f"Loaded checkpoint: {args.resume_from} (step {ckpt.get('step', '?')})")
+            del ckpt
+
+        stats = train_dpo(
+            model,
+            dataset=dpo_dataset,
+            epochs=args.epochs,
+            batch_size=args.dpo_batch_size,
+            lr=args.lr,
+            beta=args.dpo_beta,
+            checkpoint_dir=args.checkpoint_dir or "checkpoints/dpo",
+            log_interval=args.log_interval,
+            max_steps=args.max_steps,
+            time_budget_minutes=args.time_budget,
+            compile=args.compile,
+        )
+        print(f"\nDPO stats: {stats}")
+        sys.exit(0)
 
     if args.smoke:
         from halo_training.smoke import run_smoke_test

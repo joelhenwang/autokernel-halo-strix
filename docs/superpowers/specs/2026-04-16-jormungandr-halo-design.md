@@ -38,10 +38,9 @@ Tokens → Embedding (d=768, tied LM head, vocab=50257)
             │ input_embed = h (saved, d=768)
             ▼
 ┌──────────────────────────────────────────────────────┐
-│ FUSED ENTRY: Parcae injection + dim adapter           │
-│   h_core = A * proj_down(h) + B * proj_down(embed)   │
-│   (768→512, fused into one op)                        │
-│   proj_down(input_embed) cached for all re-injections │
+│ ENTRY: proj_down only (skip injection — h == embed)   │
+│   h_core = proj_down(h)                               │
+│   proj_down(input_embed) cached for re-injections     │
 │                                                       │
 │ CORE LOOP (d=512, 3 ShortConv × T iterations)        │
 │   ~1.2MB fp16 weights → L2-RESIDENT                   │
@@ -51,11 +50,11 @@ Tokens → Embedding (d=768, tied LM head, vocab=50257)
 │                   + inlined momentum + SwiGLU(512,1792)|
 │                                                       │
 │   T ~ Poisson(mean_recurrence), bounded               │
-│   Iters 1..T-3: detached (no grad, no GradScaler)    │
-│   Iters T-2..T: gradient-tracked                      │
+│   Iter 0: core_layers only (no injection)             │
+│   Iters 1..T-3: A*h + B*cached_embed, detached       │
+│   Iters T-2..T: A*h + B*cached_embed, gradient       │
 │                                                       │
 │   Each layer compiled independently via torch.compile │
-│   Re-injection every iteration: A*h + B*cached_embed  │
 └───────────┬──────────────────────────────────────────┘
             │ h = proj_up(h_core)  (512→768, once)
             ▼
@@ -149,8 +148,8 @@ Based on measured baselines (ARGUS-PRIME 18K tok/s, RESONANT-LOOP 15.9K tok/s):
 
 ## Hardware-Specific Optimizations (6 baked in)
 
-### 1. Fused Parcae injection + entry projection
-The dimension adapter (768→512) and Parcae injection (`A*h + B*input_embed`) fuse into one operation. `proj_down(input_embed)` is computed once and cached for all re-injections across iterations.
+### 1. Parcae injection + entry projection
+Entry uses `proj_down(h)` only — no injection at iteration 0 (A+B=0 when h==input_embed). `proj_down(input_embed)` is computed once and cached. Parcae re-injection (`A*h + B*cached_embed`) applied only on iterations 1+.
 
 ### 2. Inlined RMSNorm + momentum in core ShortConvBlock
 Same pattern as ARGUS-PRIME — inline the RMSNorm computation and momentum update instead of separate modules. Inductor fuses the element-wise ops. Proven +1-3%.

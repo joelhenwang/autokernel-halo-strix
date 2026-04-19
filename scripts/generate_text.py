@@ -126,7 +126,18 @@ def main():
 
     if args.chat:
         from halo_training.chat_template import build_tokenizer, resize_embeddings
-        chat_tok = build_tokenizer(phase="sft")
+        # Detect vocab size from checkpoint to pick the right tokenizer
+        ckpt_peek = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        ckpt_vocab = None
+        if "model_state_dict" in ckpt_peek:
+            ckpt_vocab = ckpt_peek["model_state_dict"].get("tok_embeddings.weight",
+                         ckpt_peek["model_state_dict"].get("output.weight"))
+            if ckpt_vocab is not None:
+                ckpt_vocab = ckpt_vocab.shape[0]
+        del ckpt_peek
+        # 50262 = domain-sft (has tool_call tokens), 50260 = sft (ChatML only)
+        tok_phase = "domain-sft" if ckpt_vocab and ckpt_vocab > 50260 else "sft"
+        chat_tok = build_tokenizer(phase=tok_phase)
         model = resize_embeddings(model, chat_tok.vocab_size)
         vocab_size = chat_tok.vocab_size
         stop_tokens = {chat_tok.im_end_id}  # stop on <|im_end|>

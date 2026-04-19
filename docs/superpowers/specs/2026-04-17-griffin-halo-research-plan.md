@@ -143,7 +143,7 @@ These are always on — individually justified by prior evidence or zero-cost:
 | Component | Justification |
 |-----------|---------------|
 | XSA (Exclusive Self Attention) | Zero params, zero compute, proven -0.9% |
-| Parcae injection | Loop stability guarantee, proven |
+| Parcae injection | Loop stability guarantee, proven. **Skip on iter 0** (A+B=0 when h==input_embed). |
 | Per-iteration RMSNorm | Prevents state growth (learned from HALO-PRIME NaN debugging) |
 | TTT on last Coda GQA | Proven benefit at ctx>=512, low cost |
 | Muon optimizer | Proven 2x token efficiency |
@@ -172,7 +172,8 @@ Prelude (d=768): ShortConvBlock(768, 512, 2816) + GQABlock(768, n_kv=4)
 Core Loop (d=768, 1 block × 4 iterations):
   GriffinConvBlock:
     RMSNorm → (GatedConv(384) ∥ GriffinRecurrence(384)) → concat → proj(768) → SwiGLU(2048)
-  Per-iter: Parcae re-inject → block → iter_norm
+  Iter 0: block → iter_norm (no injection — h == input_embed)
+  Iter 1+: Parcae re-inject → block → iter_norm
 
 Coda (d=768): ShortConvBlock + CodaGQABlock(XSA) + ShortConvBlock + CodaGQABlock(XSA+TTT)
 

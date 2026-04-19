@@ -29,12 +29,14 @@ Tokens -> Prelude (unique layers, run once)
        -> Predictions
 ```
 
-**Recurrence update:**
+**Recurrence update (iterations t ≥ 1 only):**
 ```
 h_{t+1} = A * h_t + B * input_embed + CoreBlock(h_t, input_embed)
 A = diag(-exp(log_A))    -> eigenvalues in (-1, 0) -> guaranteed stable
 B = diag(exp(log_B))     -> controls input injection strength
 ```
+
+**First iteration (t=0):** Pass `h` directly to CoreBlock — skip the A/B injection. When `h == input_embed` (always true at loop entry), `A*h + B*h = (A+B)*h = 0` because `A = -exp(c)` and `B = exp(c)` are initialized symmetrically. Gradient symmetry prevents divergence during training. The injection only has semantic meaning on re-entry where `h_t ≠ input_embed`.
 
 ## Key Results
 

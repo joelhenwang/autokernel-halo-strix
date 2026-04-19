@@ -503,13 +503,13 @@ class GriffinHaloBase(nn.Module):
 
         b_prelude = h.detach() if self.coda_attnres else None
 
-        # === PARCAE ENTRY ===
+        # === PARCAE ENTRY (skip injection — h == input_embed here) ===
         if self.d_core != self.d_model:
             input_embed_core = self.injection.proj_down(input_embed)
-            h_core = self.injection(self.injection.proj_down(h), input_embed_core)
+            h_core = self.injection.proj_down(h)
         else:
             input_embed_core = input_embed
-            h_core = self.injection(h, input_embed_core)
+            h_core = h
 
         # === CORE LOOP PHASE 1 ===
         vel_core = torch.zeros(B, T, self.d_core, device=h.device, dtype=h.dtype)
@@ -523,7 +523,18 @@ class GriffinHaloBase(nn.Module):
             n_detached = 0
             n_grad = self.n_phase1
 
-        # Detached iterations
+        # First iteration: no re-injection needed
+        h_core, vel_core = self._core_forward(h_core, vel_core, freqs_cis)
+        h_core = self.iter_norm(h_core)
+        if n_detached + n_grad > 1:
+            if n_detached > 0:
+                cached_states.append(h_core.detach())
+                n_detached -= 1
+            else:
+                cached_states.append(h_core)
+                n_grad -= 1
+
+        # Detached re-entry iterations
         for t in range(n_detached):
             with torch.no_grad():
                 h_core = self.injection(h_core, input_embed_core)
@@ -531,7 +542,7 @@ class GriffinHaloBase(nn.Module):
                 h_core = self.iter_norm(h_core)
                 cached_states.append(h_core.detach())
 
-        # Gradient iterations
+        # Gradient re-entry iterations
         for t in range(n_grad):
             h_core = self.injection(h_core, input_embed_core)
             h_core, vel_core = self._core_forward(h_core, vel_core, freqs_cis)
@@ -907,10 +918,8 @@ class GriffinHaloLean(nn.Module):
         h, velocity = self.prelude_gqa(h, velocity, freqs_cis, ttt_target=None)
         input_embed = h
 
-        # Parcae entry
-        h_core = self.injection(h, input_embed)
-
-        # Core loop
+        # Core loop (skip injection on first iter — h == input_embed)
+        h_core = h
         vel_core = torch.zeros_like(h_core)
         cached_states = []
 
@@ -926,6 +935,18 @@ class GriffinHaloLean(nn.Module):
         else:
             n_det, n_grad = 0, self.n_iters
 
+        # First iteration: no re-injection
+        h_core, vel_core = self.core_block(h_core, vel_core)
+        h_core = self.iter_norm(h_core)
+        if n_det + n_grad > 1:
+            if n_det > 0:
+                cached_states.append(h_core.detach())
+                n_det -= 1
+            else:
+                cached_states.append(h_core)
+                n_grad -= 1
+
+        # Remaining iterations with re-injection
         for t in range(n_det):
             with torch.no_grad():
                 h_core = self.injection(h_core, input_embed)
@@ -1081,10 +1102,9 @@ class GriffinHaloProgressive(nn.Module):
         h, velocity = self.prelude_gqa(h, velocity, freqs_cis, ttt_target=None)
         input_embed_wide = h
 
-        # === WIDE ITERATION 1 (d=768, Griffin) ===
-        h_wide = self.wide_injection(h, input_embed_wide)
-        vel_wide = torch.zeros_like(h_wide)
-        h_wide, vel_wide = self.wide_block(h_wide, vel_wide)
+        # === WIDE ITERATION 1 (d=768, Griffin, no injection — h == input_embed) ===
+        vel_wide = torch.zeros_like(h)
+        h_wide, vel_wide = self.wide_block(h, vel_wide)
         h_wide = self.wide_norm(h_wide)
 
         # === PROJ DOWN (768 → 512) ===

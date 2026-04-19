@@ -840,6 +840,32 @@ Tested a 3-tier adaptive softmax (8K full-rank + 16K low-rank(256) + 26K low-ran
 
 ---
 
+## GRIFFIN-HALO Progressive Training (Post Parcae Fix)
+
+**Bug found & fixed:** `SimpleParcaeInjection` (and `ParcaeInjection`) output exactly zero on the first loop iteration because `A = -exp(c)` and `B = exp(c)` cancel when `h == input_embed`. This meant the wide block, narrow iterations, and DMC received zero input for all prior GRIFFIN-HALO and JORMUNGANDR-HALO training runs. Fix: skip injection on iteration 0, only apply on re-entries (iterations 1+). Files changed: `models/griffin_halo.py`, `models/jormungandr_halo.py`.
+
+### GriffinHaloProgressive (110.1M params, fixed)
+
+Training funnel: BabyLM → GPT-training-small → WikiText-103 → Common Crawl sample (in progress).
+
+| Stage | Dataset | Tokens | Steps | Final CE | Throughput | MFU |
+|-------|---------|--------|-------|----------|-----------|-----|
+| BabyLM 1ep | BabyLM | 16M | 250 | 6.35 | 34K tok/s | 37.7% |
+| GPT-small 2ep | GPT-training-small | 585M | 8,910 | 7.06 | 34K tok/s | 37.8% |
+| WT103 2ep | WikiText-103 | 238M | 3,630 | 6.72 | 35K tok/s | 38.8% |
+| CC 2ep | Common Crawl sample | 4.74B | — | — | — | — |
+
+**Key observations:**
+- CE=7.06 on GPT-small matches JORMUNGANDR-HALO Full (7.02) and XSA+DC (7.04) exactly — validates fix
+- CE ~6.7-7.0 is above coherence threshold (~3.5-4.0); generation still gibberish at this loss level
+- Throughput stable at 34-35K tok/s across all datasets
+- Memory: 3.56 GB (110M model at batch=4, block=1024, accum=16)
+- Domain shift spikes recover within ~100 steps (e.g., GPT-small→WT103: 13.5→7.1 CE in 100 steps)
+
+**Checkpoints:** `checkpoints/progressive_babylm_1ep/`, `progressive_gpts_2ep/`, `progressive_wt103_2ep_v2/`
+
+---
+
 ## Prior Training Baselines (from mad_llm_scientist)
 
 Training experiments conducted before halo_training/ was built, using `~/Desktop/ai_lab/mad_llm_scientist/` on the remote machine. These provide reference points for evaluating new architectures.

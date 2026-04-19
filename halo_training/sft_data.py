@@ -73,6 +73,13 @@ HF_DATASETS = {
     "openhermes": ("teknium/OpenHermes-2.5", "sharegpt"),
 }
 
+# Local dataset shortcuts (pre-processed by scripts/prepare_swe_data.py)
+LOCAL_DATASETS = {
+    "swe-repair": ("datasets/swe_prepared/swe_code_repair.jsonl", "chatml"),
+    "swe-explain": ("datasets/swe_prepared/swe_bug_explain.jsonl", "chatml"),
+    "swe-localize": ("datasets/swe_prepared/swe_localize.jsonl", "chatml"),
+}
+
 # ---------------------------------------------------------------------------
 # SFT Dataset
 # ---------------------------------------------------------------------------
@@ -145,6 +152,11 @@ class SFTDataset(Dataset):
         if data_path in HF_DATASETS:
             hf_name, _ = HF_DATASETS[data_path]
             return self._load_hf(hf_name)
+
+        # Check local dataset shortcuts
+        if data_path in LOCAL_DATASETS:
+            local_path, _ = LOCAL_DATASETS[data_path]
+            return self._load_jsonl(Path(local_path))
 
         path = Path(data_path)
 
@@ -223,8 +235,11 @@ class SFTDataset(Dataset):
             header_ids = [self.tokenizer.im_start_id]
             header_ids.extend(self.tokenizer._base.encode_ordinary(role + "\n"))
 
-            # Content
-            content_ids = self.tokenizer._base.encode_ordinary(content)
+            # Content — use full encoder for assistant (handles <tool_call> tokens)
+            if role == "assistant":
+                content_ids = self.tokenizer.encode(content)
+            else:
+                content_ids = self.tokenizer._base.encode_ordinary(content)
 
             # Footer: <|im_end|>\n
             footer_ids = [self.tokenizer.im_end_id]

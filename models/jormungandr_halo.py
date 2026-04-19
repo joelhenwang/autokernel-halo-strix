@@ -503,8 +503,8 @@ class JormungandrHaloBase(nn.Module):
         # Cache proj_down(input_embed) — reused in every re-injection
         input_embed_down = self.injection.proj_down(input_embed)
 
-        # === FUSED ENTRY (768 → 512) ===
-        h_core = self.injection(self.injection.proj_down(h), input_embed_down)
+        # === ENTRY (768 → 512, skip injection — h == input_embed here) ===
+        h_core = self.injection.proj_down(h)
 
         # === CORE LOOP (d=512, L2-resident) ===
         velocity_512 = torch.zeros(B, T, self.d_core, device=h.device, dtype=h.dtype)
@@ -520,7 +520,24 @@ class JormungandrHaloBase(nn.Module):
         use_dc = self.depth_cache is not None
         cached_states = []
 
-        # Detached iterations (no grad, no GradScaler overhead)
+        total_iters = n_detached + n_grad
+
+        # First iteration: no re-injection (h == input_embed at entry)
+        for layer in self.core_layers:
+            h_core, velocity_512 = layer(h_core, velocity_512)
+        if total_iters > 1:
+            if n_detached > 0:
+                if use_dc or not self.training:
+                    cached_states.append(h_core.detach())
+                n_detached -= 1
+            else:
+                if use_dc:
+                    cached_states.append(h_core)
+                elif not self.training:
+                    cached_states.append(h_core.detach())
+                n_grad -= 1
+
+        # Detached re-entry iterations
         for t in range(n_detached):
             with torch.no_grad():
                 h_core = self.injection(h_core, input_embed_down)
@@ -529,23 +546,20 @@ class JormungandrHaloBase(nn.Module):
                 if use_dc or not self.training:
                     cached_states.append(h_core.detach())
 
-        # Gradient-tracked iterations
-        context = None
+        # Gradient-tracked re-entry iterations
         for t in range(n_grad):
             h_core = self.injection(h_core, input_embed_down)
             for layer in self.core_layers:
                 h_core, velocity_512 = layer(h_core, velocity_512)
-
-            # FiLM: compute fingerprint on last gradient iteration (d=512 context)
-            # Applied only to Coda layers (d=768), not core loop (d=512)
-            if t == n_grad - 1 and self.film is not None:
-                context = self.film.compute_context(h_core)
-
-            # Cache state: keep grad for depth cache backprop, detach for HSV-only
             if use_dc:
                 cached_states.append(h_core)
             elif not self.training:
                 cached_states.append(h_core.detach())
+
+        # FiLM: compute fingerprint from final h_core
+        context = None
+        if self.film is not None:
+            context = self.film.compute_context(h_core)
 
         # HSV monitoring (always detached)
         self._loop_states = [s.detach() for s in cached_states]
