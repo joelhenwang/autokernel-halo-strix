@@ -150,3 +150,13 @@ Parcae establishes the first scaling laws for looped models: compute-optimal tra
 - Small datasets (e.g., BabyLM ~16.5M tokens) may not benefit from 8+ iterations
 - The scaling benefit manifests at 100M+ token scale
 - Optimal mean recurrence increases with compute budget
+
+## Implementations in This Repo
+
+| Model | File | Parcae Variant | Dims |
+|-------|------|----------------|------|
+| JORMUNGANDR-HALO | `models/jormungandr_halo.py` | `ParcaeInjection` (heterogeneous d=768/512) | proj_down adapts dimensions |
+| GRIFFIN-HALO | `models/griffin_halo.py` | `SimpleParcaeInjection` (uniform d) | no projection needed |
+| **CHIMERA-HALO** | `models/chimera_halo.py` | `SimpleParcaeInjection` (uniform d=768) + factorized embeddings + XSA | 94M unique, 158M effective |
+
+CHIMERA-HALO (2026-04-20) is the latest Parcae-based architecture, combining insights from the Parcae paper with LFM2 conv:attention ratios, Nandi factorized embeddings, and Apple's XSA. See `knowledge/architectures/chimera_halo_design.md`.

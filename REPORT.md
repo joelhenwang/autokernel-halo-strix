@@ -866,6 +866,38 @@ Training funnel: BabyLM → GPT-training-small → WikiText-103 → Common Crawl
 
 ---
 
+## CHIMERA-HALO (2026-04-20)
+
+**Architecture:** Unified looped hybrid combining 5 paper insights (LFM2, Parcae, XSA, Nandi, Attention-to-Mamba). Factorized embeddings (rank=256) save 25.3M params. 8 shared layers (6 conv + 2 GQA/XSA) repeated 2x per Parcae iteration, Poisson(mean=3) loop depth. Uniform d=768.
+
+| Metric | Value |
+|--------|-------|
+| Unique params | 93.9M |
+| Effective params (2x repeat) | 158.5M |
+| Effective depth (3 iter mean) | ~50 layers |
+| Embedding savings vs standard | 25.3M (65% reduction) |
+| Conv:Attention ratio | 75:25 (6:2 per block) |
+| Factorized embed rank | 256 (128-aligned for Tensile) |
+
+**Baselines to beat:**
+- SmolLM2-135M: HellaSwag 42.1, ARC 43.9 (2T tokens)
+- Nandi-Mini-150M: avg 25.63 (500B tokens)
+
+**Key innovations:**
+- Factorized embeddings: `Embedding(V, 256) → Linear(256, 768)` input, `Linear(768, 256) → embed.weight.T` output (tied)
+- Parcae spectral constraint: `A = -exp(log_A)` guarantees eigenvalues in (-1, 0)
+- XSA on all 4 attention layers via CodaAttention(exclusive=True)
+- DepthMemoryCache for content-dependent loop iteration aggregation
+- Per-zone compilation: `compile_zones()` compiles each layer independently
+
+**Variants:** ChimeraHalo (default), ChimeraHaloDeep (5 iter), ChimeraHaloBare (ablation), ChimeraHaloNoLoop (ablation), ChimeraHaloMini (smoke)
+
+**Status:** Implemented, verified forward+backward pass. Awaiting remote machine access for training.
+
+**Design doc:** `knowledge/architectures/chimera_halo_design.md`
+
+---
+
 ## Prior Training Baselines (from mad_llm_scientist)
 
 Training experiments conducted before halo_training/ was built, using `~/Desktop/ai_lab/mad_llm_scientist/` on the remote machine. These provide reference points for evaluating new architectures.
