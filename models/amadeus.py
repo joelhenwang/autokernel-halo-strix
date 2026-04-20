@@ -37,7 +37,7 @@ except ImportError:
 try:
     from mamba_ssm.ops.selective_scan_interface import selective_scan_fn as _mamba_ssm_scan_fn
     _HAS_MAMBA_SSM = True
-except ImportError:
+except (ImportError, AttributeError):
     _HAS_MAMBA_SSM = False
 
 
