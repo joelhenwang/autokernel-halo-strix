@@ -24,6 +24,10 @@ Where:
   s = speedup of that part
 ```
 
+$$\text{Speedup} = \frac{1}{(1 - p) + \frac{p}{s}}$$
+
+where $p$ is the fraction of total time spent in the part being optimized and $s$ is the speedup achieved on that part.
+
 Concrete example. Suppose your training step takes 100ms:
 - Matmuls: 65ms (65%)
 - Softmax: 12ms (12%)
@@ -33,12 +37,12 @@ Concrete example. Suppose your training step takes 100ms:
 
 If you write a perfect RMSNorm kernel that takes 0ms (impossible, but let's dream):
 - New total: 92ms
-- Speedup: 100/92 = 1.087x (8.7%)
+- Speedup: $\frac{1}{(1 - 0.08) + 0.08/\infty} = \frac{1}{0.92} \approx 1.087\times$ (8.7%)
 
 If you instead optimize matmuls by 10% (possible with better tiling):
 - New matmul time: 58.5ms
 - New total: 93.5ms
-- Speedup: 100/93.5 = 1.070x (7.0%)
+- Speedup: $\frac{1}{(1 - 0.65) + 0.65/1.1} = \frac{1}{0.35 + 0.591} \approx 1.063\times$ (6.3%)
 
 The RMSNorm kernel (8% of time, fully eliminated) gives roughly the same benefit as a 10% improvement to matmuls (65% of time). This is Amdahl's law in action.
 

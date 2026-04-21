@@ -61,6 +61,8 @@ Both sub-layers use a pre-norm pattern: normalize first, then apply the layer, t
 
 **RMSNorm.** Root Mean Square normalization. Simpler than LayerNorm -- it skips the mean subtraction and bias, using only the RMS of the input for scaling. Faster and just as effective. Formula: `output = x / sqrt(mean(x^2) + eps) * weight`.
 
+$$\text{RMSNorm}(x)_i = \frac{x_i}{\sqrt{\frac{1}{D}\sum_{j=1}^{D} x_j^2 + \epsilon}} \cdot w_i$$
+
 **LM Head.** A linear projection from `d_model` (768) to `vocab_size` (50,257). The output is 50,257 raw scores (logits). During training, we apply cross-entropy loss against the true next token. During inference, we sample from the softmax of these logits.
 
 ### Why GPT-2 and Not Something Newer?
@@ -282,6 +284,10 @@ class SwiGLUFFN(nn.Module):
     SwiGLU FFN:     output = W2(SiLU(W_gate(x)) * W_up(x))
     
     SiLU(x) = x * sigmoid(x), also called "swish".
+
+The SiLU activation is $\text{SiLU}(x) = x \cdot \sigma(x)$ where $\sigma$ is the sigmoid function. The full SwiGLU FFN computes:
+
+$$\text{output} = W_{\text{down}}\!\Big(\text{SiLU}\!\big(W_{\text{gate}}(x)\big) \odot W_{\text{up}}(x)\Big)$$
     The gate path (SiLU) controls how much of the up-projection passes through.
     
     Why SwiGLU over ReLU?
@@ -480,7 +486,7 @@ Test loss: ~10.82 (random weights predict uniformly over 50257 tokens)
 Memory used: ~0.5 GB
 ```
 
-If the loss is close to `ln(50257) = 10.825`, the model is wired correctly. Random weights should produce approximately uniform predictions, and cross-entropy of a uniform distribution over N classes is `ln(N)`.
+If the loss is close to $\ln(50257) = 10.825$, the model is wired correctly. Random weights should produce approximately uniform predictions, and cross-entropy of a uniform distribution over $N$ classes is $\ln(N)$.
 
 ---
 
@@ -972,7 +978,11 @@ if __name__ == "__main__":
 
 ### Understanding Each Component
 
-**Forward pass and loss.** The model takes `(input_ids, targets)` and returns a scalar loss. The loss is cross-entropy: for each position, how wrong was the model's probability distribution vs the actual next token? Lower is better. `ln(50257) = 10.825` is the theoretical maximum (random guessing). A well-trained 124M model on BabyLM should reach ~4.5.
+**Forward pass and loss.** The model takes `(input_ids, targets)` and returns a scalar loss. The loss is cross-entropy: for each position, how wrong was the model's probability distribution vs the actual next token? Lower is better. The cross-entropy loss for a single position is:
+
+$$\mathcal{L}_{\text{CE}} = -\log P(\text{correct token}) = -\log \frac{\exp(z_c)}{\sum_j \exp(z_j)}$$
+
+where $z_c$ is the logit for the correct token and the sum runs over all vocabulary entries. At initialization, $\ln(50257) = 10.825$ is the theoretical maximum (random guessing). A well-trained 124M model on BabyLM should reach ~4.5.
 
 **Backward pass.** `loss.backward()` computes gradients for every parameter. PyTorch's autograd walks the computation graph in reverse, applying the chain rule. This is where most computation happens -- backward is roughly 2x the cost of forward.
 

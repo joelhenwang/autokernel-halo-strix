@@ -63,6 +63,8 @@ The self-attention formula is:
 Attention(Q, K, V) = softmax(Q @ K^T / sqrt(d_k)) @ V
 ```
 
+$$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V$$
+
 Let us break this apart.
 
 ```python
@@ -117,7 +119,9 @@ An eigenvector of matrix A is a vector that, when multiplied by A, only gets sca
 A @ v = lambda * v
 ```
 
-where `v` is the eigenvector and `lambda` (the eigenvalue) is a scalar.
+$$A \mathbf{v} = \lambda \mathbf{v}$$
+
+where $\mathbf{v}$ is the eigenvector and $\lambda$ (the eigenvalue) is a scalar.
 
 ```python
 import numpy as np
@@ -157,7 +161,9 @@ The spectral radius of a matrix is the largest absolute value of its eigenvalues
 rho(A) = max(|lambda_1|, |lambda_2|, ..., |lambda_n|)
 ```
 
-**The rule:** If rho(A) < 1, repeatedly applying A causes values to decay to zero (stable). If rho(A) > 1, values explode to infinity (unstable). If rho(A) = 1, values are preserved (marginally stable).
+$$\rho(A) = \max\big(|\lambda_1|, |\lambda_2|, \ldots, |\lambda_n|\big)$$
+
+**The rule:** If $\rho(A) < 1$, repeatedly applying $A$ causes values to decay to zero (stable). If $\rho(A) > 1$, values explode to infinity (unstable). If $\rho(A) = 1$, values are preserved (marginally stable).
 
 ```python
 import numpy as np
@@ -207,6 +213,8 @@ The projection of vector u onto vector v answers: "how much of u points in the d
 proj_v(u) = (u . v / ||v||^2) * v
 ```
 
+$$\text{proj}_{\mathbf{v}}(\mathbf{u}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{v}\|^2} \mathbf{v}$$
+
 ```python
 import numpy as np
 
@@ -242,6 +250,8 @@ Two vectors are orthogonal (perpendicular) if their dot product is zero:
 ```
 u . v = 0  means  u is perpendicular to v
 ```
+
+$$\mathbf{u} \cdot \mathbf{v} = 0 \quad \Longleftrightarrow \quad \mathbf{u} \perp \mathbf{v}$$
 
 ```python
 import numpy as np
@@ -323,7 +333,9 @@ scores = Q @ K.transpose(-2, -1)    # (2, 8, 4, 4) — attention scores
 
 ### Probability Distributions Over Vocabulary
 
-A language model outputs a probability distribution over the vocabulary for each position. After the softmax, the output is a vector of 50,257 numbers (for GPT-2) that sum to 1.
+A language model outputs a probability distribution over the vocabulary for each position. After the softmax, the output is a vector of 50,257 numbers (for GPT-2) that sum to 1. The softmax function converts raw logits $z$ into probabilities:
+
+$$\text{softmax}(z_i) = \frac{\exp(z_i)}{\sum_j \exp(z_j)}$$
 
 ```python
 import torch
@@ -364,7 +376,13 @@ The training loss for language models is cross-entropy: how surprised is the mod
 CE = -log(p(correct_token))
 ```
 
-If the model assigns probability 0.9 to the correct token, the loss is `-log(0.9) = 0.105`. If it assigns probability 0.01, the loss is `-log(0.01) = 4.605`. The model is "more surprised" and receives a larger penalty.
+More generally, the cross-entropy between a true distribution $P$ and a model distribution $Q$ is:
+
+$$H(P, Q) = -\sum_i P(i) \log Q(i)$$
+
+For next-token prediction, $P$ is a one-hot distribution (1 on the correct token, 0 elsewhere), so this simplifies to $\mathcal{L}_{\text{CE}} = -\log Q(\text{correct token})$.
+
+If the model assigns probability 0.9 to the correct token, the loss is $-\log(0.9) = 0.105$. If it assigns probability 0.01, the loss is $-\log(0.01) = 4.605$. The model is "more surprised" and receives a larger penalty.
 
 ```python
 import torch
@@ -417,7 +435,9 @@ KL divergence measures how different two probability distributions are. It answe
 KL(P || Q) = sum(P(x) * log(P(x) / Q(x)))
 ```
 
-KL divergence is NOT symmetric: KL(P || Q) != KL(Q || P).
+$$D_{\text{KL}}(P \| Q) = \sum_i P(i) \log \frac{P(i)}{Q(i)}$$
+
+KL divergence is NOT symmetric: $D_{\text{KL}}(P \| Q) \neq D_{\text{KL}}(Q \| P)$.
 
 ```python
 import torch
@@ -457,6 +477,8 @@ Perplexity is the exponential of cross-entropy loss. It has a beautiful interpre
 ```
 Perplexity = exp(cross_entropy_loss)
 ```
+
+$$\text{PPL} = \exp(H) = \exp\!\left(-\frac{1}{N}\sum_{i=1}^{N} \log P(w_i \mid w_{<i})\right)$$
 
 ```python
 import math
@@ -499,6 +521,10 @@ Training is optimization: find the parameters that minimize the loss. Gradient d
 theta_new = theta_old - learning_rate * gradient(loss, theta)
 ```
 
+$$\theta_{t+1} = \theta_t - \eta \nabla_\theta \mathcal{L}$$
+
+where $\eta$ is the learning rate and $\nabla_\theta \mathcal{L}$ is the gradient of the loss with respect to the parameters.
+
 The gradient tells you: "which direction should I move each parameter to reduce the loss?"
 
 ```python
@@ -530,11 +556,13 @@ print(f"Final x: {x.item():.6f} (should be ~3.0)")
 
 ### The Chain Rule: Why Backpropagation Works
 
-Neural networks are compositions of functions: `f(g(h(x)))`. The chain rule tells us how to differentiate through the composition:
+Neural networks are compositions of functions: $f(g(h(x)))$. The chain rule tells us how to differentiate through the composition:
 
 ```
 d/dx f(g(h(x))) = f'(g(h(x))) * g'(h(x)) * h'(x)
 ```
+
+$$\frac{d}{dx} f\!\big(g(h(x))\big) = f'\!\big(g(h(x))\big) \cdot g'\!\big(h(x)\big) \cdot h'(x)$$
 
 Backpropagation is just the chain rule applied systematically from the output back to the input.
 
@@ -635,6 +663,18 @@ print("Saved learning_rate_comparison.png")
 Adam combines two ideas:
 1. **Momentum:** Keep a running average of past gradients (smooths out noise)
 2. **Adaptive learning rate:** Give each parameter its own effective learning rate based on the magnitude of its recent gradients
+
+The Adam update rules are:
+
+$$m_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t \qquad \text{(first moment estimate)}$$
+
+$$v_t = \beta_2 v_{t-1} + (1 - \beta_2) g_t^2 \qquad \text{(second moment estimate)}$$
+
+$$\hat{m}_t = \frac{m_t}{1 - \beta_1^t}, \quad \hat{v}_t = \frac{v_t}{1 - \beta_2^t} \qquad \text{(bias correction)}$$
+
+$$\theta_{t+1} = \theta_t - \eta \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}$$
+
+where $g_t = \nabla_\theta \mathcal{L}$ is the gradient, $\beta_1 = 0.9$, $\beta_2 = 0.999$, and $\epsilon = 10^{-8}$ by default.
 
 ```python
 import torch
@@ -746,14 +786,18 @@ dx/dt = Ax + Bu        (state equation)
 y = Cx + Du             (output equation)
 ```
 
+$$\frac{dx}{dt} = Ax + Bu \qquad \text{(state equation)}$$
+
+$$y = Cx + Du \qquad \text{(output equation)}$$
+
 Where:
-- `x` is the hidden state (what the model remembers)
-- `u` is the input (current token embedding)
-- `y` is the output (next hidden state or prediction)
-- `A` is the state transition matrix (how memory evolves)
-- `B` is the input matrix (how new information enters)
-- `C` is the output matrix (how to read the state)
-- `D` is the skip connection (direct input-to-output, often set to 0)
+- $x$ is the hidden state (what the model remembers)
+- $u$ is the input (current token embedding)
+- $y$ is the output (next hidden state or prediction)
+- $A$ is the state transition matrix (how memory evolves)
+- $B$ is the input matrix (how new information enters)
+- $C$ is the output matrix (how to read the state)
+- $D$ is the skip connection (direct input-to-output, often set to 0)
 
 ```python
 import numpy as np
@@ -830,12 +874,18 @@ Continuous:  dx/dt = Ax + Bu
 Discrete:    x[t] = A_bar * x[t-1] + B_bar * u[t]
 ```
 
-The conversion uses **Zero-Order Hold (ZOH)** discretization with step size Delta:
+$$x[t] = \bar{A}\, x[t-1] + \bar{B}\, u[t]$$
+
+The conversion uses **Zero-Order Hold (ZOH)** discretization with step size $\Delta$:
 
 ```
 A_bar = exp(A * Delta)
 B_bar = (A_bar - I) * A^(-1) * B
 ```
+
+$$\bar{A} = \exp(A \Delta)$$
+
+$$\bar{B} = A^{-1}(\bar{A} - I) B$$
 
 ```python
 import numpy as np
@@ -955,6 +1005,10 @@ print("Saved stability_comparison.png")
 
 The Parcae paper (looped transformers) needs to guarantee stability across ANY input sequence. Their solution is elegant: parameterize the transition matrix so that eigenvalues CANNOT escape the unit circle.
 
+The key parameterization is $A = -\exp(\log A)$, which guarantees that the diagonal elements of $A$ are always negative. After ZOH discretization, the eigenvalues of $\bar{A}$ are guaranteed to lie in $(-1, 0)$:
+
+$$\bar{A} = \exp\!\big(-\exp(\log A) \cdot \Delta\big) \in (0, 1)$$
+
 ```python
 import torch
 import numpy as np
@@ -1062,6 +1116,8 @@ Entropy measures the "surprise" or "uncertainty" of a probability distribution. 
 H(P) = -sum(P(x) * log2(P(x)))
 ```
 
+$$H(X) = -\sum_i p_i \log p_i$$
+
 ```python
 import numpy as np
 
@@ -1102,7 +1158,7 @@ Different tokenizers produce different numbers of tokens for the same text. BPB 
 BPB = (CE_loss * num_tokens) / num_bytes / log(2)
 ```
 
-Or equivalently: `BPB = CE_loss / (bytes_per_token * log(2))`
+$$\text{BPB} = \frac{\mathcal{L}_{\text{CE}}}{\text{bytes\_per\_token} \cdot \ln 2}$$
 
 ```python
 import tiktoken
@@ -1142,7 +1198,9 @@ I(X; Y) = H(X) + H(Y) - H(X, Y)
          = KL(P(X,Y) || P(X)P(Y))
 ```
 
-If X and Y are independent, I(X; Y) = 0. If X completely determines Y, I(X; Y) = H(Y).
+$$I(X; Y) = H(X) + H(Y) - H(X, Y) = D_{\text{KL}}\!\big(P(X,Y) \| P(X)P(Y)\big)$$
+
+If $X$ and $Y$ are independent, $I(X; Y) = 0$. If $X$ completely determines $Y$, $I(X; Y) = H(Y)$.
 
 ```python
 import numpy as np
@@ -1198,7 +1256,13 @@ print(f"Partial:     MI = {mutual_information(partial):.4f} bits")
 
 ### Chinchilla Scaling
 
-Chinchilla (Hoffmann et al., 2022) established that for a fixed compute budget, there is an optimal ratio of model parameters to training tokens. The finding: **optimal tokens is approximately 20x the number of parameters.**
+Chinchilla (Hoffmann et al., 2022) established that for a fixed compute budget, there is an optimal ratio of model parameters to training tokens. The finding: **optimal tokens is approximately 20x the number of parameters**, or $D_{\text{opt}} \approx 20N$.
+
+The Chinchilla scaling law predicts loss as a function of parameters $N$ and tokens $D$:
+
+$$L(N, D) = \frac{A}{N^\alpha} + \frac{B}{D^\beta} + E$$
+
+where $\alpha \approx 0.34$, $\beta \approx 0.28$, and $A$, $B$, $E$ are fitted constants. For a fixed compute budget $C \propto 6ND$, the optimal allocation satisfies $D_{\text{opt}} \approx 20N$.
 
 ```python
 import numpy as np
@@ -1405,6 +1469,10 @@ Now read the method in detail. Focus on:
 output = attn_output - proj_{self_value}(attn_output)
 ```
 
+$$z_i = y_i - \frac{y_i \cdot v_i}{\|v_i\|^2}\, v_i$$
+
+where $y_i$ is the attention output at position $i$ and $v_i$ is the self-value vector (the value vector of position $i$ itself). This removes the component of the attention output that points in the self-value direction, forcing the model to attend to other tokens.
+
 In code:
 
 ```python
@@ -1574,13 +1642,15 @@ DPO (Direct Preference Optimization) loss from Rafailov et al. (2023):
 L_DPO = -log(sigmoid(beta * (log(pi_chosen / pi_ref_chosen) - log(pi_rejected / pi_ref_rejected))))
 ```
 
+$$\mathcal{L}_{\text{DPO}} = -\log \sigma\!\Big(\beta\big(\log \pi_\theta(y_w|x) - \log \pi_\theta(y_l|x) - \log \pi_{\text{ref}}(y_w|x) + \log \pi_{\text{ref}}(y_l|x)\big)\Big)$$
+
 Which simplifies to:
 
 ```
 L_DPO = -log(sigmoid(beta * (log_ratio_chosen - log_ratio_rejected)))
 ```
 
-where `log_ratio = log(pi(y|x)) - log(pi_ref(y|x))`
+where $\log\_\text{ratio} = \log \pi_\theta(y|x) - \log \pi_{\text{ref}}(y|x)$
 
 ```python
 import torch

@@ -166,6 +166,8 @@ Activations:                 depends on batch_size × seq_len × layers
 Total ≈ params × 12 bytes + activations
 ```
 
+In short, the memory budget is approximately $\text{params} \times 12 \;\text{bytes} + \text{activations}$.
+
 | Model Size | Weights | Optimizer | Gradients | Activations (B=8, T=1024) | Total | Fits? |
 |-----------|---------|-----------|-----------|---------------------------|-------|-------|
 | 124M (GPT-2) | 0.25 GB | 1.0 GB | 0.25 GB | ~2 GB | ~3.5 GB | YES |
@@ -228,6 +230,12 @@ Bound        /          │
 - **Memory-bound ops** (left of ridge): RMSNorm, softmax, activation functions. Speedup = reduce memory traffic.
 - **Compute-bound ops** (right of ridge): Matmul, attention. Speedup = use Tensor Cores.
 - **Ridge point** for 4060 Ti: 176 TFLOPS / 288 GB/s ≈ **611 FLOPS/byte**
+
+$$\text{Ridge Point} = \frac{\text{Peak FLOPS}}{\text{Peak Bandwidth}} = \frac{176 \times 10^{12}}{288 \times 10^{9}} \approx 611 \;\text{FLOPS/byte}$$
+
+The **Arithmetic Intensity** of an operation is the ratio of compute to memory traffic:
+
+$$\text{Arithmetic Intensity} = \frac{\text{FLOPs}}{\text{Bytes Accessed}}$$
 
 If an op does less than 611 FLOPS per byte of data moved, it's memory-bound. Most non-matmul ops are heavily memory-bound.
 

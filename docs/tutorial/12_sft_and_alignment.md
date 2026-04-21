@@ -279,7 +279,7 @@ Tokens:  <|im_start|> system \n You are helpful <|im_end|> \n <|im_start|> user 
 Mask:    IGNORE IGNORE    IGNORE IGNORE          IGNORE    IGNORE IGNORE      IGNORE IGNORE          IGNORE    IGNORE IGNORE            TRAIN TRAIN     TRAIN      TRAIN
 ```
 
-The mask uses `IGNORE_INDEX = -100`, which is the standard value that `nn.CrossEntropyLoss` skips.
+The mask uses `IGNORE_INDEX = -100`, which is the standard value that `nn.CrossEntropyLoss` skips. Effectively the loss is $\mathcal{L} = -\frac{1}{|\mathcal{A}|} \sum_{i \in \mathcal{A}} \log P(t_i \mid t_{<i})$ where $\mathcal{A}$ is the set of assistant token positions.
 
 ```python
 def build_example(messages, tokenizer):
@@ -616,11 +616,13 @@ loss = -log(sigmoid(beta * (log_pi(chosen) - log_ref(chosen)
                           - log_pi(rejected) + log_ref(rejected))))
 ```
 
+$$\mathcal{L}_{\text{DPO}} = -\log \sigma\!\Big(\beta\big(\log \pi_\theta(y_w|x) - \log \pi_{\text{ref}}(y_w|x) - \log \pi_\theta(y_l|x) + \log \pi_{\text{ref}}(y_l|x)\big)\Big)$$
+
 Where:
-- `pi` is our policy model (being trained)
-- `ref` is a frozen copy of the SFT model (the reference)
-- `beta` controls how much the policy can deviate from the reference (typically 0.1)
-- `log_pi(x)` is the sum of log-probabilities of assistant tokens in response x
+- $\pi_\theta$ is our policy model (being trained)
+- $\pi_{\text{ref}}$ is a frozen copy of the SFT model (the reference)
+- $\beta$ controls how much the policy can deviate from the reference (typically 0.1)
+- $y_w$ is the chosen (winning) response, $y_l$ is the rejected (losing) response
 
 ### Why a Reference Model
 

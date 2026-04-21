@@ -35,17 +35,17 @@ For a tensor of size `[B, T, D]` in fp16 (2 bytes per element), with `N = B * T 
 **Unfused (op A + op B separately):**
 | Operation | Reads | Writes |
 |-----------|-------|--------|
-| Add (A) | `x` (2N bytes) + `residual` (2N bytes) | `hidden` (2N bytes) |
-| RMSNorm (B) | `hidden` (2N bytes) + `weight` (2D bytes) | `output` (2N bytes) |
-| **Total** | **8N + 2D bytes** | **4N bytes** |
+| Add (A) | `x` ($2N$ bytes) + `residual` ($2N$ bytes) | `hidden` ($2N$ bytes) |
+| RMSNorm (B) | `hidden` ($2N$ bytes) + `weight` ($2D$ bytes) | `output` ($2N$ bytes) |
+| **Total** | $8N + 2D$ **bytes** | $4N$ **bytes** |
 
 **Fused (A+B in one kernel):**
 | Operation | Reads | Writes |
 |-----------|-------|--------|
-| FusedResNorm | `x` (2N bytes) + `residual` (2N bytes) + `weight` (2D bytes) | `output` (2N bytes) |
-| **Total** | **4N + 2D bytes** | **2N bytes** |
+| FusedResNorm | `x` ($2N$ bytes) + `residual` ($2N$ bytes) + `weight` ($2D$ bytes) | `output` ($2N$ bytes) |
+| **Total** | $4N + 2D$ **bytes** | $2N$ **bytes** |
 
-The fused kernel does **half the memory traffic**. On a bandwidth-limited GPU like the RTX 4060 Ti (288 GB/s), halving memory traffic means roughly 2x speedup -- and that is before accounting for kernel launch overhead savings.
+The fused kernel does **half the memory traffic**: total traffic drops from $12N + 2D$ bytes to $6N + 2D$ bytes. On a bandwidth-limited GPU like the RTX 4060 Ti (288 GB/s), halving memory traffic means roughly 2x speedup -- and that is before accounting for kernel launch overhead savings.
 
 ### The General Rule
 
@@ -523,7 +523,11 @@ The naive approach computes this in three passes:
 2. Compute `sum(exp(logits - max))`
 3. Compute `loss = -logits[target] + max + log(sum)`
 
-The **online softmax** algorithm (Milakov & Gimelshein, 2018) fuses steps 1 and 2 into a single pass:
+The **online softmax** algorithm (Milakov & Gimelshein, 2018) fuses steps 1 and 2 into a single pass. The key insight is that when a new maximum $m'$ is found, all previously accumulated exponentials can be rescaled:
+
+$$\sum_{i} e^{x_i - m} = e^{m' - m} \cdot \sum_{i} e^{x_i - m'}$$
+
+This allows tracking the running max and running sum simultaneously:
 
 ```
 // Single pass: track running max and running sum simultaneously

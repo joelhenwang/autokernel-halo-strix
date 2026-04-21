@@ -145,7 +145,7 @@ The XOR pattern halves the communication distance each step, completing a full w
 
 ### The Formula
 
-Given an input vector `x` of dimension `D` and a learned weight vector `w` of dimension `D`:
+Given an input vector $x$ of dimension $D$ and a learned weight vector $w$ of dimension $D$:
 
 ```
 rms = sqrt( (1/D) * sum(x_i^2) + eps )
@@ -153,7 +153,11 @@ rms = sqrt( (1/D) * sum(x_i^2) + eps )
 output_i = (x_i / rms) * w_i
 ```
 
-Where `eps` (typically 1e-6) prevents division by zero.
+$$\text{rms} = \sqrt{\frac{1}{D} \sum_{i=1}^{D} x_i^2 + \epsilon}$$
+
+$$\text{output}_i = \frac{x_i}{\text{rms}} \cdot w_i$$
+
+Where $\epsilon$ (typically $10^{-6}$) prevents division by zero.
 
 ### Two Phases
 
@@ -176,6 +180,8 @@ FLOPs: D multiplies + D additions (Phase 1) + D multiplies + D multiplies (Phase
 
 Arithmetic intensity = 4D FLOPS / 8D bytes = 0.5 FLOPS/byte
 ```
+
+The arithmetic intensity is $\frac{4D}{8D} = 0.5$ FLOPS/byte.
 
 The ridge point for the 4060 Ti is 611 FLOPS/byte. At 0.5 FLOPS/byte, RMSNorm is approximately **1200x below the compute ceiling**. It is purely limited by memory bandwidth. Any speedup must come from reducing memory traffic (fewer reads/writes, vectorized loads, better caching).
 
