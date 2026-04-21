@@ -1,6 +1,6 @@
 # GPU Kernel Optimization & LLM Training from Scratch
 
-A 14-part hands-on tutorial series for building a complete LLM training system on consumer hardware.
+A 15-part hands-on tutorial series for building a complete LLM training system on consumer hardware.
 
 **Target Hardware:** Linux, Ryzen 9 (Zen 3), RTX 4060 Ti (16GB VRAM), CUDA
 **Prerequisites:** Python, basic PyTorch, git. No ML/DL theory required — we teach it.
@@ -26,6 +26,7 @@ A 14-part hands-on tutorial series for building a complete LLM training system o
 | 12 | [SFT & Alignment](12_sft_and_alignment.md) | Chat model with tool-use | SFT, DPO, ChatML |
 | 13 | [Inference & Deployment](13_inference_and_deployment.md) | Fast generation server | KV-cache, quantization |
 | 14 | [Putting It All Together](14_putting_it_together.md) | Full pipeline: data → train → eval → deploy | Integration |
+| 15 | [Agent Automation](15_agent_automation.md) | Autonomous experiment pipeline | Orchestration, guardrails, LLM agents |
 
 ---
 
@@ -59,6 +60,7 @@ A 14-part hands-on tutorial series for building a complete LLM training system o
 | 12 | 6 hours | Intermediate |
 | 13 | 6 hours | Intermediate |
 | 14 | 4 hours | Integration |
-| **Total** | **~77 hours** | |
+| 15 | 6 hours | Advanced |
+| **Total** | **~83 hours** | |
 
-Roughly 2-3 weeks at 4-5 hours/day, or 5-6 weeks at 2 hours/day.
+Roughly 3 weeks at 4-5 hours/day, or 6 weeks at 2 hours/day.
