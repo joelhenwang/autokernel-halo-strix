@@ -69,7 +69,7 @@ def run_smoke_test(
 
     # Setup compile
     if compile:
-        model = torch.compile(model, mode="reduce-overhead")
+        model = torch.compile(model, mode="default")
 
     # Loss function
     ce_loss = nn.CrossEntropyLoss()

@@ -2,6 +2,10 @@
 
 import os
 import time
+
+# Persist torch.compile cache across runs (10+ min compile → instant on reuse)
+os.environ.setdefault("TORCHINDUCTOR_FX_GRAPH_CACHE", "1")
+os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.expanduser("~/.cache/torchinductor"))
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
@@ -150,11 +154,10 @@ def train(
             compile_layers=compile,
         )
     elif compile:
-        # Use mode="default" when autokernel patterns are active — CUDAGraphs in
-        # "reduce-overhead" conflict with HIP kernel replacement modules.
-        # Benchmarked: "default" vs "reduce-overhead" gives identical throughput
-        # for SSM models (8258 vs 8278 tok/s) because chunked scan dominates.
-        compile_mode = "default" if optimize_kernels else "reduce-overhead"
+        # CUDAGraphs ("reduce-overhead") conflict with autokernel HIP modules
+        # and with tied embeddings (gradient overwrite). "default" gives identical
+        # throughput (8258 vs 8278 tok/s benchmarked).
+        compile_mode = "default"
         print(f"Compiling model with torch.compile ({compile_mode})...")
         model = torch.compile(model, mode=compile_mode)
 
@@ -263,6 +266,11 @@ def train(
                 input_ids, targets = batch
                 input_ids = input_ids.to(device)
                 targets = targets.to(device)
+
+                try:
+                    torch.compiler.cudagraph_mark_step_begin()
+                except (AttributeError, RuntimeError):
+                    pass
 
                 with torch.amp.autocast("cuda", dtype=amp_dtype):
                     if streamer is not None:
