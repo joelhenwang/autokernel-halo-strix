@@ -898,6 +898,35 @@ Training funnel: BabyLM → GPT-training-small → WikiText-103 → Common Crawl
 
 ---
 
+## CLIMB Data Mixture Pipeline (2026-04-21)
+
+**Papers:** CLIMB (NVIDIA, 2504.13161) + Self-Improving Pretraining (Meta, 2601.21343)
+
+Modular 6-phase pipeline: sample → embed → cluster → proxy search → quality score → assemble. Model-agnostic proxy via `load_model_from_file()`. Output is pre-mixed `.bin` compatible with existing `BabyLMDataset`.
+
+### Test Run (10K FineWeb-Edu, 8 clusters, ChimeraHalo 94M proxy)
+
+| Round | Trials | Best val_loss | Method |
+|-------|--------|---------------|--------|
+| 1 (random) | 8 | 10.47 | Dirichlet sampling |
+| **2 (surrogate)** | **4** | **9.86** | **LightGBM-guided** |
+
+Surrogate-guided round improved val_loss by **6.2%** over best random trial. Educational content (39.1%) and general science (20.8%) dominate optimal mixture. Academic journals nearly zeroed (0.7%).
+
+### Compute Budget
+
+| Phase | Time | Cost | Hardware |
+|-------|------|------|----------|
+| Phases 0-2 (sample/embed/cluster) | ~50 min | free | CPU |
+| Phase 3 (proxy search, 12 trials) | ~40 min | free | GPU |
+| Phase 4 (quality scoring) | ~15 min | ~$1.30 | CPU + API |
+| Phase 5 (assemble) | ~5 min | free | CPU |
+
+**Scripts:** `scripts/datamix/phase0-5`
+**Docs:** `knowledge/training/climb_data_mixture.md`
+
+---
+
 ## Prior Training Baselines (from mad_llm_scientist)
 
 Training experiments conducted before halo_training/ was built, using `~/Desktop/ai_lab/mad_llm_scientist/` on the remote machine. These provide reference points for evaluating new architectures.

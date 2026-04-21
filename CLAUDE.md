@@ -63,6 +63,7 @@ python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --
 - `halo_training/` — Composable training stack (Mode A/B), CLI: `python -m halo_training`
 - `autokernel/` — Library API (`autokernel.optimize()`) with pattern matching + kernel replacement
 - `knowledge/` — Organized reference docs (hardware/, kernels/, training/, architectures/)
+- `scripts/datamix/` — CLIMB + Self-Improving data mixture pipeline (6 phases: sample → embed → cluster → proxy search → score → assemble)
 - `scripts/nvidia/` — Standalone NVIDIA GPU training (no ROCm deps): `train_nvidia.py` + `argus_prime_standalone.py`
 
 ## Key Constraints (always remember)

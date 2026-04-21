@@ -33,6 +33,7 @@ tags: [%index, %navigation, %knowledge-graph]
 - [RCCL Build for gfx1151](knowledge/training/rccl_build_gfx1151_guide.md) — source build with patches for gfx1151
 - [Muon Optimizer Results](knowledge/training/muon_optimizer_results.md) — 2x token efficiency, 50% less optimizer memory
 - [ARGUS-PRIME Results](knowledge/training/argus_prime_results.md) — 18K tok/s single, 35K DDP, WikiText-103 CPT, Common Crawl
+- [CLIMB Data Mixture Pipeline](knowledge/training/climb_data_mixture.md) — CLIMB + Self-Improving: cluster, proxy search, quality filter, assemble
 - [Training Anti-patterns & Patterns](knowledge/training/training_antipatterns.md) — optimization patterns, anti-patterns, rocBLAS, ROCm dev reference
 
 ## Architectures
