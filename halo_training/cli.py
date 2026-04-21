@@ -187,6 +187,11 @@ def main():
         )
         sys.exit(0 if result["passed"] else 1)
 
+    # Mixture dataset support: --dataset mixture:path/to/config.json
+    if dataset_obj is None and args.dataset.startswith("mixture:"):
+        from halo_training.mixture_data import MixtureDataset
+        dataset_obj = MixtureDataset(args.dataset[len("mixture:"):], block_size=args.block_size)
+
     from halo_training.trainer import train
     stats = train(
         model,
