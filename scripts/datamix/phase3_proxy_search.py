@@ -88,7 +88,10 @@ def build_mixed_dataset(cluster_info: dict, weights: np.ndarray,
         return None
 
     combined = np.concatenate(all_tokens).astype(np.uint16)
-    np.random.shuffle(combined.reshape(-1, min(block_size, len(combined) // 10 or 1))[:-1])
+    n_chunks = len(combined) // (block_size + 1)
+    if n_chunks < 2:
+        return None
+    combined = combined[:n_chunks * (block_size + 1)]
 
     tmp = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
     combined.tofile(tmp.name)
