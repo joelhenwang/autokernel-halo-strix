@@ -1,5 +1,12 @@
 # Part 01: Environment & Hardware Validation
 
+## What You Will Learn
+- How to set up a Python + CUDA development environment from scratch
+- Your GPU's memory hierarchy and why it determines which optimizations work
+- How to measure real bandwidth and compute throughput (not just read spec sheets)
+- The roofline model: how to predict whether an operation is memory-bound or compute-bound
+- Memory budget planning: how to calculate if a model fits in your VRAM before training
+
 ## Goal
 Set up a complete development environment and understand your hardware's capabilities and limits before writing a single line of training code.
 
@@ -48,15 +55,29 @@ nvcc --version
 ## 1.2 Know Your GPU
 
 ### Memory Hierarchy
+
+Note: The RTX 4060 Ti comes in different variants. The 16GB model uses the AD106 die. Your exact SM count may be 32 or 34 depending on the SKU — run `nvidia-smi -q | grep "Multiprocessor"` to check yours. The numbers below use 34 SMs; adjust if yours differs.
+
 ```
-RTX 4060 Ti (AD106, Ada Lovelace)
-├── 16 GB GDDR6 @ 288 GB/s          ← Your VRAM
-├── 32 MB L2 cache                   ← Shared across all SMs
-├── 128 KB L1 / Shared Memory per SM ← Fast local storage
-├── 34 SMs × 128 CUDA cores = 4352  ← Scalar compute
-├── 34 SMs × 4 Tensor Cores = 136   ← Matrix multiply (FP16/INT8)
-└── Warp size: 32 threads            ← Minimum execution unit
+RTX 4060 Ti 16GB (AD106, Ada Lovelace)
+├── 16 GB GDDR6 @ 288 GB/s          ← Your VRAM (main bottleneck for LLM training)
+├── 32 MB L2 cache                   ← Shared across all SMs (huge — helps repeated reads)
+├── 128 KB L1 / Shared Memory per SM ← Fast local storage (you control the split)
+├── 34 SMs × 128 CUDA cores = 4352  ← Scalar compute (FP32)
+├── 34 SMs × 4 Tensor Cores = 136   ← Matrix multiply hardware (FP16/INT8/INT4)
+└── Warp size: 32 threads            ← Minimum execution unit (ALL 32 execute same instruction)
 ```
+
+Think of it as a hierarchy of speed vs size:
+```
+Registers     (~256 KB total)  ← Fastest, per-thread, gone when thread finishes
+Shared Memory (~128 KB per SM) ← Fast, shared within a block, you manage it manually
+L1 Cache      (part of above)  ← Automatic, per-SM
+L2 Cache      (32 MB)          ← Automatic, shared across all SMs
+VRAM          (16 GB)          ← Slowest, but largest
+```
+
+Every CUDA kernel optimization is about moving data into the faster levels of this hierarchy and keeping it there as long as possible.
 
 ### Key Numbers to Remember
 | Metric | Value | Why It Matters |
@@ -232,6 +253,21 @@ mkdir -p models kernels training autokernel scripts benchmarks checkpoints datas
 
 ---
 
+## Exercises
+
+1. **Bandwidth at different sizes.** Run `measure_bandwidth()` with sizes 1 MB, 16 MB, 64 MB, 256 MB, 1024 MB. Plot bandwidth vs size. At what size does bandwidth plateau? (This tells you the minimum transfer size needed to saturate the bus.)
+
+2. **Tensor Core efficiency.** Run `measure_tflops()` with matrix sizes (512, 512, 512), (1024, 1024, 1024), (4096, 4096, 4096). At what size do Tensor Cores reach >50% efficiency? (This tells you the minimum matmul size worth optimizing.)
+
+3. **Memory arithmetic.** Calculate by hand: if you train a 200M parameter model with AdamW in fp16, using batch_size=16 and block_size=1024, how much VRAM do you need? (Model weights + optimizer + gradients + estimated activations.) Check your answer against `torch.cuda.max_memory_allocated()` after one training step.
+
+4. **Roofline classification.** For each operation below, calculate its arithmetic intensity (FLOPS per byte of data moved) and classify it as memory-bound or compute-bound on your 4060 Ti (ridge point = 611 FLOPS/byte):
+   - RMSNorm on a (8, 1024, 768) tensor in fp16
+   - Matrix multiply (8*1024, 768) @ (768, 2048) in fp16
+   - Element-wise SiLU on a (8, 1024, 2048) tensor in fp16
+
+---
+
 ## Checkpoint
 
 Before moving to Part 02, verify:
@@ -241,7 +277,12 @@ Before moving to Part 02, verify:
 - [ ] Measured FP16 TFLOPS > 80
 - [ ] Memory budget calculated for your target model size
 - [ ] Project directory structure created
+- [ ] Exercises 1-4 completed with written answers
 
 ---
+
+## What Comes Next
+
+You now know your hardware's limits: how fast it can move data (bandwidth), how fast it can compute (TFLOPS), and how much it can hold (16 GB). In Part 02, you will build a complete training stack (model + data + training loop) and run it on this hardware. The performance numbers you measured here become your reference — when Part 03 profiles the training loop, you will know exactly whether each operation is hitting the hardware ceiling or leaving performance on the table.
 
 **Next: [Part 02 — Training Stack: GPT-2 on BabyLM](02_training_stack.md)**

@@ -1221,4 +1221,5 @@ print("Part 05 complete. Ready for Part 06: Autokernel.")
 
 ---
 
-**Next: [Part 06: Autokernel -- Pattern Matching & Kernel Replacement](06_autokernel.md)**
+**Previous: [Part 04 -- Your First CUDA Kernel: RMSNorm](04_first_cuda_kernel.md)**
+**Next: [Part 06 -- Autokernel: Pattern Matching & Kernel Replacement](06_autokernel.md)**

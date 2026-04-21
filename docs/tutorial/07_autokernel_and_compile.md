@@ -923,4 +923,5 @@ print("Ready for Part 08: Data Pipeline.")
 
 ---
 
-**Next: [Part 08: Data Pipeline -- Mixing, Filtering, and Scaling](08_data_pipeline.md)**
+**Previous: [Part 06 -- Autokernel: Pattern Matching & Kernel Replacement](06_autokernel.md)**
+**Next: [Part 08 -- Data Pipeline: Mixing, Filtering, and Scaling](08_data_pipeline.md)**

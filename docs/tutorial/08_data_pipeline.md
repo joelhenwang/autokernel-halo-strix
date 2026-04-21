@@ -986,4 +986,5 @@ Before moving to Part 09, verify:
 
 ---
 
-**Next: [Part 09 — Train-Evaluate-Benchmark Framework](09_train_eval_benchmark.md)**
+**Previous: [Part 07 -- Autokernel + torch.compile: The Custom Ops Bridge](07_autokernel_and_compile.md)**
+**Next: [Part 09 -- Train-Evaluate-Benchmark Framework](09_train_eval_benchmark.md)**

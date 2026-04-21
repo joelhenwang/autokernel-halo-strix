@@ -1224,3 +1224,8 @@ Before moving to Part 13, verify:
 - [ ] You can generate text interactively and judge quality manually
 
 **Expected time:** 6 hours. The most time-consuming part is generating preference data and debugging tokenization edge cases. If your model produces gibberish after SFT, the first thing to check is your loss mask -- make sure assistant tokens are NOT being masked.
+
+---
+
+**Previous: [Part 11 -- Architecture Design: From Papers to Code](11_architecture_design.md)**
+**Next: [Part 13 -- Inference & Deployment](13_inference_and_deployment.md)**

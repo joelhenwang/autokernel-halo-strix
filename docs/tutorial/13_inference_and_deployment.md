@@ -828,3 +828,8 @@ Before moving to Part 14, verify:
 - [ ] TTFT < 50ms at context=512
 
 **Expected time:** 6 hours. The KV-cache implementation is the hardest part -- getting the position indexing right with RoPE requires careful attention to detail. If your KV-cache generation produces garbage, the first thing to check is that RoPE frequencies are applied to the correct positions (not always starting from 0).
+
+---
+
+**Previous: [Part 12 -- SFT & Alignment: From Base Model to Chat Model](12_sft_and_alignment.md)**
+**Next: [Part 14 -- Putting It All Together](14_putting_it_together.md)**

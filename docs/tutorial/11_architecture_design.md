@@ -1017,3 +1017,8 @@ from models.chimera_halo import (
     XSAGQABlock,            # GQA + XSA + momentum
 )
 ```
+
+---
+
+**Previous: [Part 10 -- Math Foundations for Reading Papers](10_math_foundations.md)**
+**Next: [Part 12 -- SFT & Alignment: From Base Model to Chat Model](12_sft_and_alignment.md)**

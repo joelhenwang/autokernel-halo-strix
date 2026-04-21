@@ -1706,4 +1706,5 @@ x[t] = Āx[t-1]    discrete-time SSM                     (section 10.4)
 
 ---
 
-**Next: [Part 11 — Architecture Design: From Papers to Code](11_architecture_design.md)**
+**Previous: [Part 09 -- Train-Evaluate-Benchmark Framework](09_train_eval_benchmark.md)**
+**Next: [Part 11 -- Architecture Design: From Papers to Code](11_architecture_design.md)**

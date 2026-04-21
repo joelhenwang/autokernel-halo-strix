@@ -1366,4 +1366,5 @@ Before moving to Part 10, verify:
 
 ---
 
-**Next: [Part 10 — Math Foundations for Reading Papers](10_math_foundations.md)**
+**Previous: [Part 08 -- Data Pipeline: Mixing, Filtering, and Scaling](08_data_pipeline.md)**
+**Next: [Part 10 -- Math Foundations for Reading Papers](10_math_foundations.md)**

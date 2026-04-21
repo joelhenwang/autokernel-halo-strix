@@ -930,4 +930,5 @@ print("Part 06 complete. Ready for Part 07: Autokernel + torch.compile.")
 
 ---
 
-**Next: [Part 07: Autokernel + torch.compile -- The Custom Ops Bridge](07_autokernel_and_compile.md)**
+**Previous: [Part 05 -- Kernel Progression: Fused Ops and Benchmarking](05_kernel_progression.md)**
+**Next: [Part 07 -- Autokernel + torch.compile: The Custom Ops Bridge](07_autokernel_and_compile.md)**
