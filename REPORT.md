@@ -898,6 +898,39 @@ Training funnel: BabyLM → GPT-training-small → WikiText-103 → Common Crawl
 
 ---
 
+## FENRIR-HALO (2026-04-21)
+
+**Architecture:** Clean-sheet Parcae-looped hybrid. Successor to JORMUNGANDR-HALO and CHIMERA-HALO using only proven mechanisms. 10 unique shared layers (8 ShortConv + 2 GQA/XSA), no layer repeat — Parcae loop alone provides depth (30 effective layers at mean=3). Uniform d=640, factorized embeddings (rank=256), XSA on all attention, DepthMemoryCache. Designed for 2-machine DDP training on 12B tokens.
+
+| Metric | Value |
+|--------|-------|
+| Unique params | 80.8M |
+| Parcae-equivalent (mean=3) | ~160M |
+| Effective depth (3 iter mean) | 30 layers |
+| Conv:Attention ratio | 80:20 (8:2 per block) |
+| d_model | 640 (5x128, Tensile-aligned) |
+| GQA | 10 heads / 2 KV (5:1 ratio) |
+| FFN inner | 2304 (3.6x d) |
+| Factorized embed rank | 256 |
+
+**Targets:**
+- Beat Portimbria-150M: HellaSwag >30%, ARC-E >36%, PIQA >58%
+- Stretch: compete with SmolLM2-135M (HellaSwag >35%, ARC-E >42%)
+
+**Key design choices:**
+- No layer repeat (removes CHIMERA-HALO's n_repeat=2). Parcae loop × 10 layers = sufficient depth.
+- d=640 balances throughput (~28-32K tok/s DDP) and capacity
+- Depth-scaled init: output projections scaled by 1/sqrt(2*n_layers)
+- FenrirHaloMini uses full vocab (50257) — lesson from ChimeraHaloMini real-data crash
+
+**Variants:** FenrirHalo (default), FenrirHaloDeep (5 iter), FenrirHaloBare (ablation), FenrirHaloNoLoop (ablation), FenrirHaloMini (smoke/proxy)
+
+**Status:** Implemented, verified forward+backward pass (80.8M params, no NaN grads). Awaiting DDP training.
+
+**Design doc:** `docs/superpowers/specs/2026-04-21-fenrir-halo-design.md`
+
+---
+
 ## CLIMB Data Mixture Pipeline (2026-04-21)
 
 **Papers:** CLIMB (NVIDIA, 2504.13161) + Self-Improving Pretraining (Meta, 2601.21343)

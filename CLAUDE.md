@@ -59,7 +59,7 @@ python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --
 ## Key Directories
 
 - `kernels/hip/` — 20+ HIP kernel types + `_compile.py` (compilation) + `_torch_ops.py` (torch.library custom ops)
-- `models/` — Self-contained model definitions (LLaMA, GPT-2, AMADEUS, TEMPEST, ARGUS-PRIME, JORMUNGANDR-HALO, CHIMERA-HALO, etc.)
+- `models/` — Self-contained model definitions (LLaMA, GPT-2, AMADEUS, TEMPEST, ARGUS-PRIME, JORMUNGANDR-HALO, CHIMERA-HALO, FENRIR-HALO, etc.)
 - `halo_training/` — Composable training stack (Mode A/B), CLI: `python -m halo_training`
 - `autokernel/` — Library API (`autokernel.optimize()`) with pattern matching + kernel replacement
 - `knowledge/` — Organized reference docs (hardware/, kernels/, training/, architectures/)

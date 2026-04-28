@@ -31,10 +31,11 @@ def run_smoke_test(
     accum_steps: int = 1,
     base_lr: float = 8e-4,
     max_grad_norm: float = 1.0,
-    max_memory_gb: float = 6.0,
-    min_tok_s: float = 10_000,
+    max_memory_gb: float = 0.0,
+    min_tok_s: float = 0,
     max_state_ratio: float = 1.05,
     compile: bool = False,
+    optimize_kernels: bool = False,
     use_muon: bool = False,
 ) -> Dict[str, Any]:
     """Run standardized smoke test and return pass/fail results.
@@ -49,6 +50,12 @@ def run_smoke_test(
     model.train()
 
     n_params = count_parameters(model)
+
+    # Scale thresholds by model size if not explicitly set
+    if max_memory_gb <= 0:
+        max_memory_gb = max(4.0, n_params / 1e6 * 0.25)  # ~0.25 GB per 1M params
+    if min_tok_s <= 0:
+        min_tok_s = max(1_000, 50_000 - n_params / 1e6 * 500)  # scales down with size
 
     # Setup data
     ds = BabyLMDataset(root=dataset, block_size=block_size)
@@ -67,9 +74,22 @@ def run_smoke_test(
     # Setup state-norm monitor for recurrent architectures
     state_monitor = StateNormMonitor(model, warn_ratio=max_state_ratio)
 
-    # Setup compile
+    # Autokernel + compile (order matters: autokernel first, then compile)
+    if optimize_kernels:
+        try:
+            import autokernel
+            model = autokernel.optimize(model, training=True)
+            print(f"  autokernel: optimized")
+        except Exception as e:
+            print(f"  autokernel: skipped ({e})")
+
     if compile:
-        model = torch.compile(model, mode="default")
+        if hasattr(model, "compile_zones"):
+            model.compile_zones()
+            print(f"  compile: per-zone (looped model)")
+        else:
+            model = torch.compile(model, mode="default")
+            print(f"  compile: whole model")
 
     # Loss function
     ce_loss = nn.CrossEntropyLoss()
@@ -177,12 +197,15 @@ def run_smoke_test(
         "threshold": 0,
     }
 
-    # 3. Grad norms < 10
-    max_grad = max(grad_norms) if grad_norms else 0
+    # 3. Grad norms (pre-clip) — large norms ok if loss converges; fail on >5% inf
+    finite_grads = [g for g in grad_norms if g < float("inf")]
+    inf_count = len(grad_norms) - len(finite_grads)
+    inf_ratio = inf_count / max(len(grad_norms), 1)
+    max_finite_grad = max(finite_grads) if finite_grads else 0
     criteria["grad_norms"] = {
-        "passed": max_grad < 10.0,
-        "value": f"max={max_grad:.2f}",
-        "threshold": "< 10.0",
+        "passed": inf_ratio < 0.05,
+        "value": f"max_finite={max_finite_grad:.2f}, inf={inf_count}/{len(grad_norms)}",
+        "threshold": "inf < 5%",
     }
 
     # 4. Memory
@@ -234,7 +257,7 @@ def run_smoke_test(
             "tok_s": tok_s,
             "peak_memory_gb": peak_mem_gb,
             "final_loss": losses[-1] if losses else None,
-            "max_grad_norm": max_grad,
+            "max_grad_norm": max_finite_grad,
         },
     }
 

@@ -271,6 +271,141 @@ def compute_bpb(ce_loss: float) -> float:
 
 
 # ===========================================================================
+# Stability Guard: auto-recovery from NaN/loss spikes
+# ===========================================================================
+
+class StabilityGuard:
+    """Detects training instability and auto-recovers from last checkpoint.
+
+    Three detection mechanisms:
+    1. NaN loss — immediate rollback
+    2. Loss spike — loss > spike_factor * EMA triggers rollback
+    3. Parameter NaN — periodic weight scan catches silent corruption
+
+    On trigger: reload last checkpoint, reduce LR by decay_factor, continue.
+    """
+
+    def __init__(
+        self,
+        checkpoint_dir: str,
+        max_rollbacks: int = 5,
+        spike_factor: float = 2.0,
+        lr_decay_on_rollback: float = 0.5,
+        ema_alpha: float = 0.99,
+        param_check_interval: int = 500,
+        rank: int = 0,
+    ):
+        self.checkpoint_dir = checkpoint_dir
+        self.max_rollbacks = max_rollbacks
+        self.spike_factor = spike_factor
+        self.lr_decay_on_rollback = lr_decay_on_rollback
+        self.ema_alpha = ema_alpha
+        self.param_check_interval = param_check_interval
+        self.rank = rank
+
+        self.loss_ema = None
+        self.rollback_count = 0
+        self.last_good_step = 0
+
+    def _find_latest_checkpoint(self, before_step: int = None):
+        """Find the most recent valid checkpoint."""
+        ckpt_dir = self.checkpoint_dir
+        if not os.path.exists(ckpt_dir):
+            return None
+        checkpoints = []
+        for f in os.listdir(ckpt_dir):
+            if f.startswith("step_") and f.endswith(".pt"):
+                step = int(f.replace("step_", "").replace(".pt", ""))
+                if before_step is None or step < before_step:
+                    checkpoints.append((step, os.path.join(ckpt_dir, f)))
+        if not checkpoints:
+            return None
+        checkpoints.sort(key=lambda x: x[0], reverse=True)
+        return checkpoints[0]  # (step, path)
+
+    def check_loss(self, loss_val: float, step: int) -> bool:
+        """Returns True if loss is healthy, False if rollback needed."""
+        if math.isnan(loss_val) or math.isinf(loss_val):
+            if self.rank == 0:
+                print(f"  [StabilityGuard] NaN/Inf loss at step {step}")
+            return False
+
+        if self.loss_ema is None:
+            self.loss_ema = loss_val
+            return True
+
+        self.loss_ema = self.ema_alpha * self.loss_ema + (1 - self.ema_alpha) * loss_val
+
+        if loss_val > self.spike_factor * self.loss_ema:
+            if self.rank == 0:
+                print(f"  [StabilityGuard] Loss spike at step {step}: "
+                      f"{loss_val:.4f} > {self.spike_factor}x EMA {self.loss_ema:.4f}")
+            return False
+
+        self.last_good_step = step
+        return True
+
+    def check_params(self, model: nn.Module, step: int) -> bool:
+        """Periodic parameter NaN check. Returns True if healthy."""
+        if step % self.param_check_interval != 0:
+            return True
+        for name, p in model.named_parameters():
+            if torch.isnan(p.data).any() or torch.isinf(p.data).any():
+                if self.rank == 0:
+                    print(f"  [StabilityGuard] NaN/Inf in param '{name}' at step {step}")
+                return False
+        return True
+
+    def rollback(self, model, optimizer, device):
+        """Reload last good checkpoint and reduce LR. Returns (step, success)."""
+        if self.rollback_count >= self.max_rollbacks:
+            if self.rank == 0:
+                print(f"  [StabilityGuard] Max rollbacks ({self.max_rollbacks}) reached, aborting")
+            return -1, False
+
+        latest = self._find_latest_checkpoint(before_step=None)
+        if latest is None:
+            if self.rank == 0:
+                print("  [StabilityGuard] No checkpoint found for rollback")
+            return -1, False
+
+        ckpt_step, ckpt_path = latest
+        if self.rank == 0:
+            print(f"  [StabilityGuard] Rolling back to step {ckpt_step} from {ckpt_path}")
+
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+
+        raw = model.module if hasattr(model, "module") else model
+        raw = raw._orig_mod if hasattr(raw, "_orig_mod") else raw
+        raw.load_state_dict(ckpt["model_state_dict"])
+
+        if "optimizer_state_dict" in ckpt:
+            try:
+                optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            except Exception:
+                if self.rank == 0:
+                    print("  [StabilityGuard] Could not restore optimizer, using fresh state")
+
+        # Reduce LR
+        decay = self.lr_decay_on_rollback
+        for pg in optimizer.param_groups:
+            old_lr = pg["lr"]
+            pg["lr"] = old_lr * decay
+            if self.rank == 0 and pg is optimizer.param_groups[0]:
+                print(f"  [StabilityGuard] LR reduced: {old_lr:.2e} -> {pg['lr']:.2e}")
+
+        self.rollback_count += 1
+        self.loss_ema = None  # reset EMA after rollback
+
+        if self.rank == 0:
+            print(f"  [StabilityGuard] Rollback #{self.rollback_count} complete, "
+                  f"resuming from step {ckpt_step}")
+
+        del ckpt
+        return ckpt_step, True
+
+
+# ===========================================================================
 # Manual Async Allreduce with fp16 Compression
 # ===========================================================================
 
@@ -409,10 +544,16 @@ def main():
 
     # torch.compile AFTER DDP
     if args.compile:
-        compile_mode = "default" if args.optimize_kernels else "reduce-overhead"
-        if rank == 0:
-            print(f"Compiling model ({compile_mode})...")
-        model = torch.compile(model, mode=compile_mode)
+        raw_for_compile = model.module if hasattr(model, "module") else model
+        if hasattr(raw_for_compile, "compile_zones"):
+            if rank == 0:
+                print("Compiling model (per-zone for looped model)...")
+            raw_for_compile.compile_zones()
+        else:
+            compile_mode = "default" if args.optimize_kernels else "reduce-overhead"
+            if rank == 0:
+                print(f"Compiling model ({compile_mode})...")
+            model = torch.compile(model, mode=compile_mode)
 
     # --- Data ---
     dataset = PreTokenizedDataset(args.dataset, block_size=args.block_size)
@@ -452,6 +593,16 @@ def main():
               f"block={args.block_size}, lr={args.lr}")
         print(f"Steps/epoch: {len(dataloader)}, optimizer steps: {total_steps}, epochs: {args.epochs}")
 
+    # --- Stability Guard ---
+    guard = StabilityGuard(
+        checkpoint_dir=args.checkpoint_dir or "checkpoints/ddp",
+        max_rollbacks=5,
+        spike_factor=2.0,
+        lr_decay_on_rollback=0.5,
+        param_check_interval=500,
+        rank=rank,
+    )
+
     # --- Training loop ---
     global_step = 0
     total_tokens = 0
@@ -466,8 +617,11 @@ def main():
     # Async state: pending allreduce handles from previous optimizer step
     pending_handles = None
 
+    _rollback_restart = False
     try:
         for epoch in range(args.epochs):
+            if _rollback_restart:
+                _rollback_restart = False
             sampler.set_epoch(epoch)
             for batch_idx, (input_ids, targets) in enumerate(dataloader):
                 if deadline and time.time() > deadline:
@@ -492,8 +646,26 @@ def main():
 
                     scaler.scale(loss).backward()
 
+                loss_val = loss.item() * args.accum_steps
                 total_tokens += input_ids.numel()
                 step_loss += loss.item()
+
+                # NaN loss check (per-microstep)
+                if math.isnan(loss_val) or math.isinf(loss_val):
+                    optimizer.zero_grad(set_to_none=True)
+                    if pending_handles is not None:
+                        for h in pending_handles:
+                            h.wait()
+                        pending_handles = None
+                    rollback_step, ok = guard.rollback(model, optimizer, device)
+                    if not ok:
+                        raise RuntimeError("StabilityGuard: unrecoverable NaN")
+                    global_step = rollback_step
+                    step_loss = 0.0
+                    running_loss = 0.0
+                    _rollback_restart = True
+                    dist.barrier()
+                    break
 
                 if not is_last_microstep:
                     continue
@@ -546,8 +718,28 @@ def main():
                         save_checkpoint(model, optimizer, global_step,
                                         args.checkpoint_dir, total_tokens * world_size)
 
-                # 2. Record loss for THIS step (average across microsteps)
-                running_loss += step_loss  # step_loss = sum of (loss / accum) = true avg
+                # 2. Record loss for THIS step + stability checks
+                running_loss += step_loss
+                if not guard.check_loss(step_loss, global_step) or \
+                   not guard.check_params(model, global_step):
+                    optimizer.zero_grad(set_to_none=True)
+                    if pending_handles is not None:
+                        for h in pending_handles:
+                            h.wait()
+                        pending_handles = None
+                    # Save emergency checkpoint before rollback
+                    if rank == 0 and args.checkpoint_dir:
+                        save_checkpoint(model, optimizer, global_step,
+                                        args.checkpoint_dir, total_tokens * world_size)
+                    rollback_step, ok = guard.rollback(model, optimizer, device)
+                    if not ok:
+                        raise RuntimeError("StabilityGuard: unrecoverable instability")
+                    global_step = rollback_step
+                    step_loss = 0.0
+                    running_loss = 0.0
+                    _rollback_restart = True
+                    dist.barrier()
+                    break
                 step_loss = 0.0
 
                 # 3. Launch allreduce for THIS step's gradients
@@ -570,6 +762,8 @@ def main():
                     pending_handles = None
 
             else:
+                continue
+            if _rollback_restart:
                 continue
             break
 

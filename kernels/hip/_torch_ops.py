@@ -37,6 +37,17 @@ def _use_hip_backward():
     return True
 
 
+def disable_hip_backward():
+    """Disable HIP backward kernels globally. Call before compile_zones().
+
+    When using torch.compile with per-zone compilation, HIP backward kernels
+    can crash during Inductor graph capture. Disabling them lets Inductor
+    fuse the PyTorch fallback backward ops instead (measured ~3% faster).
+    """
+    global _USE_BWD_HIP
+    _USE_BWD_HIP = False
+
+
 # ---------------------------------------------------------------------------
 # RMSNorm
 # forward: y = x * weight / sqrt(mean(x^2) + eps)

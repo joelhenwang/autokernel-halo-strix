@@ -1,23 +1,17 @@
 """
-CHIMERA-HALO: Unified Looped Hybrid with Factorized Embeddings.
+FENRIR-HALO: Clean-Sheet Parcae-Looped Hybrid for Strix Halo DDP.
 
-Combines insights from 5 papers:
-  - LFM2: 75:25 conv:attention hybrid ratio, hardware-optimized
-  - Parcae: Stable looping via spectral constraint rho(A)<1, scaling laws
-  - XSA: Exclusive Self Attention (zero-param quality boost)
-  - Nandi: Factorized embeddings + layer sharing for parameter efficiency
-  - Attention-to-Mamba: Identity initialization for new components
+Architecture: FactorizedEmbed -> Prelude GQA -> [10-layer Shared Block, Parcae loop] -> Coda GQA -> FactorizedLMHead
+  - 10 unique shared layers (8 ShortConv + 2 GQA/XSA), NO repeat
+  - Parcae loop with Poisson depth sampling (mean=3) = 30 effective layers
+  - ~80M unique params, ~160M Parcae-equivalent
+  - Proven mechanisms only: XSA, DepthMemoryCache, factorized embeddings
 
-Architecture: FactorizedEmbed → Prelude GQA → [Shared Block x2 repeat, Parcae loop] → Coda GQA → FactorizedLMHead
-  - 8 unique shared layers (6 ShortConv + 2 GQA), repeated 2x = 16 effective
-  - Parcae loop with Poisson depth sampling (mean=3) = 48 effective layers
-  - ~94M unique params, ~158M effective
-
-Baselines: SmolLM2-135M (HellaSwag 42.1), Nandi-150M (avg 25.63)
+Targets: Beat Portimbria-150M, compete with SmolLM2-135M on 12B tokens (2-machine DDP).
 
 Usage:
-    python -m halo_training --model models/chimera_halo.py --class-name ChimeraHaloMini --smoke
-    python -m halo_training --model models/chimera_halo.py --class-name ChimeraHalo --dataset babylm --compile --optimize-kernels --muon
+    python -m halo_training --model models/fenrir_halo.py --class-name FenrirHaloMini --smoke
+    python -m halo_training --model models/fenrir_halo.py --class-name FenrirHalo --dataset babylm --compile --optimize-kernels --muon
 """
 
 import math
@@ -30,6 +24,7 @@ import torch.nn.functional as F
 from models.amadeus import RMSNorm, SwiGLU, GatedConv
 from models.argus import precompute_freqs_cis, apply_rotary_emb
 from models.argus_prime import Attention, ShortConvBlock
+from models.chimera_halo import FactorizedEmbedding, FactorizedLMHead
 from models.griffin_halo import SimpleParcaeInjection
 from models.jormungandr_halo import DepthMemoryCache, CodaAttention
 
@@ -38,42 +33,6 @@ try:
     _HAS_HYBRID_ATTN = True
 except ImportError:
     _HAS_HYBRID_ATTN = False
-
-
-# ---------------------------------------------------------------------------
-# Factorized Embedding (Nandi-style: vocab → rank → d_model)
-# ---------------------------------------------------------------------------
-
-class FactorizedEmbedding(nn.Module):
-    """Low-rank embedding: Embedding(V, R) → Linear(R, D).
-
-    Saves (V * D - V * R - R * D) params. With V=50260, R=256, D=768:
-    saves ~25M params vs standard Embedding(V, D).
-    """
-
-    def __init__(self, vocab_size: int, rank: int, d_model: int):
-        super().__init__()
-        self.embed = nn.Embedding(vocab_size, rank)
-        self.proj_up = nn.Linear(rank, d_model, bias=False)
-
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        return self.proj_up(self.embed(input_ids))
-
-
-class FactorizedLMHead(nn.Module):
-    """Factorized output: Linear(D, R) → matmul with embed table^T.
-
-    Shares the embedding table from FactorizedEmbedding (tied weights).
-    """
-
-    def __init__(self, d_model: int, rank: int, embed_table: nn.Embedding):
-        super().__init__()
-        self.proj_down = nn.Linear(d_model, rank, bias=False)
-        self.embed_table = embed_table
-
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        h_low = self.proj_down(h)
-        return F.linear(h_low, self.embed_table.weight)
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +47,7 @@ class XSAGQABlock(nn.Module):
     """
 
     def __init__(self, d_model: int, ffn_inner: int,
-                 n_heads: int = 12, n_kv_heads: int = 4,
+                 n_heads: int = 10, n_kv_heads: int = 2,
                  momentum_beta: float = 0.5, use_xsa: bool = True):
         super().__init__()
         self.pre_norm = RMSNorm(d_model)
@@ -120,28 +79,27 @@ class XSAGQABlock(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# CHIMERA-HALO Model
+# FENRIR-HALO Model
 # ---------------------------------------------------------------------------
 
-class ChimeraHaloBase(nn.Module):
-    """CHIMERA-HALO: Uniform d looped hybrid with factorized embeddings.
+class FenrirHaloBase(nn.Module):
+    """FENRIR-HALO: Clean-sheet Parcae loop with uniform d=640.
 
-    Prelude (1 GQA) → Parcae loop [Shared Block × n_repeat, iterated] → Coda (1 GQA) → output.
-    Shared block: 6 ShortConv + 2 GQA with XSA, repeated n_repeat times per iteration.
+    Prelude (1 GQA) -> Parcae loop [10-layer Shared Block, iterated] -> Coda (1 GQA) -> output.
+    Shared block: 8 ShortConv + 2 GQA with XSA. No layer repeat -- Parcae loop alone provides depth.
     """
 
     def __init__(
         self,
         vocab_size: int = 50257,
-        d_model: int = 768,
+        d_model: int = 640,
         embed_rank: int = 256,
-        n_shared_layers: int = 8,
-        gqa_positions: Tuple[int, ...] = (3, 6),
-        n_repeat: int = 2,
+        n_shared_layers: int = 10,
+        gqa_positions: Tuple[int, ...] = (4, 9),
         d_conv: int = 512,
-        ffn_inner: int = 2816,
-        n_heads: int = 12,
-        n_kv_heads: int = 4,
+        ffn_inner: int = 2304,
+        n_heads: int = 10,
+        n_kv_heads: int = 2,
         conv_kernel: int = 3,
         mean_recurrence: int = 3,
         backprop_depth: int = 2,
@@ -156,7 +114,6 @@ class ChimeraHaloBase(nn.Module):
     ):
         super().__init__()
         self.d_model = d_model
-        self.n_repeat = n_repeat
         self.mean_recurrence = mean_recurrence
         self.backprop_depth = backprop_depth
         self.curriculum_steps = curriculum_steps
@@ -191,7 +148,7 @@ class ChimeraHaloBase(nn.Module):
         # === PARCAE INJECTION ===
         self.injection = SimpleParcaeInjection(d_model)
 
-        # === SHARED BLOCK (8 unique layers, iterated n_repeat times) ===
+        # === SHARED BLOCK (10 unique layers, iterated via Parcae loop) ===
         self.shared_layers = nn.ModuleList()
         self._is_gqa = []
         for i in range(n_shared_layers):
@@ -207,7 +164,7 @@ class ChimeraHaloBase(nn.Module):
                 ))
                 self._is_gqa.append(False)
 
-        # Norm after each loop iteration (stabilizes shared-weight gradient flow)
+        # Norm after each loop iteration
         self.iter_norm = RMSNorm(d_model)
 
         # === DEPTH MEMORY CACHE ===
@@ -225,15 +182,21 @@ class ChimeraHaloBase(nn.Module):
         print(f"{self.__class__.__name__}: {n_params / 1e6:.1f}M parameters")
 
     def _init_weights(self):
+        n_layers = len(self.shared_layers)
         for name, p in self.named_parameters():
             if p.dim() >= 2:
                 nn.init.xavier_uniform_(p)
+                if "wo." in name or "w_down." in name or "out_proj." in name:
+                    with torch.no_grad():
+                        p.div_(math.sqrt(2 * n_layers))
+            elif p.dim() == 1 and "bias" in name:
+                nn.init.zeros_(p)
 
     def compile_zones(self):
         """Compile each layer independently for per-zone fusion.
 
         Call AFTER autokernel.optimize() and BEFORE training.
-        Python loops (repeat, Parcae) stay uncompiled; each layer = fused kernel.
+        Python loops (Parcae) stay uncompiled; each layer = fused kernel.
         """
         try:
             from kernels.hip._torch_ops import disable_hip_backward
@@ -264,13 +227,12 @@ class ChimeraHaloBase(nn.Module):
 
     def _run_shared_block(self, h: torch.Tensor, velocity: torch.Tensor,
                           freqs_cis: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Run all shared layers n_repeat times."""
-        for _repeat in range(self.n_repeat):
-            for layer, is_gqa in zip(self.shared_layers, self._is_gqa):
-                if is_gqa:
-                    h, velocity = layer(h, velocity, freqs_cis)
-                else:
-                    h, velocity = layer(h, velocity)
+        """Run all 10 shared layers once. No repeat -- Parcae loop provides depth."""
+        for layer, is_gqa in zip(self.shared_layers, self._is_gqa):
+            if is_gqa:
+                h, velocity = layer(h, velocity, freqs_cis)
+            else:
+                h, velocity = layer(h, velocity)
         return h, velocity
 
     def forward(self, input_ids: torch.Tensor, targets=None) -> torch.Tensor:
@@ -353,19 +315,19 @@ class ChimeraHaloBase(nn.Module):
 # Variant classes
 # ---------------------------------------------------------------------------
 
-class ChimeraHalo(ChimeraHaloBase):
+class FenrirHalo(FenrirHaloBase):
     """Default: mean_recurrence=3, XSA on, depth cache on."""
     def __init__(self, **kw):
         super().__init__(mean_recurrence=3, **kw)
 
 
-class ChimeraHaloDeep(ChimeraHaloBase):
+class FenrirHaloDeep(FenrirHaloBase):
     """Deep: 5 iterations for maximum effective capacity."""
     def __init__(self, **kw):
         super().__init__(mean_recurrence=5, backprop_depth=3, **kw)
 
 
-class ChimeraHaloBare(ChimeraHaloBase):
+class FenrirHaloBare(FenrirHaloBase):
     """Ablation: no XSA, no depth cache."""
     def __init__(self, **kw):
         super().__init__(
@@ -374,8 +336,8 @@ class ChimeraHaloBare(ChimeraHaloBase):
         )
 
 
-class ChimeraHaloNoLoop(ChimeraHaloBase):
-    """Ablation: no Parcae loop (single pass through shared block x2)."""
+class FenrirHaloNoLoop(FenrirHaloBase):
+    """Ablation: no Parcae loop (single pass through shared block)."""
     def __init__(self, **kw):
         super().__init__(
             mean_recurrence=1, backprop_depth=1,
@@ -383,16 +345,19 @@ class ChimeraHaloNoLoop(ChimeraHaloBase):
         )
 
 
-class ChimeraHaloMini(ChimeraHaloBase):
-    """Tiny config for smoke testing (~3M params)."""
+class FenrirHaloMini(FenrirHaloBase):
+    """Tiny config for smoke testing + CLIMB proxy search.
+
+    Uses full vocab (50257) -- NOT 1000. ChimeraHaloMini crash taught us
+    that mini variants must handle real data tokens.
+    """
     def __init__(self):
         super().__init__(
-            vocab_size=1000,
+            vocab_size=50257,
             d_model=128,
             embed_rank=32,
             n_shared_layers=4,
             gqa_positions=(1, 3),
-            n_repeat=2,
             d_conv=128,
             ffn_inner=256,
             n_heads=4,

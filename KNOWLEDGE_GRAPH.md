@@ -43,6 +43,7 @@ tags: [%index, %navigation, %knowledge-graph]
 - [Reliable Small LM Insights](knowledge/architectures/reliable_small_lm_insights.md) — 6 gaps in small model training, best practices
 - [PLE Ablation](knowledge/architectures/ple_ablation_results.md) — Path A wins quality, MatFormer free, B/AB no benefit
 - [CHIMERA-HALO Design](knowledge/architectures/chimera_halo_design.md) — factorized embeddings + Parcae loop + LFM2 hybrid + XSA, 94M/158M
+- [FENRIR-HALO Design](docs/superpowers/specs/2026-04-21-fenrir-halo-design.md) — clean-sheet Parcae loop, d=640, 80M/160M, DDP-ready, targets Portimbria-150M
 - [Architecture Plans](mad_llm_scientist/plans/) — 30+ hypothesis designs (AMADEUS, TEMPEST, ARGUS-PRIME, JORMUNGANDR, etc.)
 - [JORMUNGANDR Plan](mad_llm_scientist/plans/JORMUNGANDR.md) — Parcae-stable looped ShortConv, staged activation, Poisson depth
 - [COOKBOOK](mad_llm_scientist/COOKBOOK.md) — shared modules, implementation patterns for all architectures

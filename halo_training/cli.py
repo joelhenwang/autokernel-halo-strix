@@ -183,6 +183,8 @@ def main():
             steps=200,
             batch_size=args.batch_size,
             block_size=min(args.block_size, 512),  # smaller for smoke
+            compile=args.compile,
+            optimize_kernels=args.optimize_kernels,
             use_muon=args.muon,
         )
         sys.exit(0 if result["passed"] else 1)
