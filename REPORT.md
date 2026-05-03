@@ -931,6 +931,50 @@ Training funnel: BabyLM → GPT-training-small → WikiText-103 → Common Crawl
 
 ---
 
+## TYR-HALO (2026-04-29) — ACTIVE
+
+**Architecture:** Successor to FENRIR-HALO, designed for maximum throughput (60K+ tok/s) with novel mechanisms from 12-paper synthesis. 6 unique shared layers (4 ShortConv + 2 MoDA-GQA), Parcae loop mean=2, d=640, factorized embeddings. Informed by DeepSeek-V4, MoDA, EGGROLL, DFlash, Samsung DS2D, Tufa Labs.
+
+| Metric | Value |
+|--------|-------|
+| Unique params | 58.6M |
+| Parcae-equivalent (mean=2) | ~115M |
+| Effective depth | 12 layers + prelude + coda = 14 |
+| Conv:Attention ratio | 67:33 (4:2 per block) |
+| d_model | 640 |
+| GQA | 10 heads / 2 KV (5:1) |
+| FFN inner | 2304 |
+| Factorized embed rank | 256 |
+| mHC branches | 4 (Sinkhorn 20 iters) |
+| MTP depth | 1 (loss weight 0.3) |
+| Draft heads | 4 (parallel, from h_iter0) |
+
+**Novel mechanisms:**
+- **MoDA depth-attention:** Each GQA head attends to prior-iteration KVs via concatenated depth KVs. +2.11% at 3.7% FLOPs.
+- **mHC Sinkhorn residuals:** 4-branch residual stream with doubly stochastic mixing (DeepSeek-V4). Replaces SimpleParcaeInjection.
+- **MTP auxiliary head:** Predicts token at t+2, shares embed table. Training-only, discarded after.
+- **DS2D forecast embeddings:** Learned prefix embeddings for self-speculation (Samsung).
+- **Draft heads:** 4 parallel linear probes on h_iter0 for Parcae-native speculative decode.
+- **CTG:** Concurrent Token Generation for batched ES rollouts (8x alignment speedup).
+
+**Training plan (Option C race):**
+- Machine A: Backprop pretrain + Muon on stem-crawl-solo
+- Machine B: EGGROLL ES pretrain on same data, ~168K population, ternary fitness
+- Compare at matched token count
+
+**4-phase inference:**
+1. Phase 0: Draft heads + DS2D (single GPU, ~2.5-3x decode)
+2. Phase 1: DFlash drafter on Machine B (~4-5x)
+3. Phase 2: DFlash + SSD caching (~6-8x)
+
+**Post-training:** EGGROLL ES alignment with CTG batching (replaces DPO/SimPO).
+
+**Status:** Implemented, all variants smoke-tested (0 NaN grads). Dataset (stem-crawl-solo) being transferred. Awaiting remote machines for training.
+
+**Files:** `models/tyr_halo.py`, `halo_training/mtp_loss.py`, `docs/superpowers/specs/2026-04-29-tyr-halo-design.md`, `docs/guides/tyr-halo-theory-and-implementation.md`, `docs/guides/tyr-halo-rtx4060ti-training.md`
+
+---
+
 ## CLIMB Data Mixture Pipeline (2026-04-21)
 
 **Papers:** CLIMB (NVIDIA, 2504.13161) + Self-Improving Pretraining (Meta, 2601.21343)

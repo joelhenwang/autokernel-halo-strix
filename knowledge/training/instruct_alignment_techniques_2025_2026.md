@@ -391,3 +391,39 @@ Total: 2 epochs + teacher inference.
 - RLHF with learned reward models: overkill, use SimPO/ORPO/KTO instead
 - LoRA/PEFT: unnecessary at 80M -- full fine-tuning fits in memory
 - Token-level methods requiring auxiliary models (TGDPO): marginal benefit
+
+---
+
+## Update: Liquid AI LFM 2.5 Production Recipe (May 2026)
+
+**Source:** Maxime Labonne talk, "Everything I Learned Training Frontier Small Models"
+
+### LFM 2.5 Post-Training Pipeline (350M-1.2B)
+
+**Stage 1: SFT** — narrow, task-focused data. Cold start SFT samples critical for small models. If RL task fails to train, add similar SFT data and restart.
+
+**Stage 2: On-policy length-normalized DPO** — brings general quality improvements across the board. Generates on-policy data via temperature-sampled rollouts.
+
+**Stage 3: RL with verifiable rewards** — extremely efficient even at small scale. Add n-gram repetition penalty. Use as many environments/tasks as possible.
+
+### Anti-Doom-Loop Pipeline (concrete recipe)
+
+Problem: 15-16% doom loop ratio after pretraining for 1.2B thinking model. SFT barely moves it.
+
+**DPO data generation:**
+1. Start with ~1M prompts
+2. Generate 5 rollouts per prompt with temperature sampling (diverse, some avoid loops)
+3. Generate 1 rollout per prompt with temperature=0 (likely to doom loop)
+4. LLM jury scores all 6 rollouts
+5. Best score = chosen, worst score = rejected
+6. Train on-policy DPO → doom loops rejected by preference optimization
+
+**RL reinforcement:**
+- RL with verifiable rewards: no final answer extraction = no reward (naturally penalizes doom loops)
+- Add n-gram repetition penalty on top
+- Temperature sampling for diverse rollouts
+
+**Results:** Doom loop ratio 15.6% → near 0% after DPO + RL. Qwen 3.5 0.8B in reasoning mode: >50% doom loops (scaled-down approach fails).
+
+### Key Principle
+"Small models are NOT scaled-down big models. Edge models are their own thing."

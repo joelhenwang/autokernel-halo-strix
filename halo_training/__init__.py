@@ -3,7 +3,7 @@ Halo Training Stack — composable training for AMD Strix Halo (gfx1151).
 
 Usage:
     from halo_training import train
-    train(model, dataset="babylm", time_budget_minutes=15, compile=True)
+    train(model, dataset="babylm", epochs=1, compile=True)
 """
 
 from halo_training.trainer import train

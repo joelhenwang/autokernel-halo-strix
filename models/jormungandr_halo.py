@@ -98,13 +98,14 @@ class CodaAttention(Attention):
         self.exclusive = exclusive
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor,
-                value_bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+                value_bias: Optional[torch.Tensor] = None,
+                depth_kvs: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+                ) -> torch.Tensor:
         B, T, _ = x.shape
         q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
         k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
         v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
 
-        # Inject value embedding bias before RoPE/attention
         if value_bias is not None:
             v = v + value_bias.view(B, T, self.n_kv_heads, self.head_dim)
 
@@ -119,19 +120,33 @@ class CodaAttention(Attention):
             k = k.repeat_interleave(self.n_rep, dim=1)
             v = v.repeat_interleave(self.n_rep, dim=1)
 
-        if _HAS_HYBRID_ATTN and q.dtype == torch.float16:
+        # MoDA: PREPEND depth KVs as prefix (flash-attention compatible)
+        # PyTorch SDPA with is_causal=True and T_q < T_kv treats extra KVs as visible prefix
+        has_depth = depth_kvs is not None and len(depth_kvs) > 0
+        if has_depth:
+            depth_k_list, depth_v_list = [], []
+            for dk, dv in depth_kvs:
+                if dk.shape[1] != k.shape[1]:
+                    dk = dk.repeat_interleave(k.shape[1] // dk.shape[1], dim=1)
+                    dv = dv.repeat_interleave(v.shape[1] // dv.shape[1], dim=1)
+                depth_k_list.append(dk)
+                depth_v_list.append(dv)
+            k = torch.cat(depth_k_list + [k], dim=2)  # prepend
+            v = torch.cat(depth_v_list + [v], dim=2)  # prepend
+
+        if _HAS_HYBRID_ATTN and q.dtype == torch.float16 and not has_depth:
             y = hybrid_flash_sdpa_attention(
                 q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
             ).transpose(1, 2)
         else:
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 
-        # XSA: remove self-value projection per-head per-position
-        # z_i = y_i - (y_i · v_i / ||v_i||²) · v_i
+        # XSA: remove self-value projection (sequence portion = last T entries after depth prefix)
         if self.exclusive:
-            dot = (y * v).sum(dim=-1, keepdim=True)
-            v_norm_sq = (v * v).sum(dim=-1, keepdim=True).clamp(min=1e-8)
-            y = y - (dot / v_norm_sq) * v
+            v_seq = v[:, :, -T:, :]
+            dot = (y * v_seq).sum(dim=-1, keepdim=True)
+            v_norm_sq = (v_seq * v_seq).sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            y = y - (dot / v_norm_sq) * v_seq
 
         return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
 

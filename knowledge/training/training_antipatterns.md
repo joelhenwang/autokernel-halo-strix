@@ -165,3 +165,37 @@ rocprofv3 --hip-trace --hsa-trace -o trace.csv python bench.py  # counters
 
 ### bf16 vs fp16
 bf16 (bfloat16) is NOT recommended on gfx1151. AMADEUS bf16 is 24% slower (7.1K vs 9.3K tok/s), uses 32% more memory (12.1 vs 9.2 GB). bf16 + torch.compile crashes on LlamaModel (Inductor can't codegen complex RoPE ops). **Stick with fp16 + GradScaler.**
+
+---
+
+## Training Techniques Worth Adopting (from external models)
+
+### WSD Learning Rate Schedule (GPT-X2-125M)
+Warmup-Stable-Decay: 2K warmup → 80% at peak LR → 20% linear decay to 0. Outperforms cosine at small scale. GPT-X2 matched SmolLM2 with 27× fewer tokens using WSD + curriculum.
+
+### z-loss for Logit Stability (GPT-X2-125M)
+Add `z_loss = 1e-4 * logits.float().pow(2).mean()` to prevent logit magnitude drift during high-LR warmup. Enable during first ~40% of training, then disable. Especially useful for deep models (30+ effective layers).
+
+### Weight Decay Annealing (GPT-X2-125M)
+Start wd=0.1 during stable LR phase. Drop to wd=0.01 during LR decay/cooldown. Less regularization during fine-grained convergence = tighter final loss.
+
+### Progressive Data Curriculum (GPT-X2-125M, Liquid AI)
+Start general (web text), ramp specialized data (math, code) during stable LR, taper during decay. FineWeb-Edu dominant throughout, FineMath/code introduced gradually.
+
+### EMA Weights (TRM paper, Samsung)
+Maintain exponential moving average of model weights (decay=0.999). Use EMA weights for eval/inference. +7.5% generalization on recursive models. Already implemented: `--ema` flag.
+
+### Custom Tokenizer (GPT-X2-125M)
+32K vocab trained on domain data gives ~9% compression improvement over GPT-2 50K BPE. At 125M scale, saves ~15% of params from embeddings → reinvest in transformer layers.
+
+### Instruction-Augmented Pretraining (InstructLM-500M, Microsoft)
+Mix synthesized instruction-response pairs INTO the pretraining corpus (not just SFT after). Fine-tuned 7B model generates ~5 QA pairs per raw text document. Result: 500M on 100B tokens ≈ Pythia-1B on 300B tokens. 2-3× data efficiency. Models also benefit MORE from subsequent instruction tuning. Ref: arXiv 2406.14491.
+
+### Backreasoning Data Generation (Baguettotron, PleIAs)
+Give the generation model the ground-truth answer, have it "simulate not knowing" to produce reasoning traces. Inverse of typical prompting. Produces higher-quality reasoning chains than forward generation because the model isn't guessing — it's constructing a path to a known answer.
+
+### Progressive Context Scheduling (whiff-mamba2-50M)
+Start training at short context (64-128 tokens), progressively increase to target (512-1024). Model converges faster on short sequences first, then transfers to longer context. Can save 10-15% early training compute. Also useful when memory-constrained — smaller activations early.
+
+### Progressive Batch Scheduling (whiff-mamba2-50M)
+Start with small batch, increase during training. Smaller batches early = more optimizer steps = faster exploration. Larger batches later = more stable gradients = tighter convergence. Can combine with LR schedule (WSD stable phase → increase batch during decay).

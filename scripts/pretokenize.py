@@ -37,7 +37,10 @@ def iter_texts_jsonl_zst(root: Path):
             reader = dctx.stream_reader(fh)
             text_reader = io.TextIOWrapper(reader, encoding="utf-8")
             for line in text_reader:
-                row = json.loads(line)
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 text = row.get("text", "")
                 if text.strip():
                     yield text
@@ -75,6 +78,8 @@ def main():
     parser.add_argument("--input", required=True, help="Input dataset directory")
     parser.add_argument("--output", required=True, help="Output .bin file path")
     parser.add_argument("--tokenizer", default="gpt2", help="Tiktoken encoding name")
+    parser.add_argument("--tokenizer-path", default=None,
+                        help="HuggingFace tokenizer .json path (overrides --tokenizer)")
     args = parser.parse_args()
 
     root = Path(args.input)
@@ -82,8 +87,17 @@ def main():
         print(f"Error: {root} does not exist")
         sys.exit(1)
 
-    enc = tiktoken.get_encoding(args.tokenizer)
-    eos = enc.n_vocab - 1  # 50256 for GPT-2
+    if args.tokenizer_path:
+        from tokenizers import Tokenizer as HFTokenizer
+        hf_tok = HFTokenizer.from_file(args.tokenizer_path)
+        eos = hf_tok.token_to_id("<|endoftext|>")
+        vocab_size = hf_tok.get_vocab_size()
+        enc = None
+    else:
+        hf_tok = None
+        enc = tiktoken.get_encoding(args.tokenizer)
+        eos = enc.n_vocab - 1
+        vocab_size = enc.n_vocab
 
     # Detect format
     zst_files = list(root.rglob("*.jsonl.zst"))
@@ -104,7 +118,8 @@ def main():
         sys.exit(1)
 
     print(f"Format: {fmt}")
-    print(f"Tokenizing with {args.tokenizer} (vocab={enc.n_vocab})...")
+    tok_name = args.tokenizer_path or args.tokenizer
+    print(f"Tokenizing with {tok_name} (vocab={vocab_size})...")
 
     # Tokenize in chunks to manage memory
     CHUNK_SIZE = 100_000  # docs per chunk
@@ -114,7 +129,7 @@ def main():
 
     buf = []
     for text in text_iter:
-        tokens = enc.encode_ordinary(text)
+        tokens = hf_tok.encode(text).ids if hf_tok else enc.encode_ordinary(text)
         buf.extend(tokens)
         buf.append(eos)
         total_docs += 1

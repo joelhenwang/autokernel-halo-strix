@@ -306,6 +306,8 @@ class StabilityGuard:
         self.loss_ema = None
         self.rollback_count = 0
         self.last_good_step = 0
+        self._steps_seen = 0
+        self._spike_warmup = 2000
 
     def _find_latest_checkpoint(self, before_step: int = None):
         """Find the most recent valid checkpoint."""
@@ -315,7 +317,10 @@ class StabilityGuard:
         checkpoints = []
         for f in os.listdir(ckpt_dir):
             if f.startswith("step_") and f.endswith(".pt"):
-                step = int(f.replace("step_", "").replace(".pt", ""))
+                try:
+                    step = int(f.replace("step_", "").replace(".pt", ""))
+                except ValueError:
+                    step = 0
                 if before_step is None or step < before_step:
                     checkpoints.append((step, os.path.join(ckpt_dir, f)))
         if not checkpoints:
@@ -325,6 +330,8 @@ class StabilityGuard:
 
     def check_loss(self, loss_val: float, step: int) -> bool:
         """Returns True if loss is healthy, False if rollback needed."""
+        self._steps_seen += 1
+
         if math.isnan(loss_val) or math.isinf(loss_val):
             if self.rank == 0:
                 print(f"  [StabilityGuard] NaN/Inf loss at step {step}")
@@ -335,6 +342,11 @@ class StabilityGuard:
             return True
 
         self.loss_ema = self.ema_alpha * self.loss_ema + (1 - self.ema_alpha) * loss_val
+
+        # Skip spike detection during warmup (loss is volatile early)
+        if self._steps_seen < self._spike_warmup:
+            self.last_good_step = step
+            return True
 
         if loss_val > self.spike_factor * self.loss_ema:
             if self.rank == 0:
@@ -447,15 +459,20 @@ def average_grads(model, world_size):
             p.grad.data /= world_size
 
 
+_consecutive_skips = 0
+
 def _complete_step(model, optimizer, scaler, scheduler, world_size, max_grad_norm, rank):
     """Unscale, clip, step optimizer, update scaler. Returns grad_norm."""
+    global _consecutive_skips
     scaler.unscale_(optimizer)
     grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
     if torch.isfinite(grad_norm):
         scaler.step(optimizer)
+        _consecutive_skips = 0
     else:
+        _consecutive_skips += 1
         if rank == 0:
-            print(f"  Non-finite grad norm, skipping step")
+            print(f"  Non-finite grad norm, skipping step (consecutive: {_consecutive_skips})")
     scaler.update()
     optimizer.zero_grad(set_to_none=True)
     scheduler.step()
@@ -602,6 +619,16 @@ def main():
         param_check_interval=500,
         rank=rank,
     )
+    # Seed the guard with the resume checkpoint as fallback
+    if args.resume_from and args.checkpoint_dir:
+        fallback_dir = args.checkpoint_dir
+        fallback_path = os.path.join(fallback_dir, "step_0_fallback.pt")
+        if not os.path.exists(fallback_path):
+            import shutil
+            os.makedirs(fallback_dir, exist_ok=True)
+            shutil.copy2(args.resume_from, fallback_path)
+            if rank == 0:
+                print(f"StabilityGuard: seeded fallback checkpoint from {args.resume_from}")
 
     # --- Training loop ---
     global_step = 0
@@ -646,26 +673,14 @@ def main():
 
                     scaler.scale(loss).backward()
 
-                loss_val = loss.item() * args.accum_steps
                 total_tokens += input_ids.numel()
-                step_loss += loss.item()
-
-                # NaN loss check (per-microstep)
-                if math.isnan(loss_val) or math.isinf(loss_val):
-                    optimizer.zero_grad(set_to_none=True)
-                    if pending_handles is not None:
-                        for h in pending_handles:
-                            h.wait()
-                        pending_handles = None
-                    rollback_step, ok = guard.rollback(model, optimizer, device)
-                    if not ok:
-                        raise RuntimeError("StabilityGuard: unrecoverable NaN")
-                    global_step = rollback_step
-                    step_loss = 0.0
-                    running_loss = 0.0
-                    _rollback_restart = True
-                    dist.barrier()
-                    break
+                loss_val = loss.item()
+                if not math.isnan(loss_val):
+                    step_loss += loss_val
+                else:
+                    # Transient NaN in microstep — GradScaler will handle via inf grads
+                    if rank == 0:
+                        print(f"  [StabilityGuard] NaN microstep loss at batch {batch_idx}, continuing")
 
                 if not is_last_microstep:
                     continue
@@ -720,8 +735,16 @@ def main():
 
                 # 2. Record loss for THIS step + stability checks
                 running_loss += step_loss
-                if not guard.check_loss(step_loss, global_step) or \
-                   not guard.check_params(model, global_step):
+                grad_is_nan = hasattr(last_grad_norm, 'item') and not torch.isfinite(last_grad_norm)
+                too_many_skips = _consecutive_skips >= 5
+                guard_active = guard._steps_seen >= 10
+                if guard_active and (
+                    not guard.check_loss(step_loss, global_step) or
+                    too_many_skips or
+                    not guard.check_params(model, global_step)
+                ):
+                    if too_many_skips and rank == 0:
+                        print(f"  [StabilityGuard] {_consecutive_skips} consecutive grad skips, rolling back")
                     optimizer.zero_grad(set_to_none=True)
                     if pending_handles is not None:
                         for h in pending_handles:

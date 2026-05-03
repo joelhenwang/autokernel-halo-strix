@@ -40,10 +40,15 @@ tags: [%index, %navigation, %knowledge-graph]
 
 - [Hypothesis Buildout Results](knowledge/architectures/hypothesis_buildout_results.md) — 13 architectures trained at 170M, AMADEUS wins quality
 - [Hypothesis Ranking](knowledge/architectures/Estimation_Hypothesis_Ranking.md) — all 30 hypotheses ranked by estimated MFU and feasibility
-- [Reliable Small LM Insights](knowledge/architectures/reliable_small_lm_insights.md) — 6 gaps in small model training, best practices
+- [Reliable Small LM Insights](knowledge/architectures/reliable_small_lm_insights.md) — 6 gaps, Liquid AI talk, GPT-X2, InstructLM, Baguettotron, whiff-mamba2 analyses
 - [PLE Ablation](knowledge/architectures/ple_ablation_results.md) — Path A wins quality, MatFormer free, B/AB no benefit
 - [CHIMERA-HALO Design](knowledge/architectures/chimera_halo_design.md) — factorized embeddings + Parcae loop + LFM2 hybrid + XSA, 94M/158M
 - [FENRIR-HALO Design](docs/superpowers/specs/2026-04-21-fenrir-halo-design.md) — clean-sheet Parcae loop, d=640, 80M/160M, DDP-ready, targets Portimbria-150M
+- [**VIDAR-HALO Design**](docs/superpowers/specs/2026-05-03-vidar-halo-design.md) — **ACTIVE**: 47.5M/95M, d=768, 4L×2iter, no momentum, custom 32K tokenizer, WSD+z-loss, ~25K tok/s target
+- [TYR-HALO Design](docs/superpowers/specs/2026-04-29-tyr-halo-design.md) — 58M/115M, MoDA+mHC+MTP+DraftHeads+DS2D+CTG, 12 papers, 4-phase inference
+- [BALDR-HALO Design](docs/superpowers/specs/2026-04-29-baldr-halo-design.md) — 118M flat hybrid, 12 layers, MoDA+XSA+MTP, no loop/mHC, max speed target
+- [TYR-HALO Theory & Implementation Guide](docs/guides/tyr-halo-theory-and-implementation.md) — full theory, PyTorch impl, kernel/compile/data optimizations
+- [TYR-HALO RTX 4060 Ti Training Guide](docs/guides/tyr-halo-rtx4060ti-training.md) — NVIDIA bf16 training, memory budget, compile strategy
 - [Architecture Plans](mad_llm_scientist/plans/) — 30+ hypothesis designs (AMADEUS, TEMPEST, ARGUS-PRIME, JORMUNGANDR, etc.)
 - [JORMUNGANDR Plan](mad_llm_scientist/plans/JORMUNGANDR.md) — Parcae-stable looped ShortConv, staged activation, Poisson depth
 - [COOKBOOK](mad_llm_scientist/COOKBOOK.md) — shared modules, implementation patterns for all architectures
@@ -66,6 +71,14 @@ tags: [%index, %navigation, %knowledge-graph]
 - [Knowledge Graph Reorg](docs/superpowers/specs/2026-04-15-knowledge-graph-reorg-design.md) — this reorganization
 - [Training Monitor](docs/superpowers/specs/2026-04-15-training-monitor-design.md) — live dashboard + checkpoint analyzer + callbacks
 - [JORMUNGANDR-HALO](docs/superpowers/specs/2026-04-16-jormungandr-halo-design.md) — L2-resident d=512 core loop, 43K tok/s
+- [FENRIR-HALO](docs/superpowers/specs/2026-04-21-fenrir-halo-design.md) — clean-sheet Parcae, d=640, 80M/160M
+- [**TYR-HALO**](docs/superpowers/specs/2026-04-29-tyr-halo-design.md) — **ACTIVE**: MoDA+mHC+MTP, 58M/115M, 12-paper synthesis
+- [**BALDR-HALO**](docs/superpowers/specs/2026-04-29-baldr-halo-design.md) — **ACTIVE**: flat 118M, MoDA+XSA+MTP, racing TYR-HALO on stem-crawl-solo
+
+## Alignment & Post-Training
+
+- [Instruct Alignment Survey](knowledge/training/instruct_alignment_techniques_2025_2026.md) — ORPO, SimPO, KTO, EGGROLL ES, SmolLM recipe, Magpie data
+- [Alignment Implementation](halo_training/alignment.py) — alignment trainer code
 
 ## Operations
 
@@ -86,6 +99,7 @@ tags: [%index, %navigation, %knowledge-graph]
 
 ## Research
 
+- [Paper Deep-Dive May 2026](knowledge/architectures/paper_deep_dive_2026_05.md) — 9 papers: Hyperloop, TRM, HRM, TIDE, GenDistill/KDA, InfoMamba, Embed-MTP, DSKD-KQ, Sessa
 - [Mad LLM Scientist](mad_llm_scientist/CLAUDE.md) — researcher agent guidance, creativity constraints, hardware truth
 - [COOKBOOK](mad_llm_scientist/COOKBOOK.md) — universal implementation recipe, shared module library
 - [Evaluation Guide](mad_llm_scientist/EVALUATION_GUIDE.md) — benchmarks, methodology, checkpoint selection

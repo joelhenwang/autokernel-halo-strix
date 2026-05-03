@@ -3,9 +3,10 @@
 import os
 import time
 
-# Persist torch.compile cache across runs (10+ min compile → instant on reuse)
+# Persist torch.compile + autotuning cache across runs (10+ min compile → instant on reuse)
 os.environ.setdefault("TORCHINDUCTOR_FX_GRAPH_CACHE", "1")
 os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.expanduser("~/.cache/torchinductor"))
+os.environ.setdefault("TORCHINDUCTOR_AUTOTUNE_CACHE", "1")
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
@@ -14,14 +15,14 @@ from torch.utils.data import Dataset
 
 from halo_training.data import BabyLMDataset, build_dataloader
 from halo_training.metrics import compute_bpb, ThroughputTracker, TrainingLogger
-from halo_training.optimizer import build_optimizer, build_scheduler
+from halo_training.optimizer import build_optimizer, build_scheduler, build_wsd_scheduler
 
 
 def train(
     model: nn.Module,
     dataset: Union[str, Dataset] = "babylm",
     epochs: int = 1,
-    time_budget_minutes: float = 45.0,
+    time_budget_minutes: Optional[float] = None,
     batch_size: int = 64,
     block_size: int = 1024,
     accum_steps: int = 4,
@@ -42,10 +43,19 @@ def train(
     checkpoint_every: int = 2,
     use_muon: bool = False,
     use_bf16: bool = False,
+    use_ema: bool = False,
+    ema_decay: float = 0.999,
     resume_from: Optional[str] = None,
     resize_vocab: Optional[int] = None,
     warmup_steps: int = 100,
     max_steps: Optional[int] = None,
+    scheduler_type: str = "cosine",
+    z_loss_weight: float = 0.0,
+    z_loss_fraction: float = 0.4,
+    context_schedule: Optional[List] = None,
+    tokenizer_path: Optional[str] = None,
+    wd_start: float = 0.1,
+    wd_end: float = 0.01,
 ) -> Dict[str, Any]:
     """Train a model using Mode A (direct) or Mode B (layer-streaming).
 
@@ -53,7 +63,7 @@ def train(
         model: Any nn.Module.
         dataset: "babylm", path string, or a torch Dataset instance.
         epochs: Number of passes over the dataset.
-        time_budget_minutes: Wall-clock limit in minutes (default 45).
+        time_budget_minutes: Optional wall-clock limit in minutes. None = epoch-driven (preferred).
         batch_size: Microbatch size (default 64, playbook recommends 64-128).
         block_size: Sequence length for tokenization.
         accum_steps: Gradient accumulation steps (effective batch = batch_size * accum_steps).
@@ -154,19 +164,33 @@ def train(
             compile_layers=compile,
         )
     elif compile:
-        # CUDAGraphs ("reduce-overhead") conflict with autokernel HIP modules
-        # and with tied embeddings (gradient overwrite). "default" gives identical
-        # throughput (8258 vs 8278 tok/s benchmarked).
         compile_mode = "default"
-        print(f"Compiling model with torch.compile ({compile_mode})...")
+        cache_dir = os.environ.get("TORCHINDUCTOR_CACHE_DIR", "~/.cache/torchinductor")
+        cache_exists = os.path.isdir(os.path.expanduser(cache_dir)) and len(os.listdir(os.path.expanduser(cache_dir))) > 0
+        cache_status = "warm cache" if cache_exists else "cold — first compile will be slow"
+        print(f"Compiling model with torch.compile ({compile_mode}), cache: {cache_status}")
         model = torch.compile(model, mode=compile_mode)
 
+    # --- Setup EMA (TRM paper: 7.5% generalization gain) ---
+    ema_model = None
+    if use_ema:
+        from torch.optim.swa_utils import AveragedModel
+        ema_model = AveragedModel(model,
+            multi_avg_fn=lambda avg, model, num: avg * ema_decay + model * (1 - ema_decay))
+        print(f"EMA enabled (decay={ema_decay})")
+
     # --- Setup data ---
+    dataset_root = None
     if isinstance(dataset, str):
+        dataset_root = dataset
+        initial_block_size = block_size
+        if context_schedule:
+            initial_block_size = context_schedule[0][1]
         if dataset == "babylm":
-            dataset = BabyLMDataset(block_size=block_size)
+            dataset = BabyLMDataset(block_size=initial_block_size, tokenizer_path=tokenizer_path)
         else:
-            dataset = BabyLMDataset(root=dataset, block_size=block_size)
+            dataset = BabyLMDataset(root=dataset, block_size=initial_block_size,
+                                    tokenizer_path=tokenizer_path)
 
     # Vocab size check: clamp token IDs to model's vocab size if needed
     model_vocab = _get_vocab_size(model)
@@ -181,7 +205,14 @@ def train(
     optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon)
 
     total_steps = len(dataloader) * epochs // accum_steps
-    scheduler = build_scheduler(optimizer, total_steps, warmup_steps=warmup_steps)
+    if max_steps:
+        total_steps = min(total_steps, max_steps)
+    if scheduler_type == "wsd":
+        scheduler = build_wsd_scheduler(
+            optimizer, total_steps, warmup_steps=warmup_steps,
+            wd_start=wd_start, wd_end=wd_end)
+    else:
+        scheduler = build_scheduler(optimizer, total_steps, warmup_steps=warmup_steps)
 
     # --- Setup loss ---
     chunked_ce = None
@@ -214,7 +245,8 @@ def train(
     amp_dtype = torch.bfloat16 if use_bf16 else torch.float16
     # bf16 doesn't need loss scaling (same exponent range as fp32)
     use_scaler = (device.type == "cuda") and not use_bf16
-    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_scaler,
+                                   init_scale=1024.0, backoff_factor=0.25)
 
     # --- Training loop ---
     model.train()
@@ -244,8 +276,11 @@ def train(
     eff_batch = batch_size * accum_steps
     print(f"Training: {_count_params(model):.1f}M params, batch={batch_size}x{accum_steps}={eff_batch}, "
           f"block={block_size}, lr={base_lr}")
-    print(f"Time budget: {time_budget_minutes:.0f} min | "
-          f"Steps/epoch: {len(dataloader)}, optimizer steps: {total_steps}")
+    budget_str = f"{time_budget_minutes:.0f} min" if time_budget_minutes else "none (epoch-driven)"
+    print(f"Time budget: {budget_str} | "
+          f"Epochs: {epochs} | Steps/epoch: {len(dataloader)}, optimizer steps: {total_steps}")
+
+    current_block_size = context_schedule[0][1] if context_schedule else block_size
 
     try:
         for epoch in range(epochs):
@@ -299,6 +334,16 @@ def train(
                     else:
                         loss = loss_fn(output, batch) / accum_steps
 
+                if z_loss_weight > 0 and global_step < total_steps * z_loss_fraction:
+                    if isinstance(output, dict) and "logits" in output:
+                        z_logits = output["logits"]
+                    elif isinstance(output, torch.Tensor) and output.dim() >= 2:
+                        z_logits = output
+                    else:
+                        z_logits = None
+                    if z_logits is not None:
+                        loss = loss + z_loss_weight * z_logits.float().pow(2).mean() / accum_steps
+
                 scaler.scale(loss).backward()
 
                 tokens_in_batch = input_ids.numel()
@@ -335,7 +380,26 @@ def train(
                     scaler.update()
                     optimizer.zero_grad(set_to_none=True)
                     scheduler.step()
+                    if ema_model is not None:
+                        ema_model.update_parameters(model)
                     global_step += 1
+
+                    if context_schedule and dataset_root:
+                        for frac, new_bs in context_schedule:
+                            boundary = int(frac * total_steps)
+                            if global_step == boundary and new_bs != current_block_size:
+                                current_block_size = new_bs
+                                print(f"[Context Schedule] block_size -> {new_bs} at step {global_step}")
+                                dataset = BabyLMDataset(
+                                    root=dataset_root, block_size=new_bs,
+                                    tokenizer_path=tokenizer_path)
+                                dataloader = build_dataloader(
+                                    dataset, batch_size=batch_size, num_workers=num_workers)
+                                try:
+                                    torch._dynamo.reset()
+                                except Exception:
+                                    pass
+                                break
 
                     # Logging
                     if global_step % log_interval == 0:
@@ -369,7 +433,7 @@ def train(
                     # Checkpoint
                     ckpt_every = checkpoint_interval or (log_interval * 10)
                     if checkpoint_dir and global_step % ckpt_every == 0:
-                        _save_checkpoint(model, optimizer, global_step, checkpoint_dir, total_tokens)
+                        _save_checkpoint(model, optimizer, global_step, checkpoint_dir, total_tokens, ema_model)
 
             else:
                 continue
@@ -380,7 +444,7 @@ def train(
 
     # Always save final checkpoint
     if checkpoint_dir and global_step > 0:
-        _save_checkpoint(model, optimizer, global_step, checkpoint_dir, total_tokens)
+        _save_checkpoint(model, optimizer, global_step, checkpoint_dir, total_tokens, ema_model)
         print(f"Final checkpoint saved at step {global_step}")
 
     # Final stats
@@ -424,16 +488,21 @@ def _grad_norm(model: nn.Module) -> float:
 def _save_checkpoint(
     model: nn.Module, optimizer: torch.optim.Optimizer,
     step: int, checkpoint_dir: str, total_tokens: int = 0,
+    ema_model=None,
 ):
     """Save model and optimizer state."""
     import os
     os.makedirs(checkpoint_dir, exist_ok=True)
     path = os.path.join(checkpoint_dir, f"step_{step}.pt")
     raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
-    torch.save({
+    ckpt = {
         "step": step,
         "model_state_dict": raw_model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "total_tokens": total_tokens,
-    }, path)
+    }
+    if ema_model is not None:
+        raw_ema = ema_model.module._orig_mod if hasattr(ema_model.module, "_orig_mod") else ema_model.module
+        ckpt["ema_state_dict"] = raw_ema.state_dict()
+    torch.save(ckpt, path)
     print(f"Checkpoint saved: {path}")

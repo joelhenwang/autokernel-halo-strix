@@ -21,6 +21,7 @@ class BabyLMDataset(Dataset):
         root: str = "datasets/babylm-strict-small",
         tokenizer_name: str = "gpt2",
         block_size: int = 1024,
+        tokenizer_path: Optional[str] = None,
     ):
         self.block_size = block_size
 
@@ -28,9 +29,14 @@ class BabyLMDataset(Dataset):
 
         # Support .bin files directly (pre-tokenized with scripts/pretokenize.py)
         if root.suffix == ".bin" and root.is_file():
-            import tiktoken
-            enc = tiktoken.get_encoding(tokenizer_name)
-            self.vocab_size = enc.n_vocab
+            if tokenizer_path:
+                from tokenizers import Tokenizer as HFTokenizer
+                tok = HFTokenizer.from_file(tokenizer_path)
+                self.vocab_size = tok.get_vocab_size()
+            else:
+                import tiktoken
+                enc = tiktoken.get_encoding(tokenizer_name)
+                self.vocab_size = enc.n_vocab
             raw = np.fromfile(str(root), dtype=np.uint16)
             tokens = raw.astype(np.int64)
             n_tokens = len(tokens)
@@ -48,19 +54,29 @@ class BabyLMDataset(Dataset):
         # Load pre-tokenized or raw text
         pre_tokens, texts = self._load_tokens_or_texts(root)
 
-        import tiktoken
-        enc = tiktoken.get_encoding(tokenizer_name)
-        self.vocab_size = enc.n_vocab
-
-        eos_token = enc.n_vocab - 1  # 50256 for GPT-2 (<|endoftext|>)
+        if tokenizer_path:
+            from tokenizers import Tokenizer as HFTokenizer
+            tok = HFTokenizer.from_file(tokenizer_path)
+            self.vocab_size = tok.get_vocab_size()
+            eos_token = tok.token_to_id("<|endoftext|>")
+        else:
+            import tiktoken
+            enc = tiktoken.get_encoding(tokenizer_name)
+            self.vocab_size = enc.n_vocab
+            eos_token = enc.n_vocab - 1
 
         if pre_tokens is not None:
             tokens = pre_tokens
+        elif tokenizer_path:
+            tokens = []
+            for text in texts:
+                tokens.extend(tok.encode(text).ids)
+                tokens.append(eos_token)
         else:
             tokens = []
             for text in texts:
                 tokens.extend(enc.encode_ordinary(text))
-                tokens.append(eos_token)  # EOS between documents
+                tokens.append(eos_token)
         self.tokens = torch.tensor(tokens, dtype=torch.long)
 
         # Chunk into block_size sequences
@@ -117,7 +133,10 @@ class BabyLMDataset(Dataset):
                     reader = dctx.stream_reader(fh)
                     text_reader = io.TextIOWrapper(reader, encoding="utf-8")
                     for line in text_reader:
-                        row = json.loads(line)
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
                         text = row.get("text", "")
                         if text.strip():
                             texts.append(text)

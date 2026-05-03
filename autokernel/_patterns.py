@@ -51,6 +51,8 @@ _SWIGLU_ALIASES = [
 _BLOCK_ALIASES = [
     ("attention", "attention_norm", "feed_forward", "ffn_norm"),            # ours
     ("self_attn", "input_layernorm", "mlp", "post_attention_layernorm"),   # HuggingFace
+    ("attn", "pre_norm", "ffn", "ffn_norm"),                               # BALDR/TYR MoDAGQABlock
+    ("conv", "pre_norm", "ffn", "ffn_norm"),                               # ShortConvBlock
 ]
 
 # Tempest/Griffin-style block: mixer = conv || griffin → out_proj
@@ -89,7 +91,15 @@ def _find_swiglu_attrs(module: nn.Module) -> Optional[tuple]:
 
 
 def _find_block_attrs(module: nn.Module) -> Optional[tuple]:
-    """Return (attn, attn_norm, ffn, ffn_norm) names if module is a TransformerBlock."""
+    """Return (attn, attn_norm, ffn, ffn_norm) names if module is a TransformerBlock.
+
+    Rejects momentum blocks (have log_beta) — their forward(x, velocity) → (x, velocity)
+    signature is incompatible with FusedResidualRMSNorm's forward(x, freqs_cis) → x.
+    """
+    if hasattr(module, "log_beta"):
+        return None
+    if getattr(module, "_skip_autokernel", False):
+        return None
     for alias in _BLOCK_ALIASES:
         attn, attn_norm, ffn, ffn_norm = alias
         if (hasattr(module, attn) and hasattr(module, attn_norm)
@@ -209,7 +219,14 @@ class _FusedQKVAttentionReplacement(nn.Module):
             self._cos = None
             self._sin = None
 
-    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        # CodaAttention extensions: XSA + QK-Norm
+        self.exclusive = getattr(original, "exclusive", False)
+        self.qk_norm = getattr(original, "qk_norm", False)
+        if self.qk_norm:
+            self.q_scale = getattr(original, "q_scale", None)
+            self.k_scale = getattr(original, "k_scale", None)
+
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor, **kwargs) -> torch.Tensor:
         B, T, _ = x.shape
         qkv = self.w_qkv(x)
         q = qkv[..., :self.q_size].view(B, T, self.n_heads, self.head_dim)
@@ -238,30 +255,59 @@ class _FusedQKVAttentionReplacement(nn.Module):
             k = k.transpose(1, 2)
             v = v.transpose(1, 2)
 
+        # QK-Norm (CodaAttention / DeepSeek-V4 style)
+        if self.qk_norm and self.q_scale is not None:
+            q = F.normalize(q, dim=-1) * self.q_scale
+            k = F.normalize(k, dim=-1) * self.k_scale
+
         if self.n_rep > 1:
             k = k.repeat_interleave(self.n_rep, dim=1)
             v = v.repeat_interleave(self.n_rep, dim=1)
 
-        # Try hybrid flash attention (8.9% faster: flash forward + SDPA backward)
-        if not hasattr(self, "_hybrid_attn_checked"):
-            self._hybrid_attn_checked = True
-            self._hybrid_attn_fn = None
-            try:
-                from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
-                self._hybrid_attn_fn = hybrid_flash_sdpa_attention
-            except Exception:
-                pass
-        if self._hybrid_attn_fn is not None:
-            try:
-                # hybrid expects (B, T, H, D), we have (B, H, T, D) after transpose
-                y = self._hybrid_attn_fn(
-                    q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
-                )
-                return self.wo(y.contiguous().view(B, T, -1))
-            except Exception:
-                pass  # fall through to SDPA
+        # MoDA depth-KV support: PREPEND prior-iteration KVs as prefix (flash-compatible)
+        depth_kvs = kwargs.get("depth_kvs", None)
+        has_depth = depth_kvs is not None and len(depth_kvs) > 0
+        if has_depth:
+            depth_k_list, depth_v_list = [], []
+            for dk, dv in depth_kvs:
+                if dk.shape[1] != k.shape[1]:
+                    dk = dk.repeat_interleave(k.shape[1] // dk.shape[1], dim=1)
+                    dv = dv.repeat_interleave(v.shape[1] // dv.shape[1], dim=1)
+                depth_k_list.append(dk)
+                depth_v_list.append(dv)
+            k = torch.cat(depth_k_list + [k], dim=2)
+            v = torch.cat(depth_v_list + [v], dim=2)
 
-        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        # Attention (is_causal=True works for both normal and prefix-KV cases)
+        if not has_depth:
+            if not hasattr(self, "_hybrid_attn_checked"):
+                self._hybrid_attn_checked = True
+                self._hybrid_attn_fn = None
+                try:
+                    from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
+                    self._hybrid_attn_fn = hybrid_flash_sdpa_attention
+                except Exception:
+                    pass
+            if self._hybrid_attn_fn is not None:
+                try:
+                    y = self._hybrid_attn_fn(
+                        q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
+                    )
+                    y = y.transpose(1, 2)
+                except Exception:
+                    y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+            else:
+                y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+        # XSA: remove self-value projection (sequence portion = last T entries after depth prefix)
+        if self.exclusive:
+            v_seq = v[:, :, -T:, :]
+            dot = (y * v_seq).sum(dim=-1, keepdim=True)
+            v_norm_sq = (v_seq * v_seq).sum(dim=-1, keepdim=True).clamp(min=1e-8)
+            y = y - (dot / v_norm_sq) * v_seq
+
         return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
 
 

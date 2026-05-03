@@ -199,6 +199,7 @@ class ShortConvBlock(nn.Module):
         # Inlined momentum (compile-friendly)
         beta = torch.sigmoid(self.log_beta)
         velocity = beta * velocity + mixer_out
+        velocity = velocity.clamp(-8.0, 8.0)
 
         # Inlined residual + RMSNorm (Inductor fuses element-wise)
         x = x + velocity
@@ -239,6 +240,7 @@ class GQABlock(nn.Module):
         # Inlined momentum
         beta = torch.sigmoid(self.log_beta)
         velocity = beta * velocity + attn_out
+        velocity = velocity.clamp(-8.0, 8.0)
 
         # Inlined residual + RMSNorm
         x = x + velocity

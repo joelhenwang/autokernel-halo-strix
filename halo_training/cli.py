@@ -42,17 +42,20 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="Run smoke test instead of training")
 
     # Training params
-    parser.add_argument("--time-budget", type=float, default=45.0, help="Training time budget in minutes (ignored if --max-steps set)")
-    parser.add_argument("--max-steps", type=int, default=None, help="Stop after N optimizer steps (overrides --time-budget)")
+    parser.add_argument("--time-budget", type=float, default=None, help="Wall-clock limit in minutes (optional safety net, prefer --epochs)")
+    parser.add_argument("--max-steps", type=int, default=None, help="Stop after N optimizer steps")
     parser.add_argument("--batch-size", type=int, default=16, help="Microbatch size")
     parser.add_argument("--block-size", type=int, default=1024, help="Sequence length")
     parser.add_argument("--accum-steps", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--lr", type=float, default=8e-4, help="Base learning rate")
     parser.add_argument("--epochs", type=int, default=1, help="Number of epochs")
     parser.add_argument("--compile", action="store_true", help="Apply torch.compile")
+    parser.add_argument("--no-compile-cache", action="store_true", help="Disable Inductor compile cache (force fresh compilation)")
     parser.add_argument("--optimize-kernels", action="store_true", help="Apply autokernel.optimize()")
     parser.add_argument("--muon", action="store_true", help="Use Muon optimizer (2x token-efficiency)")
     parser.add_argument("--bf16", action="store_true", help="Use bfloat16 instead of float16 (no GradScaler needed)")
+    parser.add_argument("--mtp", action="store_true", help="Use Multi-Token Prediction auxiliary loss (for models with MTP heads)")
+    parser.add_argument("--ema", action="store_true", help="Use EMA of weights (decay=0.999, TRM paper: +7.5%% generalization)")
     parser.add_argument("--mode", default="auto", choices=["auto", "A", "B"], help="Training mode")
     parser.add_argument("--checkpoint-dir", default=None, help="Checkpoint save directory")
     parser.add_argument("--checkpoint-interval", type=int, default=None, help="Save checkpoint every N steps (default: log_interval * 10)")
@@ -68,7 +71,21 @@ def main():
                         help="Dataset format adapter")
     parser.add_argument("--eos-weight", type=float, default=1.0,
                         help="EOS token loss weight multiplier (default 1.0, use 5.0 for Phase 0)")
-    parser.add_argument("--warmup-steps", type=int, default=100, help="LR warmup steps")
+    parser.add_argument("--warmup-steps", type=int, default=300, help="LR warmup steps (300 recommended with MTP to avoid gradient spikes)")
+    parser.add_argument("--scheduler", default="cosine", choices=["cosine", "wsd"],
+                        help="LR schedule: cosine (default) or wsd (warmup-stable-decay)")
+    parser.add_argument("--z-loss", type=float, default=0.0,
+                        help="Z-loss weight on logit magnitudes (e.g., 1e-4)")
+    parser.add_argument("--z-loss-fraction", type=float, default=0.4,
+                        help="Fraction of training to apply z-loss (default 0.4 = first 40%%)")
+    parser.add_argument("--context-schedule", default=None,
+                        help="Progressive context: '0.2:256,0.6:512,1.0:1024'")
+    parser.add_argument("--tokenizer-path", default=None,
+                        help="Custom HuggingFace tokenizer .json path")
+    parser.add_argument("--wd-start", type=float, default=0.1,
+                        help="Weight decay at start (for WSD annealing)")
+    parser.add_argument("--wd-end", type=float, default=0.01,
+                        help="Weight decay at end of decay phase")
     parser.add_argument("--system-prompt", default="You are a helpful assistant.",
                         help="System prompt for ChatML formatting")
     parser.add_argument("--no-packing", action="store_true",
@@ -85,6 +102,11 @@ def main():
                         help="DPO batch size (smaller than SFT due to 2x model memory)")
 
     args = parser.parse_args()
+
+    # Disable compile cache if requested (must happen before trainer import)
+    if getattr(args, 'no_compile_cache', False):
+        os.environ["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "0"
+        os.environ.pop("TORCHINDUCTOR_AUTOTUNE_CACHE", None)
 
     # Load model
     sys.path.insert(0, ".")
@@ -175,6 +197,10 @@ def main():
         print(f"\nDPO stats: {stats}")
         sys.exit(0)
 
+    if args.mtp and loss_fn is None:
+        from halo_training.mtp_loss import build_mtp_loss_fn
+        loss_fn = build_mtp_loss_fn()
+
     if args.smoke:
         from halo_training.smoke import run_smoke_test
         result = run_smoke_test(
@@ -193,6 +219,13 @@ def main():
     if dataset_obj is None and args.dataset.startswith("mixture:"):
         from halo_training.mixture_data import MixtureDataset
         dataset_obj = MixtureDataset(args.dataset[len("mixture:"):], block_size=args.block_size)
+
+    context_schedule = None
+    if args.context_schedule:
+        context_schedule = []
+        for part in args.context_schedule.split(","):
+            frac, bs = part.split(":")
+            context_schedule.append((float(frac), int(bs)))
 
     from halo_training.trainer import train
     stats = train(
@@ -213,10 +246,18 @@ def main():
         log_interval=args.log_interval,
         use_muon=args.muon,
         use_bf16=args.bf16,
+        use_ema=args.ema,
         resume_from=args.resume_from,
         resize_vocab=resize_vocab,
         warmup_steps=args.warmup_steps,
         max_steps=args.max_steps,
+        scheduler_type=args.scheduler,
+        z_loss_weight=args.z_loss,
+        z_loss_fraction=args.z_loss_fraction,
+        context_schedule=context_schedule,
+        tokenizer_path=args.tokenizer_path,
+        wd_start=args.wd_start,
+        wd_end=args.wd_end,
     )
 
     print(f"\nFinal stats: {stats}")

@@ -19,12 +19,11 @@ def zeropower_via_newtonschulz5(G, steps=5):
     """Compute the zeroth power (UV^T from SVD) via 5 Newton-Schulz iterations.
 
     Orthogonalizes the gradient matrix, equalizing all singular values.
-    Runs in bfloat16 for numerical stability with the quintic polynomial.
+    Uses fp32 to avoid bf16↔fp16 conversion issues on AMD gfx1151.
     """
     assert G.ndim == 2
     a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    # Transpose if tall — work with the wider matrix for efficiency
+    X = G.float()
     if X.shape[0] > X.shape[1]:
         X = X.T
         transposed = True
@@ -227,10 +226,11 @@ class Muon(torch.optim.Optimizer):
 # Params with these name fragments go to AdamW even if 2D.
 # SSM/conv/special params have different gradient dynamics than MLP weights.
 _ADAMW_FORCE_PATTERNS = (
-    "ssm", "mamba", "conv", "scan", "A_log", "dt_", "D_param",
+    "ssm", "mamba", "conv_weight", "conv1d", "scan", "A_log", "dt_", "D_param",
     "target", "film", "embedding", "embed", "output.weight",
     "log_gamma", "log_eta", "log_beta", "omega", "gamma_param",
     "decay", "conductor", "engram", "meta_token",
+    "injection",
 )
 
 

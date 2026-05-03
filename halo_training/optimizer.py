@@ -193,3 +193,59 @@ def build_scheduler(
         return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1.0 + math.cos(math.pi * progress))
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def build_wsd_scheduler(
+    optimizer: torch.optim.Optimizer,
+    total_steps: int,
+    warmup_steps: int = 300,
+    stable_fraction: float = 0.8,
+    min_lr_ratio: float = 0.0,
+    wd_start: float = 0.1,
+    wd_end: float = 0.01,
+) -> "WSDScheduler":
+    """Warmup-Stable-Decay schedule with weight decay annealing.
+
+    Warmup: linear 0→1 over warmup_steps.
+    Stable: constant 1.0 until total_steps * stable_fraction.
+    Decay: linear 1.0→min_lr_ratio over remaining steps.
+    Weight decay: anneals wd_start→wd_end during decay phase.
+    """
+    return WSDScheduler(optimizer, total_steps, warmup_steps,
+                        stable_fraction, min_lr_ratio, wd_start, wd_end)
+
+
+class WSDScheduler(torch.optim.lr_scheduler.LambdaLR):
+    """Warmup-Stable-Decay LR schedule with weight decay annealing."""
+
+    def __init__(self, optimizer, total_steps, warmup_steps=300,
+                 stable_fraction=0.8, min_lr_ratio=0.0,
+                 wd_start=0.1, wd_end=0.01):
+        self.total_steps = total_steps
+        self.warmup_steps = warmup_steps
+        self.decay_start = int(total_steps * stable_fraction)
+        self.min_lr_ratio = min_lr_ratio
+        self.wd_start = wd_start
+        self.wd_end = wd_end
+
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return step / max(1, warmup_steps)
+            if step < self.decay_start:
+                return 1.0
+            decay_progress = (step - self.decay_start) / max(1, total_steps - self.decay_start)
+            return max(min_lr_ratio, 1.0 - (1.0 - min_lr_ratio) * decay_progress)
+
+        super().__init__(optimizer, lr_lambda)
+
+    def step(self, epoch=None):
+        super().step(epoch)
+        current_step = self.last_epoch
+        if current_step >= self.decay_start:
+            decay_progress = (current_step - self.decay_start) / max(
+                1, self.total_steps - self.decay_start)
+            decay_progress = min(1.0, decay_progress)
+            wd = self.wd_start + (self.wd_end - self.wd_start) * decay_progress
+            for group in self.optimizer.param_groups:
+                if group.get("weight_decay", 0) > 0:
+                    group["weight_decay"] = wd

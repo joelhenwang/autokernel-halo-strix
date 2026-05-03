@@ -121,7 +121,9 @@ def run_smoke_test(
 
         with torch.amp.autocast("cuda", dtype=torch.float16):
             output = model(input_ids)
-            if isinstance(output, torch.Tensor):
+            if isinstance(output, dict):
+                logits = output["logits"]
+            elif isinstance(output, torch.Tensor):
                 logits = output
             elif hasattr(output, "logits"):
                 logits = output.logits

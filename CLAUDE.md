@@ -37,10 +37,10 @@ uv run python orchestrate.py
 # End-to-end verification
 uv run python verify.py --model models/llama_7b.py --class-name LlamaModel --input-shape 1,512
 
-# Training (Mode A auto for <2B, Mode B for >2B)
-python -m halo_training --model models/llama_7b.py --class-name LlamaModel --dataset babylm
-python -m halo_training --model models/llama_7b.py --class-name LlamaModel --compile --optimize-kernels
-python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --resume-from checkpoints/argus_prime_gpt/step_12000.pt --dataset datasets/wikitext-103-raw-train --compile --optimize-kernels --muon
+# Training (always use --epochs, minimum 1)
+python -m halo_training --model models/llama_7b.py --class-name LlamaModel --dataset babylm --epochs 1
+python -m halo_training --model models/llama_7b.py --class-name LlamaModel --compile --optimize-kernels --epochs 1
+python -m halo_training --model models/tyr_halo.py --class-name TyrHaloLight --dataset datasets/stem-crawl-solo.bin --compile --optimize-kernels --muon --mtp --ema --lr 0.002 --epochs 1
 ```
 
 ## Workflow
@@ -66,6 +66,11 @@ python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --
 - `scripts/datamix/` — CLIMB + Self-Improving data mixture pipeline (6 phases: sample → embed → cluster → proxy search → score → assemble)
 - `scripts/nvidia/` — Standalone NVIDIA GPU training (no ROCm deps): `train_nvidia.py` + `argus_prime_standalone.py`
 
+## Training Philosophy
+
+- **Epochs, not time budgets.** Always train for at least 1 full epoch. Use `--epochs N` as the primary stopping criterion. `--time-budget` exists only as an optional safety net, not the default.
+- **Compile cache.** Inductor FX graph cache + autotune cache are always on (`~/.cache/torchinductor`). First compile is slow (5-10 min), subsequent runs instant. Use `--no-compile-cache` to force fresh compilation. When tok/s look good after warmup, the cache is working.
+
 ## Key Constraints (always remember)
 
 - **No MFMA** — can't beat rocBLAS for matmul/attention. Don't put matmuls in HIP kernels.
@@ -76,6 +81,10 @@ python -m halo_training --model models/argus_prime.py --class-name ArgusPrime --
 - **Don't break autokernel FusedQKV+RoPE pattern** — manual QKV fusion loses 3.7x speedup
 - **torch.compile model only**, never the optimizer (29GB memory blowup)
 - **Per-zone compile for looped models** — compile each ShortConvBlock independently, not the full model (Python loops break compile). Use `model.compile_zones()` for JORMUNGANDR-HALO.
+- **Momentum blocks break FusedResidualRMSNorm** — blocks with `log_beta` (momentum velocity) have `forward(x, velocity) → (x, velocity)` signature, incompatible with FusedResidualRMSNorm's `forward(x, freqs_cis) → x`. Autokernel auto-skips these.
+- **Velocity clamp required for fp16 Parcae loops** — `velocity.clamp(-8, 8)` prevents fp16 overflow. Costs ~22% tok/s but prevents NaN. Unnecessary on bf16 hardware.
+- **Hyperloop HC streams too expensive on Strix Halo** — 35-41% throughput cost due to 240 GB/s bandwidth limit. Use `use_mhc=False` (default). Enable on H100/A100 hardware.
+- **EMA (--ema)** — Free generalization gain (TRM paper: +7.5%). Decay 0.999. EMA state saved in checkpoints. Use EMA weights for eval/inference.
 - **Check train_log.jsonl** for progress, don't rely on SSH stdout for long runs
 - **EOS token** (50256, `<|endoftext|>`) inserted between documents in `halo_training/data.py`
 - **Autokernel before checkpoint load** — fused QKV keys must exist before `load_state_dict()`
