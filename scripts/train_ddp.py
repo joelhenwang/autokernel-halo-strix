@@ -44,7 +44,7 @@ from torch.utils.data.distributed import DistributedSampler
 def zeropower_via_newtonschulz5(G, steps=5):
     assert G.ndim == 2
     a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
+    X = G.float()
     if X.shape[0] > X.shape[1]:
         X = X.T
         transposed = True
@@ -163,10 +163,10 @@ class Muon(torch.optim.Optimizer):
 
 
 _ADAMW_FORCE_PATTERNS = (
-    "ssm", "mamba", "conv", "scan", "A_log", "dt_", "D_param",
+    "ssm", "mamba", "conv_weight", "conv1d", "scan", "A_log", "dt_", "D_param",
     "target", "film", "embedding", "embed", "output.weight",
     "log_gamma", "log_eta", "log_beta", "omega", "gamma_param",
-    "decay", "conductor", "engram", "meta_token",
+    "decay", "conductor", "engram", "meta_token", "injection",
 )
 
 
@@ -594,7 +594,7 @@ def main():
 
     # --- Loss + AMP ---
     ce_loss_fn = nn.CrossEntropyLoss()
-    scaler = torch.amp.GradScaler("cuda")
+    scaler = torch.amp.GradScaler("cuda", init_scale=1024.0, backoff_factor=0.25)
 
     # --- Metrics ---
     n_params = sum(p.numel() for p in raw_model.parameters())
@@ -666,6 +666,17 @@ def main():
                         output = model(input_ids, targets=targets)
                         if isinstance(output, torch.Tensor) and output.dim() == 0:
                             loss = output / args.accum_steps
+                        elif isinstance(output, dict):
+                            logits = output["logits"]
+                            loss = ce_loss_fn(
+                                logits.view(-1, logits.size(-1)), targets.view(-1)
+                            ) / args.accum_steps
+                            if "mtp1" in output:
+                                mtp1 = output["mtp1"]
+                                mtp_targets = targets[:, 2:].reshape(-1)
+                                loss = loss + 0.3 * ce_loss_fn(
+                                    mtp1.reshape(-1, logits.size(-1)), mtp_targets
+                                ) / args.accum_steps
                         else:
                             loss = ce_loss_fn(
                                 output.view(-1, output.size(-1)), targets.view(-1)

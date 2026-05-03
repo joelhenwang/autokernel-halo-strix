@@ -260,8 +260,17 @@ class VidarHaloBase(nn.Module):
 
 
 class VidarHalo(VidarHaloBase):
-    """Production: d=768, 4 layers × 2 iterations, ~47.5M unique."""
+    """Production (custom 32K tokenizer): d=768, 4 layers × 2 iters, ~47M unique."""
     pass
+
+
+class VidarHaloGPT2(VidarHaloBase):
+    """GPT-2 tokenizer variant: vocab=50257, ~54M unique. For pre-tokenized .bin files."""
+
+    def __init__(self, **kw):
+        kw.setdefault("vocab_size", 50257)
+        kw.setdefault("embed_rank", 448)
+        super().__init__(**kw)
 
 
 class VidarHaloMini(VidarHaloBase):
