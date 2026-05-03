@@ -184,7 +184,7 @@ def split_params_for_muon(model):
             adamw_params.append((name, param))
         elif any(pat in name for pat in _ADAMW_FORCE_PATTERNS):
             adamw_params.append((name, param))
-        elif param.ndim >= 2:
+        elif param.ndim == 2:
             muon_params.append(param)
         else:
             adamw_params.append((name, param))
