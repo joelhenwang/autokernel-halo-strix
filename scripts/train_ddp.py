@@ -215,19 +215,19 @@ def build_muon_optimizer(model, base_lr=0.0012, muon_lr=0.005, weight_decay=0.1)
 class PreTokenizedDataset(Dataset):
     def __init__(self, bin_path: str, block_size: int = 256):
         self.block_size = block_size
-        raw = np.memmap(bin_path, dtype=np.uint16, mode='r')
-        n_tokens = len(raw)
-        n_chunks = n_tokens // (block_size + 1)
-        usable = np.array(raw[: n_chunks * (block_size + 1)])
-        self.tokens = torch.from_numpy(usable).view(n_chunks, block_size + 1)
+        self.stride = block_size + 1
+        self.data = np.memmap(bin_path, dtype=np.uint16, mode='r')
+        self.n_tokens = len(self.data)
+        self.n_chunks = self.n_tokens // self.stride
         if dist.is_initialized():
-            print(f"[rank {dist.get_rank()}] Dataset: {n_tokens:,} tokens -> {n_chunks:,} chunks of {block_size}")
+            print(f"[rank {dist.get_rank()}] Dataset: {self.n_tokens:,} tokens -> {self.n_chunks:,} chunks of {block_size}")
 
     def __len__(self):
-        return len(self.tokens)
+        return self.n_chunks
 
     def __getitem__(self, idx):
-        chunk = self.tokens[idx].long()
+        start = idx * self.stride
+        chunk = torch.from_numpy(self.data[start:start + self.stride].astype(np.int64))
         return chunk[:-1], chunk[1:]
 
 

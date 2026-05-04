@@ -37,13 +37,13 @@ class BabyLMDataset(Dataset):
                 import tiktoken
                 enc = tiktoken.get_encoding(tokenizer_name)
                 self.vocab_size = enc.n_vocab
-            raw = np.memmap(str(root), dtype=np.uint16, mode='r')
-            n_tokens = len(raw)
-            n_chunks = n_tokens // (block_size + 1)
-            usable = np.array(raw[: n_chunks * (block_size + 1)])
-            self.tokens = torch.from_numpy(usable).view(n_chunks, block_size + 1)
+            self._mmap = np.memmap(str(root), dtype=np.uint16, mode='r')
+            n_tokens = len(self._mmap)
+            self._stride = block_size + 1
+            self._n_chunks = n_tokens // self._stride
             self._uint16 = True
-            print(f"BabyLMDataset: {n_tokens:,} tokens (pre-tokenized .bin) -> {n_chunks:,} chunks of {block_size}")
+            self.tokens = None
+            print(f"BabyLMDataset: {n_tokens:,} tokens (pre-tokenized .bin, mmap) -> {self._n_chunks:,} chunks of {block_size}")
             return
 
         if not root.exists():
@@ -158,14 +158,18 @@ class BabyLMDataset(Dataset):
         return None, texts
 
     def __len__(self) -> int:
+        if getattr(self, '_uint16', False):
+            return self._n_chunks
         return len(self.tokens)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        chunk = self.tokens[idx]
         if getattr(self, '_uint16', False):
-            chunk = chunk.long()
-        x = chunk[:-1]       # input_ids
-        y = chunk[1:]         # targets (shifted by 1)
+            start = idx * self._stride
+            chunk = torch.from_numpy(self._mmap[start:start + self._stride].astype(np.int64))
+        else:
+            chunk = self.tokens[idx]
+        x = chunk[:-1]
+        y = chunk[1:]
         return x, y
 
 
