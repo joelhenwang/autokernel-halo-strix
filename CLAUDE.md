@@ -39,8 +39,11 @@ uv run python verify.py --model models/llama_7b.py --class-name LlamaModel --inp
 
 # Training (always use --epochs, minimum 1)
 python -m halo_training --model models/llama_7b.py --class-name LlamaModel --dataset babylm --epochs 1
-python -m halo_training --model models/llama_7b.py --class-name LlamaModel --compile --optimize-kernels --epochs 1
-python -m halo_training --model models/tyr_halo.py --class-name TyrHaloLight --dataset datasets/stem-crawl-solo.bin --compile --optimize-kernels --muon --mtp --ema --lr 0.002 --epochs 1
+python -m halo_training --model models/vidar_halo.py --class-name VidarHalo --dataset datasets/dolma-10b-vidar32k.bin --tokenizer-path tokenizers/vidar-32k/tokenizer.json --compile --optimize-kernels --mtp --ema --lr 0.002 --scheduler wsd --z-loss 1e-4 --epochs 1
+
+# Custom tokenizer training + pretokenization
+python scripts/train_tokenizer.py --input datasets/dolma-10b-sample --output tokenizers/vidar-32k --vocab-size 32000
+python scripts/pretokenize.py --input datasets/dolma-10b-sample --output datasets/dolma-10b-vidar32k.bin --tokenizer-path tokenizers/vidar-32k/tokenizer.json --workers 14
 ```
 
 ## Workflow
@@ -59,7 +62,8 @@ python -m halo_training --model models/tyr_halo.py --class-name TyrHaloLight --d
 ## Key Directories
 
 - `kernels/hip/` — 20+ HIP kernel types + `_compile.py` (compilation) + `_torch_ops.py` (torch.library custom ops)
-- `models/` — Self-contained model definitions (LLaMA, GPT-2, AMADEUS, TEMPEST, ARGUS-PRIME, JORMUNGANDR-HALO, CHIMERA-HALO, FENRIR-HALO, etc.)
+- `models/` — Self-contained model definitions (LLaMA, GPT-2, AMADEUS, TEMPEST, ARGUS-PRIME, JORMUNGANDR-HALO, CHIMERA-HALO, FENRIR-HALO, VIDAR-HALO, etc.)
+- `tokenizers/` — Custom trained tokenizers (vidar-32k: 32K BPE on dolma-10b)
 - `halo_training/` — Composable training stack (Mode A/B), CLI: `python -m halo_training`
 - `autokernel/` — Library API (`autokernel.optimize()`) with pattern matching + kernel replacement
 - `knowledge/` — Organized reference docs (hardware/, kernels/, training/, architectures/)
@@ -86,7 +90,9 @@ python -m halo_training --model models/tyr_halo.py --class-name TyrHaloLight --d
 - **Hyperloop HC streams too expensive on Strix Halo** — 35-41% throughput cost due to 240 GB/s bandwidth limit. Use `use_mhc=False` (default). Enable on H100/A100 hardware.
 - **EMA (--ema)** — Free generalization gain (TRM paper: +7.5%). Decay 0.999. EMA state saved in checkpoints. Use EMA weights for eval/inference.
 - **Check train_log.jsonl** for progress, don't rely on SSH stdout for long runs
-- **EOS token** (50256, `<|endoftext|>`) inserted between documents in `halo_training/data.py`
+- **EOS token** — GPT-2: id 50256; Vidar-32K: id 0. Check tokenizer config, don't hardcode.
+- **Large .bin datasets use memmap** — `halo_training/data.py` and `scripts/train_ddp.py` use `np.memmap` with per-batch `.astype(np.int64)` in `__getitem__`. No bulk memory allocation. Critical for dolma-10b (13.8 GB).
+- **_skip_autokernel flag** — momentum-free blocks (VidarShortConvBlock, VidarMoDAGQABlock) set `_skip_autokernel = True` to prevent incompatible FusedResidualRMSNorm matching. Sub-module optimizations (FusedQKV, FusedSwiGLU) still apply.
 - **Autokernel before checkpoint load** — fused QKV keys must exist before `load_state_dict()`
 - **Checkpoints are fp32** — fp16/bf16 only exists inside AMP autocast. Safe to load across hardware (AMD→NVIDIA).
 - **Final checkpoint always saved** — trainer auto-saves at end of training (including time-budget cutoff). Use `--checkpoint-interval 999999` to skip intermediate saves.
@@ -98,7 +104,8 @@ python -m halo_training --model models/tyr_halo.py --class-name TyrHaloLight --d
 
 - **Phase 1:** Beat LFM2.5-350M on standard benchmarks (HellaSwag, ARC, MMLU)
 - **Phase 2:** Instruction-tune for on-device Strix Halo assistant
-- **Dataset funnel:** smoke -> BabyLM -> GPT-training-small -> Dolma 10B -> Dolma 100B
+- **Active model:** VIDAR-HALO (47M unique, d=768, no momentum, custom 32K tokenizer)
+- **Dataset funnel:** smoke -> BabyLM -> stem-crawl-solo (544M) -> Dolma 10B (6.9B tokens, vidar-32k) -> Dolma 100B
 
 ## Where to Find Everything Else
 
