@@ -404,7 +404,7 @@ def train(
                     # Logging
                     if global_step % log_interval == 0:
                         elapsed = time.time() - start_time
-                        tp = throughput.get_stats()
+                        tp = throughput.get_interval_stats()
                         avg_loss = running_loss / log_interval
                         bpb = compute_bpb(avg_loss)
                         lr = scheduler.get_last_lr()[0]
