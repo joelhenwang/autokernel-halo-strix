@@ -556,8 +556,7 @@ def main():
 
     model.train()
 
-    # DDP wrapper — find_unused_parameters needed for TTT conditional paths
-    model = DDP(model, device_ids=[0], find_unused_parameters=True,
+    model = DDP(model, device_ids=[0], find_unused_parameters=False,
                 gradient_as_bucket_view=True)
 
     # torch.compile AFTER DDP
