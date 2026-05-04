@@ -451,6 +451,8 @@ class RMSNormPattern(Pattern):
         super().__init__("rmsnorm", priority=50, op_speedup=3.3)
 
     def matches(self, name: str, module: nn.Module, model: nn.Module) -> bool:
+        if isinstance(module, torch.nn.RMSNorm):
+            return False
         cls_name = type(module).__name__
         return (
             cls_name in _RMSNORM_CLASS_NAMES

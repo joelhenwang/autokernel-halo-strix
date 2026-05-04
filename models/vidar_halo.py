@@ -15,7 +15,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.amadeus import RMSNorm, SwiGLU, GatedConv
+from models.amadeus import SwiGLU, GatedConv
+
+RMSNorm = torch.nn.RMSNorm
 from models.argus import precompute_freqs_cis
 from models.chimera_halo import FactorizedEmbedding, FactorizedLMHead
 from models.griffin_halo import SimpleParcaeInjection
