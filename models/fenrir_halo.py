@@ -69,6 +69,7 @@ class XSAGQABlock(nn.Module):
 
         beta = torch.sigmoid(self.log_beta)
         velocity = beta * velocity + attn_out
+        velocity = velocity.clamp(-8.0, 8.0)
 
         x = x + velocity
         rms = torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
