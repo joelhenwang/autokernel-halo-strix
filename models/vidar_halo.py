@@ -18,13 +18,16 @@ import torch.nn.functional as F
 from models.amadeus import SwiGLU, GatedConv
 
 
-class RMSNorm(torch.nn.RMSNorm):
-    """RMSNorm that keeps weight in input dtype for fused kernel dispatch."""
+class RMSNorm(torch.nn.Module):
+    """RMSNorm using torch.rms_norm with fp16-safe weight casting."""
+
+    def __init__(self, d: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = torch.nn.Parameter(torch.ones(d))
 
     def forward(self, x):
-        if self.weight.dtype != x.dtype:
-            self.weight.data = self.weight.data.to(x.dtype)
-        return super().forward(x)
+        return torch.rms_norm(x, (x.size(-1),), self.weight.to(x.dtype), self.eps)
 from models.argus import precompute_freqs_cis
 from models.chimera_halo import FactorizedEmbedding, FactorizedLMHead
 from models.griffin_halo import SimpleParcaeInjection
