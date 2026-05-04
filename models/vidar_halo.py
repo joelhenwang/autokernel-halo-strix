@@ -25,6 +25,8 @@ class NativeRMSNorm(torch.nn.Module):
     classes named 'RMSNorm' with a slower HIP kernel).
     """
 
+    _native_norm = True
+
     def __init__(self, d: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps

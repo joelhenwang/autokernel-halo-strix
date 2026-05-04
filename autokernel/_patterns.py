@@ -453,6 +453,8 @@ class RMSNormPattern(Pattern):
     def matches(self, name: str, module: nn.Module, model: nn.Module) -> bool:
         if isinstance(module, torch.nn.RMSNorm):
             return False
+        if getattr(module, "_native_norm", False):
+            return False
         cls_name = type(module).__name__
         return (
             cls_name in _RMSNORM_CLASS_NAMES
