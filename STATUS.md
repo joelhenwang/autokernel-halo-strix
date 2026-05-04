@@ -99,16 +99,27 @@ Pre-compile required: `python scripts/precompile_kernels.py --model models/vidar
 
 | Config | tok/s | Memory | Notes |
 |--------|-------|--------|-------|
-| bs=16 accum=4 eager+AK | 8,470 | 4.3 GB | Original config |
-| bs=32 accum=1 eager+AK | 10,333 | 7.9 GB | Bigger batch helps |
-| bs=32 accum=2 compiled+AK | **11,104** | 7.9 GB | **Best for Tier S** |
-| bs=64 accum=1 compiled+AK | 11,084 | 15.1 GB | No gain over bs=32, 2x memory |
+| bs=32 accum=2 eager (no AK) | **10,333** | 7.9 GB | **Use for Tier S** — zero startup cost |
+| bs=32 accum=2 eager+AK | 7,200 | 16.9 GB | AK adds chunked CE (30+ min compile) |
+| bs=32 accum=2 compiled+AK | 11,104 | 7.9 GB | +7% but 25+ min Inductor compile |
+
+**Tier S config: eager, no compile, no AK. 10.3K tok/s, BabyLM 1ep ≈ 27 min.**
 
 Key findings:
 - MTP dropped: 45% throughput cost, no quality evidence at sub-100M scale
 - torch.rms_norm replaces HIP RMSNorm: 15.5ms→2.1ms per call (7.5x)
 - Depth-reduced (2L) not width-reduced (d=384): same GEMM shapes as production
-- ~11K ceiling for d=768 single machine — hardware bandwidth bound at 240 GB/s
+- ~10K ceiling for d=768 single machine eager — bandwidth bound at 240 GB/s
+- Compile/AK only worth it for runs >1 hour (Tier M/V) where compile cost amortizes
+
+### First Ablation Results (Tier S, BabyLM 1ep, d=768 2L×2iter)
+
+| Config | Final Loss | BPB | tok/s | Notes |
+|--------|-----------|-----|-------|-------|
+| Baseline | 6.73 | 2.698 | 7.2K | With AK (first run) |
+| P1a (Polar-Express NS) | 6.72 | 2.693 | 7.2K | -0.01 loss (noise) |
+
+**P1a verdict:** No meaningful gain at screening scale. Keep for Tier M test (may help more with longer training + larger matrices).
 
 ---
 
