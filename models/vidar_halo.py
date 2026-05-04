@@ -291,24 +291,28 @@ class VidarHaloMini(VidarHaloBase):
 
 
 class VidarHaloAblation(VidarHaloBase):
-    """Ablation variant: d=384, 4 layers, ~18M params.
+    """Ablation variant: d=768, 2 layers (1 ShortConv + 1 GQA) × 2 iters, ~30M unique.
 
-    d_conv=320 (>256 threshold) enables autokernel.
-    Targets ~12 min for 1 epoch on BabyLM at seq=512.
+    Same width as production VidarHalo — keeps GEMM shapes, autokernel patterns,
+    and vocab matmul ratio identical. Depth-reduced for fast screening.
 
-    All technique flags default off (baseline = standard VidarHalo at d=384).
+    All technique flags default off (baseline = standard VidarHalo at d=768, fewer layers).
     """
 
     def __init__(self, iter_scales_enabled=False, softcap=False,
                  delayed_recurrence=False, delayed_soft=False,
                  parallel_residuals=False, skip_connection=False, **kw):
-        kw.setdefault("d_model", 384)
-        kw.setdefault("embed_rank", 192)
-        kw.setdefault("n_heads", 6)
-        kw.setdefault("n_kv_heads", 2)
-        kw.setdefault("ffn_inner", 1408)
-        kw.setdefault("d_conv", 320)
+        kw.setdefault("d_model", 768)
+        kw.setdefault("embed_rank", 384)
+        kw.setdefault("n_shared_layers", 2)
+        kw.setdefault("gqa_positions", (1,))
+        kw.setdefault("n_heads", 12)
+        kw.setdefault("n_kv_heads", 4)
+        kw.setdefault("ffn_inner", 2816)
+        kw.setdefault("d_conv", 640)
         kw.setdefault("conv_kernel", 3)
+        kw.setdefault("mean_recurrence", 2)
+        kw.setdefault("backprop_depth", 2)
         super().__init__(**kw)
 
         self._softcap = softcap
