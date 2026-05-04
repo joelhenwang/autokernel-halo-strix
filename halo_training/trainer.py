@@ -178,7 +178,8 @@ def train(
     if use_ema:
         from torch.optim.swa_utils import AveragedModel
         ema_model = AveragedModel(model,
-            multi_avg_fn=lambda avg, model, num: avg * ema_decay + model * (1 - ema_decay))
+            multi_avg_fn=lambda avg_params, model_params, num: [
+                a * ema_decay + m * (1 - ema_decay) for a, m in zip(avg_params, model_params)])
         print(f"EMA enabled (decay={ema_decay})")
 
     # --- Setup data ---
