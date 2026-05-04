@@ -40,8 +40,9 @@ class BabyLMDataset(Dataset):
             raw = np.memmap(str(root), dtype=np.uint16, mode='r')
             n_tokens = len(raw)
             n_chunks = n_tokens // (block_size + 1)
-            usable = raw[: n_chunks * (block_size + 1)].astype(np.int32)
+            usable = np.array(raw[: n_chunks * (block_size + 1)])
             self.tokens = torch.from_numpy(usable).view(n_chunks, block_size + 1)
+            self._uint16 = True
             print(f"BabyLMDataset: {n_tokens:,} tokens (pre-tokenized .bin) -> {n_chunks:,} chunks of {block_size}")
             return
 
@@ -51,6 +52,7 @@ class BabyLMDataset(Dataset):
                 f"Expected .bin, parquet, .jsonl.zst, or text files."
             )
 
+        self._uint16 = False
         # Load pre-tokenized or raw text
         pre_tokens, texts = self._load_tokens_or_texts(root)
 
@@ -160,6 +162,8 @@ class BabyLMDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         chunk = self.tokens[idx]
+        if getattr(self, '_uint16', False):
+            chunk = chunk.long()
         x = chunk[:-1]       # input_ids
         y = chunk[1:]         # targets (shifted by 1)
         return x, y
