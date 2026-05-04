@@ -86,6 +86,12 @@ def main():
                         help="Weight decay at start (for WSD annealing)")
     parser.add_argument("--wd-end", type=float, default=0.01,
                         help="Weight decay at end of decay phase")
+    parser.add_argument("--min-lr-ratio", type=float, default=0.0,
+                        help="Minimum LR ratio for WSD/cosine decay floor (e.g., 0.1 = 10%%%% of peak)")
+    parser.add_argument("--polar-ns", action="store_true",
+                        help="Use Polar-Express NS coefficients in Muon optimizer")
+    parser.add_argument("--model-kwarg", action="append", default=[],
+                        help="Model constructor kwargs as key=value (repeatable)")
     parser.add_argument("--system-prompt", default="You are a helpful assistant.",
                         help="System prompt for ChatML formatting")
     parser.add_argument("--no-packing", action="store_true",
@@ -110,7 +116,23 @@ def main():
 
     # Load model
     sys.path.insert(0, ".")
-    model = load_model_from_file(args.model, args.class_name)
+    model_kwargs = {}
+    for kv in args.model_kwarg:
+        key, val = kv.split("=", 1)
+        if val.lower() == "true":
+            val = True
+        elif val.lower() == "false":
+            val = False
+        else:
+            try:
+                val = int(val)
+            except ValueError:
+                try:
+                    val = float(val)
+                except ValueError:
+                    pass
+        model_kwargs[key] = val
+    model = load_model_from_file(args.model, args.class_name, **model_kwargs)
 
     # --- Phase-specific setup ---
     loss_fn = None
@@ -258,6 +280,8 @@ def main():
         tokenizer_path=args.tokenizer_path,
         wd_start=args.wd_start,
         wd_end=args.wd_end,
+        min_lr_ratio=args.min_lr_ratio,
+        polar_ns=args.polar_ns,
     )
 
     print(f"\nFinal stats: {stats}")

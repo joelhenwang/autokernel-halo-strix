@@ -288,3 +288,125 @@ class VidarHaloMini(VidarHaloBase):
         kw.setdefault("mean_recurrence", 2)
         kw.setdefault("backprop_depth", 2)
         super().__init__(**kw)
+
+
+class VidarHaloAblation(VidarHaloBase):
+    """Ablation variant: d=384, 4 layers, ~18M params.
+
+    d_conv=320 (>256 threshold) enables autokernel.
+    Targets ~12 min for 1 epoch on BabyLM at seq=512.
+
+    All technique flags default off (baseline = standard VidarHalo at d=384).
+    """
+
+    def __init__(self, iter_scales_enabled=False, softcap=False,
+                 delayed_recurrence=False, delayed_soft=False,
+                 parallel_residuals=False, skip_connection=False, **kw):
+        kw.setdefault("d_model", 384)
+        kw.setdefault("embed_rank", 192)
+        kw.setdefault("n_heads", 6)
+        kw.setdefault("n_kv_heads", 2)
+        kw.setdefault("ffn_inner", 1408)
+        kw.setdefault("d_conv", 320)
+        kw.setdefault("conv_kernel", 3)
+        super().__init__(**kw)
+
+        self._softcap = softcap
+        self._delayed_recurrence = delayed_recurrence
+        self._delayed_soft = delayed_soft
+        self._parallel_residuals = parallel_residuals
+        self._skip_connection = skip_connection
+
+        if iter_scales_enabled:
+            self.iter_output_scales = nn.Parameter(torch.ones(self.mean_recurrence))
+
+        if skip_connection:
+            self.skip_gate = nn.Parameter(torch.zeros(self.d_model))
+
+        if parallel_residuals:
+            self.par_mix = nn.Parameter(torch.tensor([1.0, 0.0, 0.0, 1.0]))
+            self.par_res_scale = nn.Parameter(torch.ones(2))
+
+        self._current_step = 0
+        self._total_steps = 1
+
+    def set_training_progress(self, current_step: int, total_steps: int):
+        self._current_step = current_step
+        self._total_steps = total_steps
+
+    def _run_shared_block(self, h, freqs_cis, depth_kv_buffer):
+        current_kvs = {}
+        for idx, (layer, is_gqa) in enumerate(zip(self.shared_layers, self._is_gqa)):
+            if is_gqa:
+                prior_kvs = None
+                if self.use_moda and depth_kv_buffer:
+                    prior_kvs = [buf[idx] for buf in depth_kv_buffer if idx in buf]
+                    if not prior_kvs:
+                        prior_kvs = None
+                if self._parallel_residuals:
+                    attn_out = layer.attn(layer.pre_norm(h), freqs_cis, depth_kvs=prior_kvs)
+                    ffn_out = layer.ffn(layer.ffn_norm(h))
+                    m = self.par_mix
+                    lane0 = self.par_res_scale[0] * h + m[0] * attn_out + m[2] * ffn_out
+                    lane1 = self.par_res_scale[1] * h + m[1] * attn_out + m[3] * ffn_out
+                    h = 0.5 * (lane0 + lane1)
+                else:
+                    h = layer(h, freqs_cis, depth_kvs=prior_kvs)
+                if self.use_moda:
+                    current_kvs[idx] = layer.compute_depth_kv(h.detach())
+            else:
+                h = layer(h)
+        return h, current_kvs
+
+    def _apply_iter_norm(self, h, i):
+        h = self.iter_norm(h)
+        if hasattr(self, "iter_output_scales"):
+            h = h * self.iter_output_scales[i]
+        return h + self.loop_pos_embeds[i]
+
+    def _forward_unrolled(self, input_ids):
+        B, T = input_ids.shape
+        h = self.tok_embeddings(input_ids)
+        freqs_cis = self.freqs_cis[:T]
+        input_embed = h
+        depth_kv_buffer = []
+
+        flat_phase = (self._delayed_recurrence and
+                      self._current_step < 0.35 * self._total_steps)
+
+        if flat_phase:
+            h, current_kvs = self._run_shared_block(h, freqs_cis, depth_kv_buffer)
+            h = self._apply_iter_norm(h, 0)
+        else:
+            h, current_kvs = self._run_shared_block(h, freqs_cis, depth_kv_buffer)
+            h = self._apply_iter_norm(h, 0)
+            if current_kvs:
+                depth_kv_buffer.append(current_kvs)
+
+            h0_skip = h if self._skip_connection else None
+
+            for i in range(1, self.mean_recurrence):
+                if self._delayed_recurrence and self._delayed_soft:
+                    act_step = int(0.35 * self._total_steps)
+                    ramp = max(0.0, min(1.0, (self._current_step - act_step) / 500.0))
+                    h_inj = self.injection(h, input_embed)
+                    h = h + ramp * (h_inj - h)
+                else:
+                    h = self.injection(h, input_embed)
+
+                if self._skip_connection and h0_skip is not None:
+                    h = h + torch.sigmoid(self.skip_gate) * h0_skip
+
+                h, current_kvs = self._run_shared_block(h, freqs_cis, depth_kv_buffer)
+                h = self._apply_iter_norm(h, i)
+                if current_kvs:
+                    depth_kv_buffer.append(current_kvs)
+
+        logits = self.lm_head(self.norm(h))
+
+        if self._softcap:
+            logits = 30.0 * torch.tanh(logits / 30.0)
+
+        if self.training and self.use_mtp and hasattr(self, "mtp_head"):
+            return {"logits": logits, "mtp1": self.mtp_head(h)}
+        return logits

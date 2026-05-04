@@ -39,6 +39,7 @@ def build_optimizer(
     use_cpu_adam: bool = False,
     use_muon: bool = False,
     muon_lr: float = 0.005,
+    polar_ns: bool = False,
 ) -> torch.optim.Optimizer:
     """Build optimizer with COOKBOOK.md param group rules.
 
@@ -59,7 +60,7 @@ def build_optimizer(
         muon_lr: Learning rate for Muon params (default 0.02, different scale from AdamW).
     """
     if use_muon:
-        return _build_muon_optimizer(model, base_lr, muon_lr, weight_decay)
+        return _build_muon_optimizer(model, base_lr, muon_lr, weight_decay, polar_ns=polar_ns)
 
     groups = _build_param_groups(model, base_lr, weight_decay)
 
@@ -85,6 +86,7 @@ def _build_muon_optimizer(
     adamw_lr: float,
     muon_lr: float,
     weight_decay: float,
+    polar_ns: bool = False,
 ) -> torch.optim.Optimizer:
     """Build Muon optimizer: 2D weights get Muon, rest gets AdamW."""
     from halo_training.muon import Muon, split_params_for_muon
@@ -118,6 +120,7 @@ def _build_muon_optimizer(
         weight_decay=0.01,
         adamw_params=adamw_groups,
         adamw_lr=adamw_lr,
+        polar_ns=polar_ns,
     )
 
 

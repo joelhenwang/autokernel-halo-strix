@@ -56,6 +56,8 @@ def train(
     tokenizer_path: Optional[str] = None,
     wd_start: float = 0.1,
     wd_end: float = 0.01,
+    min_lr_ratio: float = 0.0,
+    polar_ns: bool = False,
 ) -> Dict[str, Any]:
     """Train a model using Mode A (direct) or Mode B (layer-streaming).
 
@@ -202,7 +204,7 @@ def train(
     dataloader = build_dataloader(dataset, batch_size=batch_size, num_workers=num_workers)
 
     # --- Setup optimizer (NEVER compile this) ---
-    optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon)
+    optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon, polar_ns=polar_ns)
 
     total_steps = len(dataloader) * epochs // accum_steps
     if max_steps:
@@ -210,7 +212,7 @@ def train(
     if scheduler_type == "wsd":
         scheduler = build_wsd_scheduler(
             optimizer, total_steps, warmup_steps=warmup_steps,
-            wd_start=wd_start, wd_end=wd_end)
+            min_lr_ratio=min_lr_ratio, wd_start=wd_start, wd_end=wd_end)
     else:
         scheduler = build_scheduler(optimizer, total_steps, warmup_steps=warmup_steps)
 
@@ -383,6 +385,10 @@ def train(
                     if ema_model is not None:
                         ema_model.update_parameters(model)
                     global_step += 1
+
+                    raw_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+                    if hasattr(raw_model, "set_training_progress"):
+                        raw_model.set_training_progress(global_step, total_steps)
 
                     if context_schedule and dataset_root:
                         for frac, new_bs in context_schedule:

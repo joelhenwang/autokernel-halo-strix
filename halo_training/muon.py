@@ -41,6 +41,35 @@ def zeropower_via_newtonschulz5(G, steps=5, dtype=None):
     return X.to(G.dtype)
 
 
+_PE_COEFFS = (
+    (8.156554524902461, -22.48329292557795, 15.878769915207462),
+    (4.042929935166739, -2.808917465908714, 0.5000178451051316),
+    (3.8916678022926607, -2.772484153217685, 0.5060648178503393),
+    (3.285753657755655, -2.3681294933425376, 0.46449024233003106),
+    (2.3465413258596377, -1.7097828382687081, 0.42323551169305323),
+)
+
+
+def zeropower_via_polar_express(G, steps=5, dtype=None):
+    """Polar-Express: per-iteration minimax-optimized NS coefficients (arXiv:2505.16932)."""
+    assert G.ndim == 2
+    X = G.to(dtype or torch.float32)
+    if X.shape[0] > X.shape[1]:
+        X = X.T
+        transposed = True
+    else:
+        transposed = False
+    X = X / (X.norm() * 1.02 + 1e-7)
+    for i in range(steps):
+        a, b, c = _PE_COEFFS[i]
+        A = X @ X.T
+        B = b * A + c * A @ A
+        X = a * X + B @ X
+    if transposed:
+        X = X.T
+    return X.to(G.dtype)
+
+
 # NOTE: Do NOT torch.compile the NS function — each unique weight shape
 # triggers a separate compilation graph, causing massive memory blowup
 # (29 GB for 193 params). The eager NS is only ~5 matmuls per param,
@@ -78,8 +107,10 @@ class Muon(torch.optim.Optimizer):
         adamw_betas=(0.9, 0.95),
         adamw_wd=0.0,
         ns_dtype=None,
+        polar_ns=False,
     ):
         self.ns_dtype = ns_dtype
+        self._polar_ns = polar_ns
         # Build Muon param groups
         if isinstance(muon_params, dict):
             muon_params = [muon_params]
@@ -152,7 +183,7 @@ class Muon(torch.optim.Optimizer):
         ns_steps = group["ns_steps"]
         wd = group["weight_decay"]
 
-        ns_fn = zeropower_via_newtonschulz5
+        ns_fn = zeropower_via_polar_express if self._polar_ns else zeropower_via_newtonschulz5
 
         for p in group["params"]:
             if p.grad is None:
