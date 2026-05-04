@@ -502,6 +502,7 @@ def main():
     parser.add_argument("--optimize-kernels", action="store_true")
     parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--time-budget", type=float, default=0, help="Minutes, 0=unlimited")
+    parser.add_argument("--max-steps", type=int, default=0, help="Stop after N optimizer steps, 0=unlimited")
     parser.add_argument("--backend", default="gloo", choices=["nccl", "gloo"])
     parser.add_argument("--no-async", action="store_true", help="Disable async allreduce overlap")
     parser.add_argument("--no-fp16-compress", action="store_true", help="Disable fp16 grad compression")
@@ -660,6 +661,10 @@ def main():
                 if deadline and time.time() > deadline:
                     if rank == 0:
                         print(f"Time budget reached at step {global_step}")
+                    break
+                if args.max_steps > 0 and global_step >= args.max_steps:
+                    if rank == 0:
+                        print(f"Max steps reached: {global_step}")
                     break
 
                 input_ids = input_ids.to(device)
