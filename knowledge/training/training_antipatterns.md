@@ -54,6 +54,9 @@ tags: [%antipatterns, %optimization, %patterns, %rocblas, %rocm, %hip, %training
 - **Progressive narrowing bridges quality-throughput gap**: One d=768 Griffin iteration → proj_down → d=512 ShortConv×3 refinement iters achieves 33.1K tok/s at loss 5.545 (beats JORMUNGANDR-HALO's 5.770 at 33.7K). The wide first iteration provides global context that makes cheap narrow iterations more effective.
 - **Lean architecture viable at d=768**: Cutting Prelude from 2→1 layers and Coda from 4→2 layers gives +21% throughput (25.8K) at only +10.7% quality cost (3.535 vs 3.193). The unique layer overhead (Prelude+Coda) accounts for ~52% of d=768 forward time.
 - **MTP costs 45% throughput at small d**: At d=384 (VidarHaloAblation), MTP drops tok/s from 11.4K→6.2K. Two 32K-vocab matmuls (main logits + MTP head) dominate when model compute is small. At d=768 it's still ~20% overhead. DSV3's MTP gains were at 671B/14.8T scale — no evidence it helps sub-100M/sub-10B. **Drop --mtp for all training.** More tokens > fancier loss at our scale.
+- **Width-reduced ablation models are vocab-bottlenecked**: d=384 with 32K vocab: LM head matmul dominates (vocab is 83× larger than d). Use depth-reduced variants (fewer layers at same d=768) for screening. Same GEMM shapes as production, representative throughput ratios.
+- **Autokernel HIP RMSNorm is 15x slower than torch.nn.RMSNorm**: Custom HIP kernel: 15.5ms. Custom Python: 7ms. `torch.rms_norm` with fp16 weight: 1.1ms. Use `torch.rms_norm(x, (d,), weight.to(x.dtype), eps)` for fused dispatch. Skip autokernel RMSNorm replacement for models using native `torch.rms_norm`.
+- **Ablation sweet spot: bs=32 accum=2 compiled**: At d=768 on Strix Halo, throughput plateaus ~11K tok/s. bs=32 accum=2 = effective batch 64, 8GB, 11.1K compiled. Doubling batch to 64 gives +0% tok/s but 2× memory.
 
 ## XSA + Depth Memory Cache (Ablation Results)
 

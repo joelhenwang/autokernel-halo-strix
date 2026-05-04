@@ -95,6 +95,21 @@ Pre-compile required: `python scripts/precompile_kernels.py --model models/vidar
 
 **Note:** Prior 63K and 41K numbers were cumulative averages inflated by Inductor warmup ramp. Real instantaneous throughput is ~13K per machine, ~26K global DDP. Metric fixed to instantaneous in train_ddp.py.
 
+### Ablation Throughput (VidarHaloAblation, d=768, 2L×2iter, 30M, single machine)
+
+| Config | tok/s | Memory | Notes |
+|--------|-------|--------|-------|
+| bs=16 accum=4 eager+AK | 8,470 | 4.3 GB | Original config |
+| bs=32 accum=1 eager+AK | 10,333 | 7.9 GB | Bigger batch helps |
+| bs=32 accum=2 compiled+AK | **11,104** | 7.9 GB | **Best for Tier S** |
+| bs=64 accum=1 compiled+AK | 11,084 | 15.1 GB | No gain over bs=32, 2x memory |
+
+Key findings:
+- MTP dropped: 45% throughput cost, no quality evidence at sub-100M scale
+- torch.rms_norm replaces HIP RMSNorm: 15.5ms→2.1ms per call (7.5x)
+- Depth-reduced (2L) not width-reduced (d=384): same GEMM shapes as production
+- ~11K ceiling for d=768 single machine — hardware bandwidth bound at 240 GB/s
+
 ---
 
 ## Machine Info
