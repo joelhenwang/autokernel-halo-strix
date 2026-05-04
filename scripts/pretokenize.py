@@ -1,13 +1,19 @@
-"""Pre-tokenize a dataset of .jsonl.zst files into a single binary token file.
+"""Pre-tokenize a dataset into a binary token file.
 
-Reads all .jsonl.zst files recursively, tokenizes with tiktoken GPT-2,
-and saves as a flat numpy array of uint16 token IDs. The output can be
-memory-mapped for fast training without re-tokenizing.
+Supports multiprocessing for parallel tokenization and sharding for
+multi-machine pipelines.
 
 Usage:
-    python scripts/pretokenize.py \
-        --input datasets/common_crawl_sample \
-        --output datasets/common_crawl_sample.bin
+    # Single machine, all cores:
+    python scripts/pretokenize.py --input datasets/dolma --output datasets/dolma.bin \
+        --tokenizer-path tokenizers/vidar-32k/tokenizer.json --workers 16
+
+    # Multi-machine: each machine processes a shard, then cat:
+    python scripts/pretokenize.py --input datasets/dolma --output /tmp/shard0.bin \
+        --shard-id 0 --num-shards 2 --workers 16
+    python scripts/pretokenize.py --input datasets/dolma --output /tmp/shard1.bin \
+        --shard-id 1 --num-shards 2 --workers 16
+    cat /tmp/shard0.bin /tmp/shard1.bin > datasets/dolma.bin
 
 Output format: raw uint16 array, loadable with np.memmap or np.fromfile.
 """
@@ -16,24 +22,26 @@ import argparse
 import io
 import json
 import os
-import struct
 import sys
+from multiprocessing import Pool
 from pathlib import Path
 
 import numpy as np
-import tiktoken
 
 
-def iter_texts_jsonl_zst(root: Path):
-    """Yield text strings from all .jsonl.zst files under root."""
-    import zstandard
+def _tokenize_file_tiktoken(args):
+    """Worker: tokenize one file with tiktoken. Returns (tokens_array, n_docs)."""
+    fpath, tokenizer_name, eos = args
+    import tiktoken
+    enc = tiktoken.get_encoding(tokenizer_name)
+    tokens = []
+    n_docs = 0
+    fpath = Path(fpath)
 
-    zst_files = sorted(root.rglob("*.jsonl.zst"))
-    print(f"Found {len(zst_files)} .jsonl.zst files")
-
-    for i, f in enumerate(zst_files):
+    if fpath.suffix == ".zst":
+        import zstandard
         dctx = zstandard.ZstdDecompressor()
-        with open(f, "rb") as fh:
+        with open(fpath, "rb") as fh:
             reader = dctx.stream_reader(fh)
             text_reader = io.TextIOWrapper(reader, encoding="utf-8")
             for line in text_reader:
@@ -43,34 +51,70 @@ def iter_texts_jsonl_zst(root: Path):
                     continue
                 text = row.get("text", "")
                 if text.strip():
-                    yield text
-
-        if (i + 1) % 10 == 0:
-            print(f"  Processed {i + 1}/{len(zst_files)} files...")
-
-
-def iter_texts_parquet(root: Path):
-    """Yield text strings from all .parquet files under root."""
-    import pyarrow.parquet as pq
-
-    parquet_files = sorted(root.rglob("*.parquet"))
-    print(f"Found {len(parquet_files)} .parquet files")
-
-    for f in parquet_files:
-        table = pq.read_table(f)
+                    tokens.extend(enc.encode_ordinary(text))
+                    tokens.append(eos)
+                    n_docs += 1
+    elif fpath.suffix == ".parquet":
+        import pyarrow.parquet as pq
+        table = pq.read_table(fpath)
         if "text" in table.column_names:
             for text in table["text"].to_pylist():
                 if text and text.strip():
-                    yield text
+                    tokens.extend(enc.encode_ordinary(text))
+                    tokens.append(eos)
+                    n_docs += 1
+    else:
+        text = fpath.read_text(encoding="utf-8")
+        if text.strip():
+            tokens.extend(enc.encode_ordinary(text))
+            tokens.append(eos)
+            n_docs += 1
+
+    return np.array(tokens, dtype=np.uint16) if tokens else np.array([], dtype=np.uint16), n_docs
 
 
-def iter_texts_plain(root: Path):
-    """Yield text strings from .txt and .train files."""
-    for ext in ("*.train", "*.txt"):
-        for f in sorted(root.glob(ext)):
-            text = f.read_text(encoding="utf-8")
-            if text.strip():
-                yield text
+def _tokenize_file_hf(args):
+    """Worker: tokenize one file with HuggingFace tokenizer. Returns (tokens_array, n_docs)."""
+    fpath, tokenizer_path, eos = args
+    from tokenizers import Tokenizer as HFTokenizer
+    tok = HFTokenizer.from_file(tokenizer_path)
+    tokens = []
+    n_docs = 0
+    fpath = Path(fpath)
+
+    if fpath.suffix == ".zst":
+        import zstandard
+        dctx = zstandard.ZstdDecompressor()
+        with open(fpath, "rb") as fh:
+            reader = dctx.stream_reader(fh)
+            text_reader = io.TextIOWrapper(reader, encoding="utf-8")
+            for line in text_reader:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                text = row.get("text", "")
+                if text.strip():
+                    tokens.extend(tok.encode(text).ids)
+                    tokens.append(eos)
+                    n_docs += 1
+    elif fpath.suffix == ".parquet":
+        import pyarrow.parquet as pq
+        table = pq.read_table(fpath)
+        if "text" in table.column_names:
+            for text in table["text"].to_pylist():
+                if text and text.strip():
+                    tokens.extend(tok.encode(text).ids)
+                    tokens.append(eos)
+                    n_docs += 1
+    else:
+        text = fpath.read_text(encoding="utf-8")
+        if text.strip():
+            tokens.extend(tok.encode(text).ids)
+            tokens.append(eos)
+            n_docs += 1
+
+    return np.array(tokens, dtype=np.uint16) if tokens else np.array([], dtype=np.uint16), n_docs
 
 
 def main():
@@ -80,6 +124,12 @@ def main():
     parser.add_argument("--tokenizer", default="gpt2", help="Tiktoken encoding name")
     parser.add_argument("--tokenizer-path", default=None,
                         help="HuggingFace tokenizer .json path (overrides --tokenizer)")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="Number of parallel workers (0 = all cores)")
+    parser.add_argument("--shard-id", type=int, default=0,
+                        help="Shard index for multi-machine (0-based)")
+    parser.add_argument("--num-shards", type=int, default=1,
+                        help="Total number of shards (1 = no sharding)")
     args = parser.parse_args()
 
     root = Path(args.input)
@@ -92,68 +142,59 @@ def main():
         hf_tok = HFTokenizer.from_file(args.tokenizer_path)
         eos = hf_tok.token_to_id("<|endoftext|>")
         vocab_size = hf_tok.get_vocab_size()
-        enc = None
     else:
-        hf_tok = None
+        import tiktoken
         enc = tiktoken.get_encoding(args.tokenizer)
         eos = enc.n_vocab - 1
         vocab_size = enc.n_vocab
 
-    # Detect format
-    zst_files = list(root.rglob("*.jsonl.zst"))
-    parquet_files = list(root.rglob("*.parquet"))
-    txt_files = list(root.glob("*.txt")) + list(root.glob("*.train"))
-
-    if zst_files:
-        text_iter = iter_texts_jsonl_zst(root)
-        fmt = "jsonl.zst"
-    elif parquet_files:
-        text_iter = iter_texts_parquet(root)
+    all_files = sorted(root.rglob("*.jsonl.zst"))
+    fmt = "jsonl.zst"
+    if not all_files:
+        all_files = sorted(root.rglob("*.parquet"))
         fmt = "parquet"
-    elif txt_files:
-        text_iter = iter_texts_plain(root)
+    if not all_files:
+        all_files = sorted(root.glob("*.txt")) + sorted(root.glob("*.train"))
         fmt = "txt"
-    else:
+    if not all_files:
         print(f"No supported files found in {root}")
         sys.exit(1)
 
-    print(f"Format: {fmt}")
+    if args.num_shards > 1:
+        all_files = [f for i, f in enumerate(all_files) if i % args.num_shards == args.shard_id]
+        print(f"Shard {args.shard_id}/{args.num_shards}: {len(all_files)} files")
+
+    n_workers = args.workers or os.cpu_count()
     tok_name = args.tokenizer_path or args.tokenizer
-    print(f"Tokenizing with {tok_name} (vocab={vocab_size})...")
+    print(f"Format: {fmt}, {len(all_files)} files, {n_workers} workers")
+    print(f"Tokenizer: {tok_name} (vocab={vocab_size})")
 
-    # Tokenize in chunks to manage memory
-    CHUNK_SIZE = 100_000  # docs per chunk
-    all_tokens = []
-    total_docs = 0
+    if args.tokenizer_path:
+        worker_fn = _tokenize_file_hf
+        worker_args = [(str(f), args.tokenizer_path, eos) for f in all_files]
+    else:
+        worker_fn = _tokenize_file_tiktoken
+        worker_args = [(str(f), args.tokenizer, eos) for f in all_files]
+
     total_tokens = 0
+    total_docs = 0
+    all_chunks = []
 
-    buf = []
-    for text in text_iter:
-        tokens = hf_tok.encode(text).ids if hf_tok else enc.encode_ordinary(text)
-        buf.extend(tokens)
-        buf.append(eos)
-        total_docs += 1
-
-        if total_docs % CHUNK_SIZE == 0:
-            chunk = np.array(buf, dtype=np.uint16)
-            all_tokens.append(chunk)
-            total_tokens += len(buf)
-            print(f"  {total_docs:,} docs, {total_tokens:,} tokens so far...")
-            buf = []
-
-    # Final leftover
-    if buf:
-        chunk = np.array(buf, dtype=np.uint16)
-        all_tokens.append(chunk)
-        total_tokens += len(buf)
+    with Pool(n_workers) as pool:
+        for i, (chunk, n_docs) in enumerate(pool.imap_unordered(worker_fn, worker_args)):
+            if len(chunk) > 0:
+                all_chunks.append(chunk)
+                total_tokens += len(chunk)
+                total_docs += n_docs
+            if (i + 1) % 10 == 0:
+                print(f"  {i+1}/{len(all_files)} files, {total_docs:,} docs, {total_tokens:,} tokens")
 
     print(f"\nTotal: {total_docs:,} docs, {total_tokens:,} tokens")
-    print(f"Concatenating...")
+    print("Concatenating...")
 
-    tokens = np.concatenate(all_tokens)
+    tokens = np.concatenate(all_chunks)
     assert len(tokens) == total_tokens
 
-    # Save as raw uint16
     os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
     tokens.tofile(args.output)
     size_gb = os.path.getsize(args.output) / 1e9
