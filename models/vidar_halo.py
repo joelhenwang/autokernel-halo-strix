@@ -19,7 +19,7 @@ from models.amadeus import SwiGLU, GatedConv
 
 
 class RMSNorm(torch.nn.Module):
-    """RMSNorm using torch.rms_norm with fp16-safe weight casting."""
+    """RMSNorm using torch.rms_norm. Weight stored fp32, cast to input dtype per call."""
 
     def __init__(self, d: int, eps: float = 1e-5):
         super().__init__()
