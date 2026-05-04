@@ -44,7 +44,7 @@ from torch.utils.data.distributed import DistributedSampler
 def zeropower_via_newtonschulz5(G, steps=5):
     assert G.ndim == 2
     a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.float()
+    X = G.half()
     if X.shape[0] > X.shape[1]:
         X = X.T
         transposed = True
