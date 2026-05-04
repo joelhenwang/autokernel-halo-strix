@@ -505,6 +505,7 @@ def main():
     parser.add_argument("--backend", default="gloo", choices=["nccl", "gloo"])
     parser.add_argument("--no-async", action="store_true", help="Disable async allreduce overlap")
     parser.add_argument("--no-fp16-compress", action="store_true", help="Disable fp16 grad compression")
+    parser.add_argument("--no-muon", action="store_true", help="Use AdamW instead of Muon")
     args = parser.parse_args()
 
     use_async = not args.no_async
@@ -588,7 +589,13 @@ def main():
     if hasattr(raw_model, "module"):
         raw_model = raw_model.module
 
-    optimizer = build_muon_optimizer(raw_model, base_lr=args.lr, muon_lr=args.muon_lr)
+    if args.no_muon:
+        optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr,
+                                       betas=(0.9, 0.95), weight_decay=0.1, fused=True)
+        if rank == 0:
+            print(f"Using AdamW (lr={args.lr}, wd=0.1)")
+    else:
+        optimizer = build_muon_optimizer(raw_model, base_lr=args.lr, muon_lr=args.muon_lr)
     total_steps = len(dataloader) * args.epochs // args.accum_steps
     scheduler = build_scheduler(optimizer, total_steps)
 
