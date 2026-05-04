@@ -173,6 +173,25 @@ class BabyLMDataset(Dataset):
         return x, y
 
 
+class PreTokenizedDataset(Dataset):
+    """Zero-copy memmap dataset for .bin files. Used by both single-machine and DDP training."""
+
+    def __init__(self, bin_path: str, block_size: int = 512):
+        self.data = np.memmap(bin_path, dtype=np.uint16, mode='r')
+        self.stride = block_size + 1
+        self.n_chunks = len(self.data) // self.stride
+        self.n_tokens = len(self.data)
+        print(f"PreTokenizedDataset: {self.n_tokens:,} tokens -> {self.n_chunks:,} chunks of {block_size}")
+
+    def __len__(self):
+        return self.n_chunks
+
+    def __getitem__(self, idx):
+        start = idx * self.stride
+        chunk = torch.from_numpy(self.data[start:start + self.stride].astype(np.int64))
+        return chunk[:-1], chunk[1:]
+
+
 def build_dataloader(
     dataset: Dataset,
     batch_size: int = 32,

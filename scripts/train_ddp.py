@@ -38,157 +38,10 @@ from torch.utils.data.distributed import DistributedSampler
 
 
 # ===========================================================================
-# Muon Optimizer (inlined from halo_training/muon.py)
+# Muon Optimizer — imported from halo_training/muon.py (single source of truth)
 # ===========================================================================
 
-def zeropower_via_newtonschulz5(G, steps=5):
-    assert G.ndim == 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.half()
-    if X.shape[0] > X.shape[1]:
-        X = X.T
-        transposed = True
-    else:
-        transposed = False
-    X = X / (X.norm() * 1.02 + 1e-7)
-    for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * A @ A
-        X = a * X + B @ X
-    if transposed:
-        X = X.T
-    return X.to(G.dtype)
-
-
-class Muon(torch.optim.Optimizer):
-    def __init__(self, muon_params, lr=0.02, momentum=0.95, nesterov=True,
-                 ns_steps=5, weight_decay=0.01, adamw_params=None,
-                 adamw_lr=8e-4, adamw_betas=(0.9, 0.95), adamw_wd=0.0):
-        if isinstance(muon_params, dict):
-            muon_params = [muon_params]
-        muon_groups = []
-        for group in muon_params:
-            if isinstance(group, dict):
-                g = dict(group)
-                g.setdefault("lr", lr)
-                g.setdefault("momentum", momentum)
-                g.setdefault("nesterov", nesterov)
-                g.setdefault("ns_steps", ns_steps)
-                g.setdefault("weight_decay", weight_decay)
-                g["_optimizer_type"] = "muon"
-                muon_groups.append(g)
-            else:
-                muon_groups.append({
-                    "params": list(group) if hasattr(group, "__iter__") and not isinstance(group, torch.Tensor) else [group],
-                    "lr": lr, "momentum": momentum, "nesterov": nesterov,
-                    "ns_steps": ns_steps, "weight_decay": weight_decay,
-                    "_optimizer_type": "muon",
-                })
-        adamw_groups = []
-        if adamw_params is not None:
-            if isinstance(adamw_params, dict):
-                adamw_params = [adamw_params]
-            for group in adamw_params:
-                if isinstance(group, dict):
-                    g = dict(group)
-                    g.setdefault("lr", adamw_lr)
-                    g.setdefault("betas", adamw_betas)
-                    g.setdefault("weight_decay", g.pop("weight_decay", adamw_wd))
-                    g["_optimizer_type"] = "adamw"
-                    adamw_groups.append(g)
-                else:
-                    adamw_groups.append({
-                        "params": list(group) if hasattr(group, "__iter__") and not isinstance(group, torch.Tensor) else [group],
-                        "lr": adamw_lr, "betas": adamw_betas,
-                        "weight_decay": adamw_wd, "_optimizer_type": "adamw",
-                    })
-        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov,
-                        ns_steps=ns_steps, weight_decay=weight_decay)
-        super().__init__(muon_groups + adamw_groups, defaults)
-
-    @torch.no_grad()
-    def step(self, closure=None):
-        loss = None
-        if closure is not None:
-            with torch.enable_grad():
-                loss = closure()
-        for group in self.param_groups:
-            if group.get("_optimizer_type", "muon") == "muon":
-                self._muon_step(group)
-            else:
-                self._adamw_step(group)
-        return loss
-
-    def _muon_step(self, group):
-        lr, mu = group["lr"], group["momentum"]
-        nesterov, ns_steps, wd = group["nesterov"], group["ns_steps"], group["weight_decay"]
-        for p in group["params"]:
-            if p.grad is None:
-                continue
-            grad = p.grad
-            state = self.state[p]
-            if "momentum_buffer" not in state:
-                state["momentum_buffer"] = torch.zeros_like(grad)
-            buf = state["momentum_buffer"]
-            buf.mul_(mu).add_(grad)
-            g = grad.add(buf, alpha=mu) if nesterov else buf.clone()
-            g = zeropower_via_newtonschulz5(g, steps=ns_steps)
-            g.mul_(max(g.shape[0], g.shape[1]) ** 0.5 * 0.2)
-            if wd > 0:
-                p.data.mul_(1 - lr * wd)
-            p.data.add_(g, alpha=-lr)
-
-    def _adamw_step(self, group):
-        lr = group["lr"]
-        beta1, beta2 = group.get("betas", (0.9, 0.95))
-        wd, eps = group.get("weight_decay", 0.0), group.get("eps", 1e-8)
-        for p in group["params"]:
-            if p.grad is None:
-                continue
-            grad = p.grad
-            state = self.state[p]
-            if "step" not in state:
-                state["step"] = 0
-                state["exp_avg"] = torch.zeros_like(p)
-                state["exp_avg_sq"] = torch.zeros_like(p)
-            state["step"] += 1
-            exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-            bc1, bc2 = 1 - beta1 ** state["step"], 1 - beta2 ** state["step"]
-            if wd > 0:
-                p.data.mul_(1 - lr * wd)
-            exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
-            exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-            denom = (exp_avg_sq.sqrt() / math.sqrt(bc2)).add_(eps)
-            p.data.addcdiv_(exp_avg, denom, value=-lr / bc1)
-
-
-_ADAMW_FORCE_PATTERNS = (
-    "ssm", "mamba", "conv_weight", "conv1d", "scan", "A_log", "dt_", "D_param",
-    "target", "film", "embedding", "embed", "output.weight",
-    "log_gamma", "log_eta", "log_beta", "omega", "gamma_param",
-    "decay", "conductor", "engram", "meta_token", "injection",
-)
-
-
-def split_params_for_muon(model):
-    embedding_params = set()
-    for module in model.modules():
-        if isinstance(module, nn.Embedding):
-            for p in module.parameters():
-                embedding_params.add(id(p))
-    muon_params, adamw_params = [], []
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        if id(param) in embedding_params:
-            adamw_params.append((name, param))
-        elif any(pat in name for pat in _ADAMW_FORCE_PATTERNS):
-            adamw_params.append((name, param))
-        elif param.ndim == 2:
-            muon_params.append(param)
-        else:
-            adamw_params.append((name, param))
-    return muon_params, adamw_params
+from halo_training.muon import Muon, split_params_for_muon
 
 
 def build_muon_optimizer(model, base_lr=0.0012, muon_lr=0.005, weight_decay=0.1):
@@ -205,30 +58,15 @@ def build_muon_optimizer(model, base_lr=0.0012, muon_lr=0.005, weight_decay=0.1)
     return Muon(
         muon_params=[{"params": muon_params}], lr=muon_lr, weight_decay=0.01,
         adamw_params=adamw_groups, adamw_lr=base_lr,
+        ns_dtype=torch.float16,
     )
 
 
 # ===========================================================================
-# Data Loading
+# Data Loading — imported from halo_training/data.py (single source of truth)
 # ===========================================================================
 
-class PreTokenizedDataset(Dataset):
-    def __init__(self, bin_path: str, block_size: int = 256):
-        self.block_size = block_size
-        self.stride = block_size + 1
-        self.data = np.memmap(bin_path, dtype=np.uint16, mode='r')
-        self.n_tokens = len(self.data)
-        self.n_chunks = self.n_tokens // self.stride
-        if dist.is_initialized():
-            print(f"[rank {dist.get_rank()}] Dataset: {self.n_tokens:,} tokens -> {self.n_chunks:,} chunks of {block_size}")
-
-    def __len__(self):
-        return self.n_chunks
-
-    def __getitem__(self, idx):
-        start = idx * self.stride
-        chunk = torch.from_numpy(self.data[start:start + self.stride].astype(np.int64))
-        return chunk[:-1], chunk[1:]
+from halo_training.data import PreTokenizedDataset
 
 
 # ===========================================================================

@@ -68,13 +68,15 @@ class WeightedCrossEntropyLoss(nn.Module):
 
 def build_sft_loss_fn(
     eos_weight: float = 1.0,
+    eos_token_id: int = 50256,
     ignore_index: int = -100,
     label_smoothing: float = 0.0,
 ) -> Callable:
     """Build a loss function matching the trainer's loss_fn(output, batch) interface.
 
     Args:
-        eos_weight: Weight multiplier for EOS token (50256). Use 5.0 for Phase 0.
+        eos_weight: Weight multiplier for EOS token. Use 5.0 for Phase 0.
+        eos_token_id: EOS token ID (50256 for GPT-2, 0 for vidar-32k).
         ignore_index: Label value to ignore (default -100).
         label_smoothing: Label smoothing factor.
 
@@ -83,7 +85,7 @@ def build_sft_loss_fn(
     """
     token_weights = {}
     if eos_weight > 1.0:
-        token_weights[50256] = eos_weight  # <|endoftext|>
+        token_weights[eos_token_id] = eos_weight
 
     criterion = WeightedCrossEntropyLoss(
         token_weights=token_weights if token_weights else None,

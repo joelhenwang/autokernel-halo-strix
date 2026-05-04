@@ -15,21 +15,23 @@ import torch
 import torch.nn as nn
 
 
-def zeropower_via_newtonschulz5(G, steps=5):
+def zeropower_via_newtonschulz5(G, steps=5, dtype=None):
     """Compute the zeroth power (UV^T from SVD) via 5 Newton-Schulz iterations.
 
-    Orthogonalizes the gradient matrix, equalizing all singular values.
-    Uses fp32 to avoid bf16↔fp16 conversion issues on AMD gfx1151.
+    Args:
+        dtype: Precision for NS iterations. Default fp32 (safe).
+               Use torch.float16 for DDP speed on gfx1151 (native fp16 HW, fp32 accum in WMMA).
+               Never use bfloat16 on gfx1151 (no native HW, 24% slower).
     """
     assert G.ndim == 2
     a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.float()
+    X = G.to(dtype or torch.float32)
     if X.shape[0] > X.shape[1]:
         X = X.T
         transposed = True
     else:
         transposed = False
-    X = X / (X.norm() + 1e-7)
+    X = X / (X.norm() * 1.02 + 1e-7)
     for _ in range(steps):
         A = X @ X.T
         B = b * A + c * A @ A
@@ -75,7 +77,9 @@ class Muon(torch.optim.Optimizer):
         adamw_lr=8e-4,
         adamw_betas=(0.9, 0.95),
         adamw_wd=0.0,
+        ns_dtype=None,
     ):
+        self.ns_dtype = ns_dtype
         # Build Muon param groups
         if isinstance(muon_params, dict):
             muon_params = [muon_params]
@@ -171,7 +175,7 @@ class Muon(torch.optim.Optimizer):
                 g = buf.clone()
 
             # Newton-Schulz orthogonalization
-            g = ns_fn(g, steps=ns_steps)
+            g = ns_fn(g, steps=ns_steps, dtype=self.ns_dtype)
 
             # Per-parameter scaling (built-in muP)
             scale = max(g.shape[0], g.shape[1]) ** 0.5 * 0.2
