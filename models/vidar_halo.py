@@ -128,7 +128,7 @@ class VidarHaloBase(nn.Module):
         max_seq_len: int = 2048,
         use_xsa: bool = True,
         use_moda: bool = True,
-        use_mtp: bool = True,
+        use_mtp: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
