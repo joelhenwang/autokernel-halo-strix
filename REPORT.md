@@ -969,7 +969,57 @@ Training funnel: BabyLM → GPT-training-small → WikiText-103 → Common Crawl
 
 **Post-training:** EGGROLL ES alignment with CTG batching (replaces DPO/SimPO).
 
-**Status:** Implemented, all variants smoke-tested (0 NaN grads). Dataset (stem-crawl-solo) being transferred. Awaiting remote machines for training.
+**Status:** Implemented, all variants smoke-tested (0 NaN grads). Superseded by VIDAR-HALO for active training.
+
+**Design doc:** `docs/superpowers/specs/2026-04-29-tyr-halo-design.md`
+
+---
+
+## VIDAR-HALO (2026-05-03) — ACTIVE
+
+**Architecture:** Lean looped hybrid. Successor to TyrHaloLight — drops momentum entirely (direct residuals), widens to d=768, reduces to 4 shared layers. Custom 32K BPE tokenizer trained on dolma-10b. Every design decision backed by empirical evidence.
+
+| Metric | Value |
+|--------|-------|
+| Unique params | 47.0M (VidarHalo) / 57.4M (VidarHaloGPT2) |
+| Parcae-equivalent (mean=2) | ~95M / ~115M |
+| Effective depth | 8 layers (4 unique × 2 iterations) |
+| Conv:Attention ratio | 75:25 (3:1 per block) |
+| d_model | 768 |
+| GQA | 12 heads / 4 KV (3:1) |
+| FFN inner | 2816 (padded to 128-multiple for Tensile) |
+| Factorized embed rank | 384 |
+
+**Key design decisions:**
+- **No momentum/velocity:** Recovers 22% throughput. MoDA depth-attention + loop position embeddings carry cross-iteration info.
+- **d=768:** GRIFFIN-HALO sweep proved d=768 gives loss 3.2 vs 6.1 at d=512 — dominant quality factor.
+- **4 layers × 2 iterations:** Budget-constrained by d=768. TyrHaloLight proved 2-iter Parcae beats flat 12L (BPB 2.10 vs 2.75).
+- **Custom 32K tokenizer:** Trained on dolma-10b (19.5M docs). -12.3% tokens vs GPT-2, -33% on code. 36% smaller embedding layer.
+- **WSD schedule:** Warmup-Stable-Decay (GPT-X2: beats cosine at small scale).
+- **z-loss:** 1e-4 on logit magnitudes, first 40% of training (prevents drift during high-LR warmup).
+- **Identity init:** GenDistill finding — zero-init output projections for smoother startup.
+
+**Throughput results (Strix Halo gfx1151):**
+
+| Config | tok/s | Notes |
+|--------|-------|-------|
+| Eager (fwd+bwd only) | 23,676 | Isolated benchmark |
+| Compiled (fwd+bwd only) | 31,362 | 1.32x compile speedup |
+| Training (AdamW, compile) | 16,805 | CE on vocab=50257 is bottleneck |
+| DDP (AdamW, 2 machines) | 34,541 | Global, TB4 interconnect |
+| Smoke test (eager, Mini) | 82,391 | VidarHaloMini (1.7M) |
+
+**CE bottleneck:** vocab_size=50257 → 412M element logit tensor dominates backward. Custom 32K tokenizer reduces this by 36%.
+
+**Custom tokenizer (Vidar-32K BPE):**
+- Trained on dolma-10b-sample (19.5M docs, 14 workers, ~8 min)
+- Pretokenized: `datasets/dolma-10b-vidar32k.bin` (6.9B tokens, 13.8 GB)
+- Compression: -12.3% tokens overall, -33% on code, +11% on rare technical terms
+- Both machines have tokenizer + pretokenized data
+
+**Status:** Model implemented, smoke tested (passed all criteria), custom tokenizer trained and data pretokenized. Awaiting DDP training on dolma-10b-vidar32k.
+
+**Design doc:** `docs/superpowers/specs/2026-05-03-vidar-halo-design.md`
 
 **Files:** `models/tyr_halo.py`, `halo_training/mtp_loss.py`, `docs/superpowers/specs/2026-04-29-tyr-halo-design.md`, `docs/guides/tyr-halo-theory-and-implementation.md`, `docs/guides/tyr-halo-rtx4060ti-training.md`
 

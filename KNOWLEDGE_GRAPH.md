@@ -75,6 +75,12 @@ tags: [%index, %navigation, %knowledge-graph]
 - [**TYR-HALO**](docs/superpowers/specs/2026-04-29-tyr-halo-design.md) — **ACTIVE**: MoDA+mHC+MTP, 58M/115M, 12-paper synthesis
 - [**BALDR-HALO**](docs/superpowers/specs/2026-04-29-baldr-halo-design.md) — **ACTIVE**: flat 118M, MoDA+XSA+MTP, racing TYR-HALO on stem-crawl-solo
 
+## Tokenizer
+
+- [Vidar-32K BPE](tokenizers/vidar-32k/tokenizer.json) — custom 32K tokenizer trained on dolma-10b, -12.3% tokens vs GPT-2, -33% on code
+- [Tokenizer Training Script](scripts/train_tokenizer.py) — HuggingFace `tokenizers` BPE trainer
+- [Pretokenize Script](scripts/pretokenize.py) — multiprocessing + sharding, --workers N, --shard-id/--num-shards
+
 ## Alignment & Post-Training
 
 - [Instruct Alignment Survey](knowledge/training/instruct_alignment_techniques_2025_2026.md) — ORPO, SimPO, KTO, EGGROLL ES, SmolLM recipe, Magpie data

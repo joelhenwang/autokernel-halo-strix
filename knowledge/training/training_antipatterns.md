@@ -185,8 +185,8 @@ Start general (web text), ramp specialized data (math, code) during stable LR, t
 ### EMA Weights (TRM paper, Samsung)
 Maintain exponential moving average of model weights (decay=0.999). Use EMA weights for eval/inference. +7.5% generalization on recursive models. Already implemented: `--ema` flag.
 
-### Custom Tokenizer (GPT-X2-125M)
-32K vocab trained on domain data gives ~9% compression improvement over GPT-2 50K BPE. At 125M scale, saves ~15% of params from embeddings → reinvest in transformer layers.
+### Custom Tokenizer (GPT-X2-125M, validated on VIDAR-HALO)
+32K vocab trained on domain data gives ~9% compression improvement over GPT-2 50K BPE. At 125M scale, saves ~15% of params from embeddings → reinvest in transformer layers. **Validated:** Vidar-32K BPE trained on dolma-10b-sample (19.5M docs, ~8 min with 14 workers). Results: -12.3% tokens overall, -33% on code, +11% on rare technical terms. Vocab 50257→32000 = 36% smaller embedding. Use `scripts/train_tokenizer.py` + `scripts/pretokenize.py --tokenizer-path --workers 14`.
 
 ### Instruction-Augmented Pretraining (InstructLM-500M, Microsoft)
 Mix synthesized instruction-response pairs INTO the pretraining corpus (not just SFT after). Fine-tuned 7B model generates ~5 QA pairs per raw text document. Result: 500M on 100B tokens ≈ Pythia-1B on 300B tokens. 2-3× data efficiency. Models also benefit MORE from subsequent instruction tuning. Ref: arXiv 2406.14491.

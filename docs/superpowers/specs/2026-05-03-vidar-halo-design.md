@@ -151,7 +151,16 @@ Train custom 32K BPE tokenizer on dolma-10b using `tokenizers` library (HuggingF
 
 **Why:** GPT-X2-125M showed custom 32K BPE trained on domain data gives 9% compression improvement over GPT-2 50K. At our scale, saves ~10M embed params reinvested in transformer depth.
 
-**Implementation:** `scripts/train_tokenizer.py` — reads dolma-10b JSONL, trains BPE, saves to `tokenizers/vidar-32k/`. Takes ~2-4 hours.
+**Implementation:** `scripts/train_tokenizer.py` — reads dolma-10b JSONL, trains BPE, saves to `tokenizers/vidar-32k/`. Takes ~8 min (2M docs).
+
+**Results (2026-05-04):** Tokenizer trained on dolma-10b-sample (19.5M docs). Pretokenized to `datasets/dolma-10b-vidar32k.bin` (6.9B tokens, 13.8 GB) using `scripts/pretokenize.py --workers 14`.
+
+**Compression comparison vs GPT-2:**
+- General text: identical token count
+- Code: **-33%** tokens (dolma code data improves BPE merges)
+- Technical jargon: +11% (rare terms split more with smaller vocab)
+- **Overall: -12.3% fewer tokens** across test suite
+- Vocab reduction: 50,257 → 32,000 (-36%) → embedding layer 36% smaller
 
 ## Training Recipe
 
