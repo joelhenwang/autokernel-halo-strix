@@ -37,11 +37,11 @@ class BabyLMDataset(Dataset):
                 import tiktoken
                 enc = tiktoken.get_encoding(tokenizer_name)
                 self.vocab_size = enc.n_vocab
-            raw = np.fromfile(str(root), dtype=np.uint16)
-            tokens = raw.astype(np.int64)
-            n_tokens = len(tokens)
+            raw = np.memmap(str(root), dtype=np.uint16, mode='r')
+            n_tokens = len(raw)
             n_chunks = n_tokens // (block_size + 1)
-            self.tokens = torch.from_numpy(tokens[: n_chunks * (block_size + 1)].copy()).view(n_chunks, block_size + 1)
+            usable = raw[: n_chunks * (block_size + 1)].astype(np.int32)
+            self.tokens = torch.from_numpy(usable).view(n_chunks, block_size + 1)
             print(f"BabyLMDataset: {n_tokens:,} tokens (pre-tokenized .bin) -> {n_chunks:,} chunks of {block_size}")
             return
 
