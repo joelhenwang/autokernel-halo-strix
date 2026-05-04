@@ -39,7 +39,7 @@ uv run python verify.py --model models/llama_7b.py --class-name LlamaModel --inp
 
 # Training (always use --epochs, minimum 1)
 python -m halo_training --model models/llama_7b.py --class-name LlamaModel --dataset babylm --epochs 1
-python -m halo_training --model models/vidar_halo.py --class-name VidarHalo --dataset datasets/dolma-10b-vidar32k.bin --tokenizer-path tokenizers/vidar-32k/tokenizer.json --compile --optimize-kernels --mtp --ema --lr 0.002 --scheduler wsd --z-loss 1e-4 --epochs 1
+python -m halo_training --model models/vidar_halo.py --class-name VidarHalo --dataset datasets/dolma-10b-vidar32k.bin --tokenizer-path tokenizers/vidar-32k/tokenizer.json --compile --optimize-kernels --ema --lr 0.002 --scheduler wsd --z-loss 1e-4 --epochs 1
 
 # Custom tokenizer training + pretokenization
 python scripts/train_tokenizer.py --input datasets/dolma-10b-sample --output tokenizers/vidar-32k --vocab-size 32000

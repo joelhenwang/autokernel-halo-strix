@@ -143,7 +143,7 @@ python3 -m halo_training \
     --dataset "$DATASET" \
     $TOKENIZER \
     $COMPILE_FLAG $OPTIMIZE \
-    --muon --mtp --ema --scheduler wsd --z-loss 1e-4 \
+    --muon --ema --scheduler wsd --z-loss 1e-4 \
     $POLAR_NS $MIN_LR \
     --lr "$LR" --warmup-steps "$WARMUP" \
     --block-size "$BLOCK_SIZE" --batch-size "$BATCH_SIZE" --accum-steps "$ACCUM" \

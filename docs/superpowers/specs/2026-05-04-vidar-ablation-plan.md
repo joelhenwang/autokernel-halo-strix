@@ -114,7 +114,7 @@ class VidarHaloAblation(VidarHaloBase):
 ```bash
 python -m halo_training --model models/vidar_halo.py --class-name VidarHaloAblation \
     --dataset datasets/BabyLM-2026-Strict --optimize-kernels \
-    --muon --mtp --ema --scheduler wsd --z-loss 1e-4 --lr 0.003 \
+    --muon --ema --scheduler wsd --z-loss 1e-4 --lr 0.003 \
     --seq-len 512 --warmup 50 --epochs 1 --checkpoint-interval 999999
 ```
 
@@ -146,7 +146,7 @@ python -m halo_training --model models/vidar_halo.py --class-name VidarHaloAblat
 ```bash
 python -m halo_training --model models/vidar_halo.py --class-name VidarHaloGPT2 \
     --dataset datasets/wikitext-103-raw.bin --compile --optimize-kernels \
-    --muon --mtp --ema --scheduler wsd --z-loss 1e-4 --lr 0.002 \
+    --muon --ema --scheduler wsd --z-loss 1e-4 --lr 0.002 \
     --seq-len 512 --warmup 150 --epochs 1 --checkpoint-interval 999999
 ```
 
@@ -173,7 +173,7 @@ python -m halo_training --model models/vidar_halo.py --class-name VidarHaloGPT2 
 ```bash
 python -m halo_training --model models/vidar_halo.py --class-name VidarHaloGPT2 \
     --dataset datasets/stem-crawl-solo.bin --compile --optimize-kernels \
-    --muon --mtp --ema --scheduler wsd --z-loss 1e-4 --lr 0.002 --epochs 1
+    --muon --ema --scheduler wsd --z-loss 1e-4 --lr 0.002 --epochs 1
 ```
 
 ### What Each Tier Detects
@@ -210,7 +210,7 @@ Each phase tested independently against baseline at **Tier S first**. Winners gr
 ```bash
 python -m halo_training --model models/vidar_halo.py --class-name VidarHaloAblation \
     --dataset datasets/BabyLM-2026-Strict --optimize-kernels \
-    --muon --mtp --ema --scheduler wsd --z-loss 1e-4 --lr 0.003 \
+    --muon --ema --scheduler wsd --z-loss 1e-4 --lr 0.003 \
     --seq-len 512 --warmup 50 --epochs 1 --checkpoint-interval 999999
 ```
 
@@ -221,7 +221,7 @@ python -m halo_training --model models/vidar_halo.py --class-name VidarHaloAblat
 ```bash
 python -m halo_training --model models/vidar_halo.py --class-name VidarHaloGPT2 \
     --dataset datasets/stem-crawl-solo.bin --compile --optimize-kernels \
-    --muon --mtp --ema --scheduler wsd --z-loss 1e-4 --lr 0.002 --epochs 1
+    --muon --ema --scheduler wsd --z-loss 1e-4 --lr 0.002 --epochs 1
 ```
 
 **Expected:** ~8 hr, ~8299 steps, ~2.10 BPB (pending first Vidar run)

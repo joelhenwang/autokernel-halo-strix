@@ -53,6 +53,7 @@ tags: [%antipatterns, %optimization, %patterns, %rocblas, %rocm, %hip, %training
 - **Compile fusion doesn't scale with d**: At d=768, compile gives only +18% (vs +140% at d=512 for JORMUNGANDR-HALO). Reason: d=768 GEMMs dominate; compile fuses element-wise ops between GEMMs, which are a smaller fraction of total compute at larger d.
 - **Progressive narrowing bridges quality-throughput gap**: One d=768 Griffin iteration → proj_down → d=512 ShortConv×3 refinement iters achieves 33.1K tok/s at loss 5.545 (beats JORMUNGANDR-HALO's 5.770 at 33.7K). The wide first iteration provides global context that makes cheap narrow iterations more effective.
 - **Lean architecture viable at d=768**: Cutting Prelude from 2→1 layers and Coda from 4→2 layers gives +21% throughput (25.8K) at only +10.7% quality cost (3.535 vs 3.193). The unique layer overhead (Prelude+Coda) accounts for ~52% of d=768 forward time.
+- **MTP costs 45% throughput at small d**: At d=384 (VidarHaloAblation), MTP drops tok/s from 11.4K→6.2K. Two 32K-vocab matmuls (main logits + MTP head) dominate when model compute is small. At d=768 it's still ~20% overhead. DSV3's MTP gains were at 671B/14.8T scale — no evidence it helps sub-100M/sub-10B. **Drop --mtp for all training.** More tokens > fancier loss at our scale.
 
 ## XSA + Depth Memory Cache (Ablation Results)
 
