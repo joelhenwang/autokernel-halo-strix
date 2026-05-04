@@ -50,7 +50,7 @@ def zeropower_via_newtonschulz5(G, steps=5):
         transposed = True
     else:
         transposed = False
-    X = X / (X.norm() + 1e-7)
+    X = X / (X.norm() * 1.02 + 1e-7)
     for _ in range(steps):
         A = X @ X.T
         B = b * A + c * A @ A
