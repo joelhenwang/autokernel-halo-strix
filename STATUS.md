@@ -34,13 +34,13 @@
 
 ## Latest Smoke Test (2026-05-04)
 
-VIDAR-HALO DDP, 32K tokenizer, compile (no autokernel), AdamW, --max-steps 300:
+VIDAR-HALO DDP, 32K tokenizer, compile + autokernel, AdamW, --max-steps 300:
 
-| Step | Loss | BPB | tok/s | Memory |
-|------|------|-----|-------|--------|
-| 300 | 6.64 | 2.66 | **41,004** | 8.9 GB |
+| Step | Loss | BPB | tok/s | MFU | Memory |
+|------|------|-----|-------|-----|--------|
+| 300 | 7.85 | 3.14 | **63,282** | 15.0% | 7.1 GB |
 
-**41K tok/s achieved** — target was 40K. 32K tokenizer saves 3 GB memory vs GPT-2 vocab.
+**63K tok/s achieved** with autokernel. Pre-compile required: `python scripts/precompile_kernels.py --model models/vidar_halo.py --class-name VidarHalo` on each machine before DDP launch.
 
 ---
 
@@ -88,7 +88,8 @@ VIDAR-HALO DDP, 32K tokenizer, compile (no autokernel), AdamW, --max-steps 300:
 | Single compiled (fwd+bwd only) | VidarHalo | 31,362 | No optimizer overhead |
 | Single AdamW+compile | VidarHalo | ~16,800 | CE on vocab=50257 was bottleneck |
 | DDP AdamW (no autokernel) | VidarHaloGPT2 | 34,541 global | 2 machines, TB4, vocab=50257 |
-| **DDP AdamW+compile, 32K tok** | **VidarHalo** | **41,004 global** | **2 machines, TB4, vocab=32000** |
+| DDP AdamW+compile, 32K tok | VidarHalo | 41,004 global | 2 machines, TB4, no autokernel |
+| **DDP AdamW+compile+autokernel** | **VidarHalo** | **63,282 global** | **2 machines, TB4, 32K tok, 7.1GB, 15% MFU** |
 | DDP Muon+compile+autokernel | FenrirHalo (80M) | 35,000 global | Original dolma run (reference) |
 
 ---
