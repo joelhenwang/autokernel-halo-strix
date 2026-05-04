@@ -107,9 +107,21 @@ python scripts/pretokenize.py --input datasets/dolma-10b-sample --output dataset
 - **Active model:** VIDAR-HALO (47M unique, d=768, no momentum, custom 32K tokenizer)
 - **Dataset funnel:** smoke -> BabyLM -> stem-crawl-solo (544M) -> Dolma 10B (6.9B tokens, vidar-32k) -> Dolma 100B
 
+## Decision Protocol
+
+> **Read [STATUS.md](STATUS.md) before every training launch or checkpoint decision.**
+
+1. **Before ANY training launch:** Check STATUS.md for current runs, available checkpoints, and known issues. Don't guess — look it up.
+2. **Before resuming from checkpoint:** Verify it's listed as "clean" in STATUS.md. Corrupted checkpoints are explicitly marked.
+3. **Always use `--optimize-kernels`** for real training (35K vs 10K tok/s). Only skip for debugging.
+4. **Always use .sh scripts** for remote commands: `run_remote.sh` (Machine A), `run_remote_b.sh` (Machine B). Never raw SSH.
+5. **DDP smoke tests:** `--max-steps 300 --time-budget 20`. Never launch a full epoch as a "smoke test."
+6. **Single-machine smoke tests:** `python -m halo_training ... --smoke` (built-in 200-step test).
+7. **After every run completes or fails:** Update STATUS.md with results, new checkpoints, or new known issues.
+
 ## Where to Find Everything Else
 
-Start with **[KNOWLEDGE_GRAPH.md](KNOWLEDGE_GRAPH.md)** — master index of all documentation.
+Start with **[STATUS.md](STATUS.md)** for current state, **[KNOWLEDGE_GRAPH.md](KNOWLEDGE_GRAPH.md)** for documentation index.
 
 | Topic | Location |
 |-------|----------|

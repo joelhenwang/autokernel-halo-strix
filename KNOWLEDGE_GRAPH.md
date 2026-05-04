@@ -98,6 +98,7 @@ tags: [%index, %navigation, %knowledge-graph]
 
 ## Project
 
+- [**STATUS**](STATUS.md) — **READ FIRST**: current runs, checkpoints, known issues, hard rules
 - [README](README.md) — project overview, quick start
 - [REPORT](REPORT.md) — canonical results summary (all kernel speeds, training results, architecture comparisons)
 - [CHANGELOG](CHANGELOG.md) — version history
