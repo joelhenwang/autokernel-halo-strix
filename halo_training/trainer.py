@@ -236,6 +236,8 @@ def train(
             targets = targets.to(device)
             if isinstance(output, torch.Tensor):
                 logits = output
+            elif isinstance(output, dict):
+                logits = output["logits"]
             elif hasattr(output, "logits"):
                 logits = output.logits
             else:
