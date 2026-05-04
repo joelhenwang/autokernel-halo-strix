@@ -32,15 +32,15 @@
 |---------|-------|---------|--------|------|------|-------|---------|--------|
 | — | — | — | — | — | — | — | — | idle |
 
-## Latest Smoke Test (2026-05-04)
+## Latest Training Run (2026-05-04)
 
-VIDAR-HALO DDP, 32K tokenizer, compile + autokernel, AdamW, --max-steps 300:
+VIDAR-HALO DDP, 32K tokenizer, compile + autokernel, AdamW, lr=0.001, warmup=300, stem-crawl-vidar32k:
 
-| Step | Loss | BPB | tok/s | MFU | Memory |
-|------|------|-----|-------|-----|--------|
-| 300 | 7.85 | 3.14 | **63,282** | 15.0% | 7.1 GB |
+| Step | Loss | BPB | tok/s (instantaneous) | Memory |
+|------|------|-----|----------------------|--------|
+| 400 | 8.50 | 3.41 | ~26,000 | 7.1 GB |
 
-**63K tok/s achieved** with autokernel. Pre-compile required: `python scripts/precompile_kernels.py --model models/vidar_halo.py --class-name VidarHalo` on each machine before DDP launch.
+Pre-compile required: `python scripts/precompile_kernels.py --model models/vidar_halo.py --class-name VidarHalo` on each machine before DDP launch.
 
 ---
 
@@ -88,9 +88,12 @@ VIDAR-HALO DDP, 32K tokenizer, compile + autokernel, AdamW, --max-steps 300:
 | Single compiled (fwd+bwd only) | VidarHalo | 31,362 | No optimizer overhead |
 | Single AdamW+compile | VidarHalo | ~16,800 | CE on vocab=50257 was bottleneck |
 | DDP AdamW (no autokernel) | VidarHaloGPT2 | 34,541 global | 2 machines, TB4, vocab=50257 |
-| DDP AdamW+compile, 32K tok | VidarHalo | 41,004 global | 2 machines, TB4, no autokernel |
-| **DDP AdamW+compile+autokernel** | **VidarHalo** | **63,282 global** | **2 machines, TB4, 32K tok, 7.1GB, 15% MFU** |
-| DDP Muon+compile+autokernel | FenrirHalo (80M) | 35,000 global | Original dolma run (reference) |
+| DDP AdamW+compile, 32K tok | VidarHalo | ~26,000 global | 2 machines, TB4, no autokernel |
+| DDP AdamW+compile+autokernel, 32K | VidarHalo | ~26,000 global | 2 machines, TB4, 7.1GB mem |
+| Single compile+autokernel | VidarHalo | 7,100 | Per-machine instantaneous (isolated bench) |
+| DDP Muon+compile+autokernel | FenrirHalo (80M) | ~26,000 global\* | Original dolma run (\*35K was inflated cumulative avg) |
+
+**Note:** Prior 63K and 41K numbers were cumulative averages inflated by Inductor warmup ramp. Real instantaneous throughput is ~13K per machine, ~26K global DDP. Metric fixed to instantaneous in train_ddp.py.
 
 ---
 

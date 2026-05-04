@@ -485,6 +485,8 @@ def main():
     step_loss = 0.0  # accumulates across microsteps within one optimizer step
     best_loss = float("inf")
     start_time = time.time()
+    last_log_time = start_time
+    last_log_tokens = 0
     deadline = start_time + args.time_budget * 60 if args.time_budget > 0 else None
     ckpt_every = args.checkpoint_interval or (args.log_interval * 10)
     last_grad_norm = torch.tensor(0.0)
@@ -563,13 +565,16 @@ def main():
                     )
                     global_step += 1
 
-                    # Logging
+                    # Logging (instantaneous tok/s, not cumulative average)
                     if rank == 0 and global_step % args.log_interval == 0:
-                        elapsed = time.time() - start_time
-                        global_tokens = total_tokens * world_size
-                        tok_s = global_tokens / elapsed if elapsed > 0 else 0
-                        achieved = global_tokens * 6 * n_params / elapsed if elapsed > 0 else 0
+                        now = time.time()
+                        interval_elapsed = now - last_log_time
+                        interval_tokens = (total_tokens - last_log_tokens) * world_size
+                        tok_s = interval_tokens / interval_elapsed if interval_elapsed > 0 else 0
+                        achieved = interval_tokens * 6 * n_params / interval_elapsed if interval_elapsed > 0 else 0
                         mfu = achieved / 118.8e12
+                        last_log_time = now
+                        last_log_tokens = total_tokens
                         avg_loss = running_loss / args.log_interval
                         bpb = compute_bpb(avg_loss)
                         lr = scheduler.get_last_lr()[0]

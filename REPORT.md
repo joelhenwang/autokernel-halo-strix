@@ -1001,23 +1001,24 @@ Training funnel: BabyLM → GPT-training-small → WikiText-103 → Common Crawl
 
 **Throughput results (Strix Halo gfx1151):**
 
+All tok/s are **instantaneous** (measured over fixed interval), not cumulative averages.
+
 | Config | tok/s | Notes |
 |--------|-------|-------|
-| Eager (fwd+bwd only) | 23,676 | Isolated benchmark |
-| Compiled (fwd+bwd only) | 31,362 | 1.32x compile speedup |
-| Training (AdamW, compile) | 16,805 | CE on vocab=50257 is bottleneck |
-| DDP (AdamW, 2 machines) | 34,541 | Global, TB4 interconnect |
-| Smoke test (eager, Mini) | 82,391 | VidarHaloMini (1.7M) |
+| Single, compile+autokernel+AdamW | 7,100 | Per-machine, full training step |
+| DDP compile+autokernel+AdamW | ~26,000 global | 2 machines, TB4, 1.83x scaling |
+| Smoke test (eager, Mini) | 82,391 | VidarHaloMini (1.7M), no CE overhead |
 
-**CE bottleneck:** vocab_size=50257 → 412M element logit tensor dominates backward. Custom 32K tokenizer reduces this by 36%.
+**Note:** Earlier reported 63K and 41K tok/s were cumulative averages (`total_tokens/total_elapsed`) inflated by Inductor warmup ramp. Fixed in train_ddp.py to instantaneous measurement.
 
 **Custom tokenizer (Vidar-32K BPE):**
 - Trained on dolma-10b-sample (19.5M docs, 14 workers, ~8 min)
 - Pretokenized: `datasets/dolma-10b-vidar32k.bin` (6.9B tokens, 13.8 GB)
+- Also: `datasets/stem-crawl-vidar32k.bin` (535M tokens, 1.0 GB)
 - Compression: -12.3% tokens overall, -33% on code, +11% on rare technical terms
-- Both machines have tokenizer + pretokenized data
+- Memory: 7.1 GB (vs 8.9 GB with GPT-2 vocab)
 
-**Status:** Model implemented, smoke tested (passed all criteria), custom tokenizer trained and data pretokenized. Awaiting DDP training on dolma-10b-vidar32k.
+**Status:** DDP training in progress on stem-crawl-vidar32k (1 epoch, ~26K tok/s).
 
 **Design doc:** `docs/superpowers/specs/2026-05-03-vidar-halo-design.md`
 
