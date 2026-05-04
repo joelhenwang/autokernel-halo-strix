@@ -18,8 +18,12 @@ import torch.nn.functional as F
 from models.amadeus import SwiGLU, GatedConv
 
 
-class RMSNorm(torch.nn.Module):
-    """RMSNorm using torch.rms_norm. Weight stored fp32, cast to input dtype per call."""
+class NativeRMSNorm(torch.nn.Module):
+    """RMSNorm using torch.rms_norm. Weight stored fp32, cast to input dtype per call.
+
+    Named NativeRMSNorm to avoid autokernel pattern matching (which replaces
+    classes named 'RMSNorm' with a slower HIP kernel).
+    """
 
     def __init__(self, d: int, eps: float = 1e-5):
         super().__init__()
@@ -28,6 +32,8 @@ class RMSNorm(torch.nn.Module):
 
     def forward(self, x):
         return torch.rms_norm(x, (x.size(-1),), self.weight.to(x.dtype), self.eps)
+
+RMSNorm = NativeRMSNorm
 from models.argus import precompute_freqs_cis
 from models.chimera_halo import FactorizedEmbedding, FactorizedLMHead
 from models.griffin_halo import SimpleParcaeInjection
