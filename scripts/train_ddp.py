@@ -97,9 +97,13 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, total_tokens=0):
     path = os.path.join(checkpoint_dir, f"step_{step}.pt")
     raw = model.module if hasattr(model, "module") else model
     raw = raw._orig_mod if hasattr(raw, "_orig_mod") else raw
+    # Strip per-layer compile wrappers. compile_zones() replaces each ModuleList
+    # entry with torch.compile(layer), inserting ._orig_mod. into state dict keys.
+    # The outer raw._orig_mod unwrap above only handles a single top-level compile.
+    state_dict = {k.replace("._orig_mod.", "."): v for k, v in raw.state_dict().items()}
     torch.save({
         "step": step,
-        "model_state_dict": raw.state_dict(),
+        "model_state_dict": state_dict,
         "optimizer_state_dict": optimizer.state_dict(),
         "total_tokens": total_tokens,
     }, path)

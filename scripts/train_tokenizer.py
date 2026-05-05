@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 
-from tokenizers import Tokenizer, models, pre_tokenizers, trainers
+from tokenizers import Tokenizer, models, pre_tokenizers, trainers, decoders
 
 
 def iter_texts(root: Path, max_texts: int = 0):
@@ -83,6 +83,10 @@ def main():
 
     tokenizer = Tokenizer(models.BPE())
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    # Pair decoder with pre_tokenizer so tok.decode() inverts the byte-level
+    # transform; without this, decode() returns raw BPE tokens with Ġ markers
+    # for spaces (bug caught during OdinFlat inference 2026-05-05).
+    tokenizer.decoder = decoders.ByteLevel()
 
     special_tokens = ["<|endoftext|>", "<|pad|>"]
     trainer = trainers.BpeTrainer(
