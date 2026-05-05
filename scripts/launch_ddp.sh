@@ -2,32 +2,37 @@
 # Launch DDP training on both machines simultaneously, fully detached.
 # Run this from Machine A only.
 # Usage:
-#   bash scripts/launch_ddp.sh              # fresh run
+#   bash scripts/launch_ddp.sh              # fresh run (defaults: OdinFlat on wikitext)
 #   bash scripts/launch_ddp.sh <resume.pt>  # resume from checkpoint
 #
+# Override model/config via env vars:
+#   MODEL=models/odin_halo.py CLASS=OdinHalo \
+#     CKPT_DIR=checkpoints/odin-halo-wikitext-ddp \
+#     bash scripts/launch_ddp.sh
+#
 # Both ranks run under nohup + setsid; safe to disconnect SSH after launch.
-# Monitor via: tail -f checkpoints/odin-flat-wikitext-ddp/rank0.log
+# Monitor via: tail -f $CKPT_DIR/rank0.log
 
 set -e
 
 RESUME_CKPT="${1:-}"
 
 export HSA_OVERRIDE_GFX_VERSION=11.5.1
-export TORCH_COMPILE_MODE=max-autotune-no-cudagraphs
+export TORCH_COMPILE_MODE="${TORCH_COMPILE_MODE:-max-autotune-no-cudagraphs}"
 export GLOO_SOCKET_IFNAME=thunderbolt0
 export NCCL_SOCKET_IFNAME=thunderbolt0
 export MASTER_ADDR=10.77.0.1
-export MASTER_PORT=29500
+export MASTER_PORT="${MASTER_PORT:-29500}"
 
-MODEL="models/odin_flat.py"
-CLASS="OdinFlat"
-DATASET="datasets/wikitext-103-odin32k.bin"
-CKPT_DIR="checkpoints/odin-flat-wikitext-ddp"
-EPOCHS=1
-BLOCK=256
-BATCH=16
-ACCUM=8
-LR="8e-4"
+MODEL="${MODEL:-models/odin_flat.py}"
+CLASS="${CLASS:-OdinFlat}"
+DATASET="${DATASET:-datasets/wikitext-103-odin32k.bin}"
+CKPT_DIR="${CKPT_DIR:-checkpoints/odin-flat-wikitext-ddp}"
+EPOCHS="${EPOCHS:-1}"
+BLOCK="${BLOCK:-256}"
+BATCH="${BATCH:-16}"
+ACCUM="${ACCUM:-8}"
+LR="${LR:-8e-4}"
 
 mkdir -p "$CKPT_DIR"
 
@@ -50,10 +55,10 @@ ssh joelwang-ai-1@10.77.0.2 "
   source ~/Desktop/comfyui-rocm7.12/.venv/bin/activate
   cd ~/Desktop/comfyui-rocm7.12/autokernel-halo-strix
   export HSA_OVERRIDE_GFX_VERSION=11.5.1
-  export TORCH_COMPILE_MODE=max-autotune-no-cudagraphs
+  export TORCH_COMPILE_MODE=$TORCH_COMPILE_MODE
   export GLOO_SOCKET_IFNAME=thunderbolt0
   export MASTER_ADDR=10.77.0.1
-  export MASTER_PORT=29500
+  export MASTER_PORT=$MASTER_PORT
   mkdir -p $CKPT_DIR
   setsid nohup torchrun --nproc_per_node=1 --nnodes=2 --node_rank=1 \
     --master_addr=\$MASTER_ADDR --master_port=\$MASTER_PORT \
