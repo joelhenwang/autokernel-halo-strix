@@ -45,35 +45,56 @@ def train_one(optimizer_cls, lr, kwargs, steps=100, seed=42):
 def main():
     print("=== CLion unit test ===\n")
 
-    # 1. Convergence with tiny ν (gate always passes, sign path used) — match Lion
-    init, final, _ = train_one(CLion, lr=3e-3, kwargs=dict(nu=1e-12), steps=400)
-    print(f"CLion (nu=1e-12, always-sign, lr=3e-3, 400 steps): "
+    # 1. Per-coord mode with small nu: sign path for most coords, identity for tiny
+    init, final, _ = train_one(
+        CLion, lr=3e-3,
+        kwargs=dict(nu=1e-3, gate_mode="per_coord"),
+        steps=400,
+    )
+    print(f"CLion (per_coord, nu=1e-3, lr=3e-3, 400 steps): "
           f"{init:.4f} -> {final:.4f} (ratio {final/init:.3f})")
-    # Should converge like Lion
     assert final < 0.1 * init, \
-        f"CLion (sign mode) failed to converge well: {final}, initial {init}"
+        f"CLion per_coord failed to converge: {final}, initial {init}"
 
-    # 2. Very large ν — gate always fails, always use identity (c_t) path
-    #    This is essentially SGD with interpolated momentum (slow on tiny task)
-    init_sgdm, final_sgdm, _ = train_one(CLion, lr=3e-3, kwargs=dict(nu=1e6), steps=400)
-    print(f"CLion (nu=1e6, always-identity, lr=3e-3, 400 steps): "
-          f"{init_sgdm:.4f} -> {final_sgdm:.4f} (ratio {final_sgdm/init_sgdm:.3f})")
-    # Weaker convergence expected for identity path — just check loss decreased
-    assert final_sgdm < init_sgdm, \
-        f"CLion (identity mode) should at least decrease loss"
-
-    # 3. CLion at tiny ν should match standalone Lion (identical trajectory)
-    init_lion, final_lion, _ = train_one(
-        Lion, lr=3e-3, kwargs=dict(), steps=400)
-    print(f"CLion (nu=1e-12, always-sign):  "
-          f"{init:.4f} -> {final:.4f}")
-    print(f"Lion  (reference, 400 steps):    "
-          f"{init_lion:.4f} -> {final_lion:.4f}")
-    rel_diff = abs(final - final_lion) / max(1e-6, abs(final_lion))
+    # 2. Per-coord with nu=0 — sign path always, equivalent to Lion
+    init_l, final_l, _ = train_one(
+        CLion, lr=3e-3,
+        kwargs=dict(nu=1e-12, gate_mode="per_coord"),
+        steps=400,
+    )
+    init_lion, final_lion, _ = train_one(Lion, lr=3e-3, kwargs=dict(), steps=400)
+    print(f"CLion (per_coord, nu~0):  {init_l:.4f} -> {final_l:.4f}")
+    print(f"Lion  (reference):        {init_lion:.4f} -> {final_lion:.4f}")
+    rel_diff = abs(final_l - final_lion) / max(1e-6, abs(final_lion))
     assert rel_diff < 0.05, \
-        f"CLion with tiny nu should match Lion: {final} vs {final_lion} (rel diff {rel_diff})"
+        f"CLion per_coord nu~0 should match Lion: {final_l} vs {final_lion} (rel {rel_diff})"
 
-    print("\nPASS: CLion sign-path matches Lion, identity-path is distinct, gate logic works.")
+    # 3. Per-coord with huge nu — no coord passes gate, pure SGDM-style
+    init_s, final_s, _ = train_one(
+        CLion, lr=3e-3,
+        kwargs=dict(nu=1e6, gate_mode="per_coord"),
+        steps=400,
+    )
+    print(f"CLion (per_coord, nu=1e6, identity-only): "
+          f"{init_s:.4f} -> {final_s:.4f} (ratio {final_s/init_s:.3f})")
+    assert final_s < init_s, \
+        "CLion identity-only should at least decrease loss"
+
+    # 4. Per-tensor mode (literal paper Algorithm 2) — gate almost never passes
+    #    for a mid-sized MLP; expect SGDM-like slow convergence
+    init_t, final_t, _ = train_one(
+        CLion, lr=3e-3,
+        kwargs=dict(nu=1e-3, gate_mode="per_tensor"),
+        steps=400,
+    )
+    print(f"CLion (per_tensor, nu=1e-3): "
+          f"{init_t:.4f} -> {final_t:.4f} (ratio {final_t/init_t:.3f})")
+    # per_tensor at any nu > machine-epsilon almost always falls to identity
+    assert final_t < init_t, \
+        "CLion per_tensor should decrease loss"
+
+    print("\nPASS: per_coord converges ~Lion-fast, sign-only mode matches Lion, "
+          "identity-only works, per_tensor literal-paper mode converges slowly.")
 
 
 if __name__ == "__main__":

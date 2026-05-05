@@ -43,7 +43,8 @@ def build_optimizer(
     use_lion: bool = False,
     lion_lr_ratio: float = 0.3,
     use_clion: bool = False,
-    clion_nu: float = 1.0,
+    clion_nu: float = 1e-3,
+    clion_gate_mode: str = "per_coord",
 ) -> torch.optim.Optimizer:
     """Build optimizer with COOKBOOK.md param group rules.
 
@@ -96,8 +97,10 @@ def build_optimizer(
         for g in groups:
             g["lr"] = g["lr"] * lion_lr_ratio
         opt = CLion(groups, lr=clion_lr, betas=(0.9, 0.99),
-                    weight_decay=weight_decay, nu=clion_nu)
+                    weight_decay=weight_decay, nu=clion_nu,
+                    gate_mode=clion_gate_mode)
         print(f"Using CLion optimizer (lr={clion_lr}, nu={clion_nu}, "
+              f"gate_mode={clion_gate_mode}, "
               f"scaled from base_lr={base_lr} x {lion_lr_ratio})")
         return opt
 

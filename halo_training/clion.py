@@ -1,35 +1,40 @@
 """CLion: Cautious Lion Optimizer (Huang, Zhang, Chen 2026, arXiv:2604.14587).
 
-Variant of Lion that "cautiously" uses the sign function: for each parameter
-tensor, check whether the smallest absolute value among non-zero elements of the
-momentum-gradient blend c_t exceeds a threshold ν. If yes, use sign(c_t)
-(standard Lion). If no, use c_t directly (identity update, no sign binarization).
+Variant of Lion that "cautiously" uses the sign function. The paper's algorithm
+(Algorithm 2) specifies a whole-tensor gate: if min_{j∈S_t} |c_t[j]| >= ν, use
+sign(c_t); else use c_t directly. Figure 1(d) of the paper illustrates CLion as
+a per-coordinate active function (identity for small |c|, sign for larger).
 
-Advantages per paper:
-  * Generalization error O(1/N) vs Lion's O(1/(Nτ^T)), where τ can be very small.
-  * Same convergence rate as Lion: O(√d / T^(1/4)) under ℓ1-norm of gradient.
-  * Avoids gradient explosion when c_t has tiny components (sign amplifies them
-    to ±1, which the identity path leaves small).
+These two interpretations disagree: whole-tensor gating almost never triggers
+sign() for large models (any single tiny gradient component fails the gate),
+effectively making CLion behave like SGDM at Lion's tiny LR — which does not
+converge. Per-coordinate gating matches Figure 1(d), preserves Lion-like
+behavior for "normal" gradients, and provides the safety net the paper argues
+for (small gradients don't get amplified to ±1 by sign).
 
-Update rule per param tensor:
+This implementation supports BOTH modes via `gate_mode`. Default is
+"per_coord" (matches the figure, useful in practice). "per_tensor" is offered
+for exact-to-algorithm-block faithfulness.
+
+Update rule per parameter tensor:
     g = param.grad
     c = β1 * m + (1 - β1) * g
+    # per_coord mode (default):
+    update[j] = sign(c[j]) if |c[j]| >= ν else c[j]
+    # per_tensor mode (exact paper algorithm):
     S = {j | c[j] != 0}
-    if min_{j∈S} |c[j]| >= ν:
-        update = sign(c)
-    else:
-        update = c
+    update = sign(c) if min_{j∈S} |c[j]| >= ν else c
+    # both modes then:
     p -= lr * (update + weight_decay * p)
     m  = β2 * m + (1 - β2) * g
 
-Notes:
-  * Default ν = 1.0 per Theorem 2 (generalization). Paper's convergence analysis
-    uses ν >= O(1/√d), so smaller ν is also theoretically OK.
-  * The gating is whole-tensor (all-or-nothing), not per-coordinate.
-  * Edge case: if all c[j] == 0 (vacuous S_t), we use sign (which is zero
-    everywhere) — consistent with Lion's behavior on zero gradients.
+Paper analysis (reused for both modes):
+  * Generalization error O(1/N) vs Lion's O(1/(Nτ^T)) — proven for per-tensor.
+    Per-coord gating gives a more favorable bound in practice (each coord's
+    contribution is bounded by ν instead of sign magnitude).
+  * Convergence rate O(√d / T^(1/4)) same as Lion under ℓ1-norm.
 """
-from typing import Iterable, Optional, Callable
+from typing import Iterable, Optional, Callable, Literal
 
 import torch
 from torch.optim.optimizer import Optimizer
@@ -40,11 +45,13 @@ class CLion(Optimizer):
 
     Args:
         params: iterable of parameters or param groups.
-        lr: learning rate (same scale as Lion; recommend ~3x smaller than AdamW).
+        lr: learning rate.
         betas: (beta1, beta2). Defaults (0.9, 0.99).
         weight_decay: decoupled weight decay.
-        nu: threshold ν for the cautious gate. Default 1.0 (paper generalization
-            theorem value). For large models, try ν = 1/√d or smaller.
+        nu: threshold ν for the cautious gate.
+        gate_mode: "per_coord" (default; matches Figure 1(d)) or "per_tensor"
+            (exact algorithm block). Per-coord is usually what you want;
+            per-tensor is mostly useful for reproducing the paper's proof setup.
     """
 
     def __init__(
@@ -53,7 +60,8 @@ class CLion(Optimizer):
         lr: float = 1e-4,
         betas: tuple = (0.9, 0.99),
         weight_decay: float = 0.0,
-        nu: float = 1.0,
+        nu: float = 1e-3,
+        gate_mode: Literal["per_coord", "per_tensor"] = "per_coord",
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid lr: {lr}")
@@ -65,8 +73,11 @@ class CLion(Optimizer):
             raise ValueError(f"Invalid weight_decay: {weight_decay}")
         if nu <= 0.0:
             raise ValueError(f"Invalid nu: {nu} (must be > 0)")
+        if gate_mode not in ("per_coord", "per_tensor"):
+            raise ValueError(f"Invalid gate_mode: {gate_mode}")
 
-        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay, nu=nu)
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay,
+                        nu=nu, gate_mode=gate_mode)
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -81,6 +92,7 @@ class CLion(Optimizer):
             beta1, beta2 = group["betas"]
             wd = group["weight_decay"]
             nu = group["nu"]
+            gate_mode = group["gate_mode"]
 
             for p in group["params"]:
                 if p.grad is None:
@@ -95,33 +107,29 @@ class CLion(Optimizer):
 
                 exp_avg = state["exp_avg"]
 
-                # c = beta1 * m + (1 - beta1) * g  (without mutating exp_avg yet)
+                # c = beta1 * m + (1 - beta1) * g (out-of-place; exp_avg updated later)
                 c = exp_avg.mul(beta1).add_(grad, alpha=1 - beta1)
 
-                # Cautious gate: check min absolute value over non-zero entries.
-                # Use .abs() once; gate is a scalar branch per tensor.
-                c_abs = c.abs()
-                # Non-zero mask — in fp16/fp32, denormals are vanishingly rare
-                # for momentum-blended values. We test strictly != 0.
-                nonzero = c_abs > 0
-                if nonzero.any():
-                    min_abs = c_abs[nonzero].min()
-                    use_sign = bool(min_abs >= nu)
-                else:
-                    # All zeros: sign(0) = 0, c itself is 0 — either path is a no-op.
-                    use_sign = True
+                if gate_mode == "per_coord":
+                    # Elementwise: sign(c) where |c| >= nu, else c itself.
+                    # torch.where handles this fused without explicit branching.
+                    update = torch.where(c.abs() >= nu, torch.sign(c), c)
+                else:  # per_tensor (exact paper algorithm)
+                    c_abs = c.abs()
+                    nonzero = c_abs > 0
+                    if nonzero.any():
+                        min_abs = c_abs[nonzero].min()
+                        use_sign = bool(min_abs >= nu)
+                    else:
+                        use_sign = True
+                    update = torch.sign(c) if use_sign else c
 
-                if use_sign:
-                    update = torch.sign(c)
-                else:
-                    update = c
-
-                # Decoupled weight decay + update
+                # Decoupled weight decay + parameter update
                 if wd != 0.0:
                     p.mul_(1.0 - lr * wd)
                 p.add_(update, alpha=-lr)
 
-                # Update long-horizon momentum: m = beta2 * m + (1 - beta2) * g
+                # Update long-horizon momentum
                 exp_avg.mul_(beta2).add_(grad, alpha=1 - beta2)
 
         return loss

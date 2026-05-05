@@ -104,9 +104,13 @@ def main():
                              "Same as Lion but gates sign() behind threshold nu. "
                              "Lower generalization error. Mutually exclusive with "
                              "--lion/--muon.")
-    parser.add_argument("--clion-nu", type=float, default=1.0,
-                        help="CLion sign-gate threshold (default 1.0 from paper). "
-                             "Try 1/sqrt(d) for very large models.")
+    parser.add_argument("--clion-nu", type=float, default=1e-3,
+                        help="CLion sign-gate threshold (default 1e-3 per-coord). "
+                             "Paper Theorem 2 uses 1.0; per-tensor mode needs smaller.")
+    parser.add_argument("--clion-gate-mode", type=str, default="per_coord",
+                        choices=["per_coord", "per_tensor"],
+                        help="per_coord (default, matches Fig 1d) or per_tensor "
+                             "(literal Algorithm 2; often ineffective at scale).")
     parser.add_argument("--num-workers", type=int, default=4,
                         help="DataLoader workers. 0 = synchronous (safer but slower data prep).")
     parser.add_argument("--model-kwarg", action="append", default=[],
@@ -306,6 +310,7 @@ def main():
         lion_lr_ratio=args.lion_lr_ratio,
         use_clion=args.clion,
         clion_nu=args.clion_nu,
+        clion_gate_mode=args.clion_gate_mode,
         use_bf16=args.bf16,
         use_ema=args.ema,
         resume_from=args.resume_from,

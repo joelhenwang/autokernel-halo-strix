@@ -45,7 +45,8 @@ def train(
     use_lion: bool = False,
     lion_lr_ratio: float = 0.3,
     use_clion: bool = False,
-    clion_nu: float = 1.0,
+    clion_nu: float = 1e-3,
+    clion_gate_mode: str = "per_coord",
     use_bf16: bool = False,
     use_ema: bool = False,
     ema_decay: float = 0.999,
@@ -232,6 +233,7 @@ def train(
     optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon,
                                 use_lion=use_lion, lion_lr_ratio=lion_lr_ratio,
                                 use_clion=use_clion, clion_nu=clion_nu,
+                                clion_gate_mode=clion_gate_mode,
                                 polar_ns=polar_ns)
 
     total_steps = len(dataloader) * epochs // accum_steps

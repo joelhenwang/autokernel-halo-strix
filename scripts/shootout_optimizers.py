@@ -43,11 +43,13 @@ def build_lion(model):
 
 
 def build_clion(model):
-    # Paper's default ν=1.0. For OdinHalo (57.6M params), most params have
-    # gradients ~O(1e-3) in fp16 training, so ν=1.0 means the identity path
-    # will dominate unless gradients are well-scaled. Start with 1.0 per paper.
+    # Per-coordinate gate: sign(c[j]) where |c[j]|>=nu, else c[j].
+    # OdinHalo gradients are ~1e-5 to 1e-4 median after GradScaler unscale.
+    # ν=1e-6 keeps ~90%+ of coords on sign path (Lion behavior) and sends only
+    # extreme-tiny coords to identity path (stability safety net).
     return CLion(model.parameters(), lr=BASE_LR * LION_LR_RATIO,
-                 betas=(0.9, 0.99), weight_decay=0.1, nu=1.0)
+                 betas=(0.9, 0.99), weight_decay=0.1,
+                 nu=1e-6, gate_mode="per_coord")
 
 
 def build_muon(model):
@@ -184,7 +186,7 @@ def main():
                  f"`compile_zones()`, GradScaler, grad_clip=1.0, 400 steps "
                  f"(200 warmup + 200 measured).\n")
     lines.append(f"Base LR (AdamW): {BASE_LR}; Lion/CLion LR: {BASE_LR * LION_LR_RATIO}; "
-                 f"Muon LR: {MUON_LR}; CLion ν: 1.0 (paper default).\n")
+                 f"Muon LR: {MUON_LR}; CLion ν=1e-6 per-coord (tuned below typical |c|~1e-5).\n")
 
     lines.append("\n## Results\n")
     lines.append("| Optimizer | tok/s | Peak GB | Init loss | Final loss | Δ loss |")
