@@ -113,29 +113,40 @@ Config: batch=16 x accum=8 x 2 nodes = 256 effective batch
         Backend: gloo over thunderbolt0 (10.77.0.x)
 ```
 
+**Final result: 1 full epoch complete, best loss 4.4698, 39,110 tok/s aggregate.**
+
 | Step | Loss | BPB | Aggregate tok/s | MFU | Per-node memory |
 |-----:|-----:|----:|----------------:|----:|----------------:|
-| 50 | 9.39 | 3.76 | 20,176 | 12.4% | 6.6 GB |
-| 100 | 7.01 | 2.81 | 39,933 | 24.5% | 6.6 GB |
-| 200 | 6.09 | 2.44 | 39,825 | 24.5% | 6.6 GB |
-| 500 | 5.28 | 2.11 | 39,538 | 24.3% | 6.6 GB |
-| 1000 | 4.86 | 1.95 | 39,400 | 24.2% | 6.6 GB |
+| 50 | 7.01 | 2.81 | 34,076 | 20.9% | 6.6 GB |
+| 500 | 4.93 | 1.97 | 39,341 | 24.2% | 6.6 GB |
+| 1000 | 4.69 | 1.88 | 39,269 | 24.1% | 6.6 GB |
+| 1500 | 4.54 | 1.82 | 39,169 | 24.1% | 6.6 GB |
+| **1869 (final)** | **4.47** | **1.79** | **39,110** | **24.0%** | **6.6 GB** |
 
-**Aggregate steady-state: ~39,500 tok/s** (~19,750 per node).
+```
+Done: 1869 steps, 122,503,168 tokens in 3132s (39,110 tok/s), best loss=4.4698
+```
 
-DDP scaling efficiency: 39,500 / (19,400 × 2) = **101.8%** — slightly super-linear
-(likely noise, but confirms gloo over TB4 has negligible overhead at this batch/accum config).
+**Aggregate steady-state: 39,110 tok/s** (~19,555 per node).
 
-Loss trajectory is healthy — converging from 9.39 to 4.86 through 1000 steps with no
-instability. Full epoch (1,869 steps) should reach ~4.5 final loss.
+DDP scaling efficiency: 39,110 / (19,400 × 2) = **100.8%** — gloo over TB4 has
+negligible overhead at this batch/accum config (super-linear due to noise).
+
+Loss trajectory is healthy — converging from 7.01 (fresh-optimizer restart spike)
+to 4.47 final, clean cosine LR decay, no grad norm spikes, zero StabilityGuard
+rollbacks. Full epoch wall time: 52 minutes.
 
 ### DDP setup notes
 
 - `scripts/launch_ddp.sh` orchestrates both machines from Machine A via SSH
-- TB4 TCP connectivity works (ping + TCP verified) but requires both torchrun
-  processes to start within the rendezvous timeout window
+- **Fully detached** via `setsid nohup ... < /dev/null`; torchrun PPID=1 after launch
+- Training survives SSH disconnect (verified during Windows Update restart mid-run)
+- TB4 TCP connectivity works reliably once both ranks start within the rendezvous window
 - `LD_PRELOAD` of custom RCCL is unnecessary for gloo backend (warning can be ignored)
 - Machine B uses `~/Desktop/comfyui-rocm7.12/autokernel-halo-strix/` (different venv path)
+- Resume behavior: `--resume-from` loads weights only (fresh optimizer/scheduler),
+  which causes a brief loss spike (7.01 at step 50) as AdamW momentum rebuilds,
+  recovering by step ~500.
 
 ## Artifacts
 

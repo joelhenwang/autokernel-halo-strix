@@ -406,18 +406,35 @@ torchrun --nnodes=2 --nproc_per_node=1
 - **Total steps:** 1,869 optimizer steps (1 epoch over 123M tokens at eff batch 256)
 - **Checkpoints:** every 500 steps → `checkpoints/odin-flat-wikitext-ddp/`
 
-**DDP throughput (from rank 0 logs):**
+**DDP training (complete — 2026-05-05):**
 
-| Step | Loss | tok/s (aggregate) | MFU | Memory |
-|-----:|-----:|------------------:|----:|-------:|
-| 50 | 9.39 | 20,176 | 12.4% | 6.6 GB |
-| 100 | 7.01 | 39,933 | 24.5% | 6.6 GB |
-| 200 | 6.09 | 39,825 | 24.5% | 6.6 GB |
-| 500 | 5.28 | 39,538 | 24.3% | 6.6 GB |
-| 1000 | 4.86 | 39,400 | 24.2% | 6.6 GB |
+Two runs were done back-to-back due to mid-run SSH disconnect. The second run
+resumed from `step_1000.pt` with a fresh optimizer, effectively giving OdinFlat
+an extra ~1,000 steps of training beyond the original epoch schedule.
 
-**Aggregate steady-state: ~39,500 tok/s** (2 GPUs, ~19,750 tok/s per node).
-Loss converging well: 9.39 → 4.86 at step 1000.
+| Step | Loss | BPB | Aggregate tok/s | MFU | Per-node memory |
+|-----:|-----:|----:|----------------:|----:|----------------:|
+| 50 | 7.01 | 2.81 | 34,076 | 20.9% | 6.6 GB (fresh-opt shock) |
+| 500 | 4.93 | 1.97 | 39,341 | 24.2% | 6.6 GB |
+| 1000 | 4.69 | 1.88 | 39,269 | 24.1% | 6.6 GB |
+| 1500 | 4.54 | 1.82 | 39,169 | 24.1% | 6.6 GB |
+| **1869 (final)** | **4.47** | **1.79** | **39,110** | **24.0%** | **6.6 GB** |
+
+```
+Done: 1869 steps, 122,503,168 tokens in 3132s (39,110 tok/s), best loss=4.4698
+```
+
+**Aggregate steady-state: 39,110 tok/s** over full epoch (per-node: ~19,555 tok/s).
+DDP scaling: 39,110 / (19,400 × 2) = **100.8%** — gloo/TB4 overhead negligible.
+
+Checkpoints saved at steps 500, 1000, 1500, 1869 (each ~1.46 GB).
+Clean exit, no grad spikes, no StabilityGuard rollbacks.
+
+**Launch script fix (2026-05-05):** `scripts/launch_ddp.sh` now uses
+`setsid nohup ... < /dev/null` to fully detach both ranks. Verified: `torchrun`
+gets reparented to init (PPID=1) and survives SSH disconnect. First run died at
+step 1250 when the local SSH session died during a Windows Update restart;
+detached relaunch completed without further issue.
 
 ### Important: max-autotune vs max-autotune-no-cudagraphs
 
