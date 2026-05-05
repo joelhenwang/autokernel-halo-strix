@@ -145,6 +145,81 @@ For non-looped models (e.g., plain Llama), reduce-overhead works fine.
 | 1024 | 12,397 | 4.09 GB | matmul shapes start to hurt |
 | 4096 | 12,358 | 4.90 GB | loses memory benefit |
 
+## Phase 1 Quick-Wins Results (2026-05-05)
+
+Phase 1 spec: `docs/superpowers/specs/2026-05-05-phase1-quick-wins-design.md`.
+Plan: `docs/superpowers/plans/2026-05-05-phase1-quick-wins-plan.md`.
+
+### Summary
+
+| Work item | Status | Measured effect |
+|-----------|:------:|:----------------|
+| W1 Deep profile tooling | ✓ shipped | `docs/perf/odinhalo-profile-2026-05-05-compile/profiler.md` generated (drives Phase 2) |
+| W5 Residual dedup in HyPEShortConvBlock | ✓ shipped | Inductor already CSE'd under compile — neutral throughput |
+| W6 DataLoader: `--num-workers` + `non_blocking=True` | ✓ shipped | Neutral (Strix unified memory; pinning+non_blocking ~no-op) |
+| W2 Lion optimizer + `--lion` CLI | ✓ shipped | Opt-in flag; smoke test passes |
+| W3 Optimizer shootout (4-way) | ✓ shipped | See table below; AdamW wins tok/s, Muon wins final loss |
+| W4 `compile(optimizer.step)` experiment | ✓ shipped | No benefit (0.997×); fused AdamW already single-kernel |
+| CLion (Cautious Lion, arXiv:2604.14587) | ✓ shipped | Added as part of W3 optimizer suite; per-coord gate default |
+
+### Shootout: OdinHalo V=32768 batch=16, 400 steps (200 warmup, 200 measured)
+
+| Optimizer | tok/s | Peak GB | Init loss | Final loss | Δ loss |
+|-----------|------:|--------:|----------:|-----------:|-------:|
+| **AdamW (fused)** | **13,991** | 5.67 | 4.751 | **4.181** | −0.570 |
+| Muon | 3,958 | 5.47 | 4.474 | **4.072** | −0.402 |
+| Lion | 13,695 | 5.44 | 5.314 | 4.311 | −1.003 |
+| CLion (per_coord, ν=1e-6) | 13,431 | 5.44 | 5.291 | 4.313 | −0.977 |
+
+**Winner:** AdamW (highest tok/s + reasonable loss).
+**Lowest loss:** Muon, but 3.5× slower step (Newton-Schulz iteration).
+**Largest loss reduction:** Lion, but higher starting loss (sign-update at LR=3e-5 is coarse).
+**CLion vs Lion:** essentially identical at ν=1e-6 (per-coord gate rarely triggers identity
+path at this threshold). Paper's claimed generalization advantage needs longer runs + test-set
+eval to observe.
+
+### CLion implementation notes (arXiv:2604.14587)
+
+Paper's Algorithm 2 specifies whole-tensor gating: use `sign(c)` iff the minimum non-zero
+absolute value of `c` exceeds ν. At scale (OdinHalo 57.6M params, median |c|≈1e-5 per
+tensor), **this gate almost never fires** — any single tiny gradient component fails the
+check, forcing every tensor through the identity path at Lion's tiny LR → no learning.
+
+Figure 1(d) of the paper illustrates CLion as a per-coordinate active function (identity
+for small |c|, sign for larger). We default to this interpretation (`gate_mode="per_coord"`)
+and offer `gate_mode="per_tensor"` for paper-faithfulness. The per-coord interpretation is
+both useful in practice and consistent with the figure.
+
+Default ν for OdinHalo-scale training: **1e-6** (below typical |c|≈1e-5 so sign fires for
+~90%+ of coords). Paper's Theorem 2 threshold of 1.0 is only appropriate if gradients are
+well-scaled to O(1); it is not the right value for modern LLM training with GradScaler.
+
+### Regression check (post-Phase-1)
+
+| Config | batch=16 tok/s | Peak GB | vs pre-Phase-1 |
+|--------|---------------:|--------:|---------------:|
+| compile + HIP CE | 14,577 | 4.83 | −0.7% (within noise) |
+| compile + HIP CE + Chunked CE | 14,163 | 3.89 | −0.5% (within noise) |
+
+All 8 halo model variants still pass single-step training test with `--chunked-ce`.
+
+### Next steps
+
+Phase 1 did NOT deliver a throughput lift because the shootout winner (AdamW) was already
+the default. The value Phase 1 delivered:
+
+1. **Profile artifact** (W1) for Phase 2 fusion investigation.
+2. **Optimizer options** (Lion, CLion) as opt-in flags for future experiments.
+3. **Confirmed no regression** from refactors.
+4. **Confirmed `compile(optimizer.step)` has no benefit** — document as deferred.
+
+Phase 2 (fusion investigation) should use the W1 profile as its starting point.
+
+---
+
+
+
+
 ### Chunked CE extension to all halo models (session 2)
 
 Extended `use_chunked_ce=True` ctor arg to: VidarHalo, FenrirHalo, TyrHalo, BaldrHalo, ChimeraHalo
