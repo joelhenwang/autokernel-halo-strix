@@ -29,10 +29,10 @@ import torch.nn.functional as F
 from models.amadeus import RMSNorm, SwiGLU, GatedConv
 from models.tempest import GriffinRecurrence
 from models.argus import TTTSwiGLU, precompute_freqs_cis, apply_rotary_emb
-from models.argus_prime import Attention, ShortConvBlock, GQABlock
+from models.components import Attention, ShortConvBlock, GQABlock
+from models.components import CodaAttention, DepthMemoryCache
 from models.jormungandr_halo import (
-    ParcaeInjection, ValueEmbedding, CodaAttention, CodaGQABlock,
-    DepthMemoryCache,
+    ParcaeInjection, ValueEmbedding, CodaGQABlock,
 )
 
 
@@ -40,18 +40,7 @@ from models.jormungandr_halo import (
 # SimpleParcaeInjection (d=768 uniform, no proj_down)
 # ---------------------------------------------------------------------------
 
-class SimpleParcaeInjection(nn.Module):
-    """Parcae injection for uniform dimensions (no projection needed)."""
-
-    def __init__(self, d_model: int):
-        super().__init__()
-        self.log_A = nn.Parameter(torch.full((d_model,), -0.7))
-        self.log_B = nn.Parameter(torch.full((d_model,), -0.7))
-
-    def forward(self, h: torch.Tensor, input_embed: torch.Tensor) -> torch.Tensor:
-        A = -torch.exp(self.log_A)
-        B = torch.exp(self.log_B)
-        return A * h + B * input_embed
+from models.components.injection import SimpleParcaeInjection
 
 
 # ---------------------------------------------------------------------------

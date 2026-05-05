@@ -29,28 +29,8 @@ from models.engram import EngramLayer
 from models.matformer import MatFormerSwiGLU, MatFormerConfig
 
 
-# ---------------------------------------------------------------------------
-# Copied from llama_7b.py (avoids RMSNorm name conflict)
-# ---------------------------------------------------------------------------
+from models._components import precompute_freqs_cis, apply_rotary_emb
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-    t = torch.arange(end, dtype=torch.float32)
-    freqs = torch.outer(t, freqs)
-    return torch.polar(torch.ones_like(freqs), freqs)
-
-
-def apply_rotary_emb(xq, xk, freqs_cis):
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs = freqs_cis[None, :xq_.shape[1], None, :]
-    xq_out = torch.view_as_real(xq_ * freqs).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
-
-
-# ---------------------------------------------------------------------------
-# Copied from tempest.py
 # ---------------------------------------------------------------------------
 
 class MomentumResidual(nn.Module):

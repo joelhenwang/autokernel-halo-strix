@@ -26,12 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Fast causal conv1d backend (10x vs nn.Conv1d)
-try:
-    from causal_conv1d import causal_conv1d_fn
-    _HAS_CAUSAL_CONV1D = True
-except ImportError:
-    _HAS_CAUSAL_CONV1D = False
+from models._components import RMSNorm, SwiGLU, GatedConv, _HAS_CAUSAL_CONV1D
 
 # Fast selective scan backend (5.6x vs HIP kernel)
 try:
@@ -55,71 +50,6 @@ class AmadeusConfig:
     film_start: int = 8     # first layer with FiLM conditioning
     max_seq_len: int = 1024
     conv_kernel: int = 3
-
-
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * norm * self.weight
-
-
-class SwiGLU(nn.Module):
-    """SwiGLU FFN with fused gate+up projection."""
-
-    def __init__(self, d_model: int, ffn_inner: int):
-        super().__init__()
-        self.w_gate_up = nn.Linear(d_model, 2 * ffn_inner, bias=False)
-        self.w_down = nn.Linear(ffn_inner, d_model, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate, up = self.w_gate_up(x).chunk(2, dim=-1)
-        return self.w_down(F.silu(gate) * up)
-
-
-class GatedConv(nn.Module):
-    """Gated short convolution for local pattern matching.
-
-    B, C, h_tilde = proj(x).chunk(3)
-    y = B * h_tilde  (element-wise gate)
-    z = causal_conv1d(y)
-    out = C * z       (output gate)
-    """
-
-    def __init__(self, d_model: int, d_conv: int, kernel_size: int = 3):
-        super().__init__()
-        self.d_conv = d_conv
-        self.kernel_size = kernel_size
-        self.proj = nn.Linear(d_model, 3 * d_conv, bias=False)
-        if _HAS_CAUSAL_CONV1D:
-            # causal_conv1d_fn expects weight (D, K) and optional bias (D,)
-            self.conv_weight = nn.Parameter(torch.randn(d_conv, kernel_size))
-            self.conv_bias = nn.Parameter(torch.zeros(d_conv))
-        else:
-            # Depthwise causal conv: left-pad by (kernel_size - 1)
-            self.conv = nn.Conv1d(
-                d_conv, d_conv, kernel_size=kernel_size,
-                padding=kernel_size - 1, groups=d_conv, bias=True,
-            )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, _ = x.shape
-        b, c, h_tilde = self.proj(x).chunk(3, dim=-1)   # each (B, T, d_conv)
-        y = b * h_tilde                                   # gate
-        if _HAS_CAUSAL_CONV1D:
-            # causal_conv1d_fn: input (B, D, L), weight (D, K) → output (B, D, L)
-            z = causal_conv1d_fn(
-                y.transpose(1, 2), self.conv_weight, self.conv_bias
-            ).transpose(1, 2)
-        else:
-            # Conv expects (B, C, T) layout
-            z = self.conv(y.transpose(1, 2))[:, :, :T]    # causal: truncate future
-            z = z.transpose(1, 2)                          # back to (B, T, d_conv)
-        return c * z                                       # output gate
 
 
 _HIP_SCAN_AVAILABLE = None  # lazy check

@@ -25,13 +25,8 @@ import torch.nn.functional as F
 
 from models.amadeus import RMSNorm, SwiGLU, GatedConv
 from models.argus import TTTSwiGLU, precompute_freqs_cis, apply_rotary_emb
-from models.argus_prime import Attention, ShortConvBlock, GQABlock, MultiStepTTTSwiGLU
-
-try:
-    from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
-    _HAS_HYBRID_ATTN = True
-except ImportError:
-    _HAS_HYBRID_ATTN = False
+from models.argus_prime import MultiStepTTTSwiGLU
+from models.components import ShortConvBlock, GQABlock
 
 
 # ---------------------------------------------------------------------------
@@ -83,72 +78,8 @@ class ValueEmbedding(nn.Module):
 # CodaAttention (Attention + optional ValueEmbedding bias)
 # ---------------------------------------------------------------------------
 
-class CodaAttention(Attention):
-    """GQA Attention with optional ValueEmbedding bias and Exclusive Self Attention.
-
-    XSA removes the self-value projection from attention output, forcing attention
-    to capture information orthogonal to each token's own value — reducing redundancy
-    with the FFN layer and improving context utilization.
-    Ref: "Exclusive Self Attention" (Zhai, 2026)
-    """
-
-    def __init__(self, dim: int, n_heads: int, n_kv_heads: int,
-                 qk_norm: bool = True, exclusive: bool = False):
-        super().__init__(dim, n_heads, n_kv_heads, qk_norm)
-        self.exclusive = exclusive
-
-    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor,
-                value_bias: Optional[torch.Tensor] = None,
-                depth_kvs: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
-                ) -> torch.Tensor:
-        B, T, _ = x.shape
-        q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
-        k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
-        v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
-
-        if value_bias is not None:
-            v = v + value_bias.view(B, T, self.n_kv_heads, self.head_dim)
-
-        q, k = apply_rotary_emb(q, k, freqs_cis)
-        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-
-        if self.qk_norm:
-            q = F.normalize(q, dim=-1) * self.q_scale
-            k = F.normalize(k, dim=-1) * self.k_scale
-
-        if self.n_rep > 1:
-            k = k.repeat_interleave(self.n_rep, dim=1)
-            v = v.repeat_interleave(self.n_rep, dim=1)
-
-        # MoDA: PREPEND depth KVs as prefix (flash-attention compatible)
-        # PyTorch SDPA with is_causal=True and T_q < T_kv treats extra KVs as visible prefix
-        has_depth = depth_kvs is not None and len(depth_kvs) > 0
-        if has_depth:
-            depth_k_list, depth_v_list = [], []
-            for dk, dv in depth_kvs:
-                if dk.shape[1] != k.shape[1]:
-                    dk = dk.repeat_interleave(k.shape[1] // dk.shape[1], dim=1)
-                    dv = dv.repeat_interleave(v.shape[1] // dv.shape[1], dim=1)
-                depth_k_list.append(dk)
-                depth_v_list.append(dv)
-            k = torch.cat(depth_k_list + [k], dim=2)  # prepend
-            v = torch.cat(depth_v_list + [v], dim=2)  # prepend
-
-        if _HAS_HYBRID_ATTN and q.dtype == torch.float16 and not has_depth:
-            y = hybrid_flash_sdpa_attention(
-                q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
-            ).transpose(1, 2)
-        else:
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-
-        # XSA: remove self-value projection (sequence portion = last T entries after depth prefix)
-        if self.exclusive:
-            v_seq = v[:, :, -T:, :]
-            dot = (y * v_seq).sum(dim=-1, keepdim=True)
-            v_norm_sq = (v_seq * v_seq).sum(dim=-1, keepdim=True).clamp(min=1e-8)
-            y = y - (dot / v_norm_sq) * v_seq
-
-        return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
+from models.components.attention import Attention
+from models.components.attention import CodaAttention  # re-export
 
 
 # ---------------------------------------------------------------------------
@@ -257,48 +188,7 @@ class CrossDimFiLMConditioner(nn.Module):
 # Depth Memory Cache (GRM — Gated Residual Memory over loop iterations)
 # ---------------------------------------------------------------------------
 
-class DepthMemoryCache(nn.Module):
-    """Content-dependent gated aggregation over cached loop iteration states.
-
-    Instead of using only the final loop state, caches h at each iteration
-    and lets each sequence position select its own weighted mix of depths.
-    Addresses variable convergence rates: some positions are "done" at iter 2,
-    others need all 4.
-
-    Ref: "Memory Caching: RNNs with Growing Memory" (Behrouz et al., 2026)
-    Applied here along depth (loop iterations), not sequence segments.
-    """
-
-    def __init__(self, d_core: int, d_gate: int = 64):
-        super().__init__()
-        self.W_u = nn.Linear(d_core, d_gate, bias=False)
-
-    def forward(self, cached_states: List[torch.Tensor]) -> torch.Tensor:
-        """Aggregate cached loop states via content-dependent gating.
-
-        Args:
-            cached_states: List of (B, T, d_core) tensors, one per iteration.
-        Returns:
-            Aggregated state (B, T, d_core).
-        """
-        if len(cached_states) == 1:
-            return cached_states[0]
-
-        # Query from last iteration (highest-depth representation)
-        u = self.W_u(cached_states[-1])  # (B, T, d_gate)
-
-        # Gate each cached state by similarity to its mean-pooled representation
-        gates = []
-        for state in cached_states:
-            key = self.W_u(state).mean(dim=1)  # (B, d_gate)
-            gate = (u * key.unsqueeze(1)).sum(dim=-1)  # (B, T)
-            gates.append(gate)
-
-        gates = torch.softmax(torch.stack(gates, dim=-1), dim=-1)  # (B, T, N)
-
-        # Weighted aggregation
-        stacked = torch.stack(cached_states, dim=-1)  # (B, T, d_core, N)
-        return (stacked * gates.unsqueeze(2)).sum(dim=-1)  # (B, T, d_core)
+from models.components.loop_utils import DepthMemoryCache
 
 
 # ---------------------------------------------------------------------------

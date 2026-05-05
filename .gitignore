@@ -44,3 +44,13 @@ sync_remote.sh
 run_remote_b.sh
 sync_remote_b.sh
 .claude/settings.json
+
+# Large data directories
+datasets/
+
+# Binary/document artifacts
+docs/*.pdf
+docs/*.zip
+
+# Compiled Python
+*.pyc

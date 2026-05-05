@@ -18,62 +18,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-try:
-    from causal_conv1d import causal_conv1d_fn
-    _HAS_CAUSAL_CONV1D = True
-except ImportError:
-    _HAS_CAUSAL_CONV1D = False
-
-
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * norm * self.weight
-
-
-class SwiGLU(nn.Module):
-    def __init__(self, d_model: int, ffn_inner: int):
-        super().__init__()
-        self.w_gate_up = nn.Linear(d_model, 2 * ffn_inner, bias=False)
-        self.w_down = nn.Linear(ffn_inner, d_model, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate, up = self.w_gate_up(x).chunk(2, dim=-1)
-        return self.w_down(F.silu(gate) * up)
-
-
-class GatedConv(nn.Module):
-    def __init__(self, d_model: int, d_conv: int, kernel_size: int = 3):
-        super().__init__()
-        self.d_conv = d_conv
-        self.proj = nn.Linear(d_model, 3 * d_conv, bias=False)
-        if _HAS_CAUSAL_CONV1D:
-            self.conv_weight = nn.Parameter(torch.randn(d_conv, kernel_size))
-            self.conv_bias = nn.Parameter(torch.zeros(d_conv))
-            self._fast = True
-        else:
-            self.conv = nn.Conv1d(
-                d_conv, d_conv, kernel_size=kernel_size,
-                padding=kernel_size - 1, groups=d_conv, bias=True,
-            )
-            self._fast = False
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, _ = x.shape
-        b, c, h_tilde = self.proj(x).chunk(3, dim=-1)
-        y = b * h_tilde
-        if self._fast:
-            z = causal_conv1d_fn(
-                y.transpose(1, 2), self.conv_weight, self.conv_bias
-            ).transpose(1, 2)
-        else:
-            z = self.conv(y.transpose(1, 2))[:, :, :T].transpose(1, 2)
-        return c * z
+from models._components import RMSNorm, SwiGLU, GatedConv, _HAS_CAUSAL_CONV1D
 
 
 class GriffinRecurrence(nn.Module):

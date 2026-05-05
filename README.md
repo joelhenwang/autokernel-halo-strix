@@ -9,6 +9,8 @@ related:
 tags: [%overview, %quick-start, %autokernel]
 ---
 
+<!-- AGENTS: Read CLAUDE.md for agent instructions, STATUS.md for current training state. -->
+
 # AutoKernel
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/UfEyc72t)

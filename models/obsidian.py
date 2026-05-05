@@ -27,26 +27,7 @@ except ImportError:
     _HAS_CAUSAL_CONV1D = False
 
 
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * norm * self.weight
-
-
-class SwiGLU(nn.Module):
-    def __init__(self, d_model: int, ffn_inner: int):
-        super().__init__()
-        self.w_gate_up = nn.Linear(d_model, 2 * ffn_inner, bias=False)
-        self.w_down = nn.Linear(ffn_inner, d_model, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        gate, up = self.w_gate_up(x).chunk(2, dim=-1)
-        return self.w_down(F.silu(gate) * up)
+from models._components import RMSNorm, SwiGLU
 
 
 class BitNetLinear(nn.Module):

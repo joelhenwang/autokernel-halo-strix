@@ -28,17 +28,15 @@ import torch.nn.functional as F
 # Reuse all existing components
 from models.amadeus import RMSNorm, SwiGLU, GatedConv, Mamba3SISO, _scan_dispatch
 from models.argus import TTTSwiGLU, precompute_freqs_cis, apply_rotary_emb
-from models.argus_prime import Attention, ShortConvBlock, GQABlock, MultiStepTTTSwiGLU
+from models.argus_prime import MultiStepTTTSwiGLU
+from models.components import Attention, ShortConvBlock, GQABlock
+from models.components import CodaAttention, DepthMemoryCache
 from models.jormungandr_halo import (
-    ParcaeInjection, ValueEmbedding, CodaAttention, CodaGQABlock,
-    CrossDimFiLMConditioner, DepthMemoryCache,
+    ParcaeInjection, ValueEmbedding, CodaGQABlock,
+    CrossDimFiLMConditioner,
 )
 
-try:
-    from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
-    _HAS_HYBRID_ATTN = True
-except ImportError:
-    _HAS_HYBRID_ATTN = False
+_HAS_HYBRID_ATTN = False  # disabled: flash_attn requires aiter
 
 
 # ---------------------------------------------------------------------------

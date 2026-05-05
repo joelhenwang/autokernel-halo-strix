@@ -34,9 +34,14 @@ _ATTN_BACKEND = None
 
 
 def _detect_attn_backend():
+    """Return best available attention backend for this GPU."""
     global _ATTN_BACKEND
     if _ATTN_BACKEND is not None:
         return _ATTN_BACKEND
+
+    # Hybrid attention disabled: flash_attn requires aiter (not on Machine A)
+    _ATTN_BACKEND = "sdpa"
+    return _ATTN_BACKEND
 
     # Priority 1: hybrid_attention (flash fwd + SDPA bwd, 8.9% faster)
     try:
@@ -92,22 +97,7 @@ class PrometheusConfig:
     max_seq_len: int = 1024
 
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-    t = torch.arange(end, dtype=torch.float32)
-    freqs = torch.outer(t, freqs)
-    return torch.polar(torch.ones_like(freqs), freqs)
-
-
-def apply_rotary_emb(
-    xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor
-):
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs = freqs_cis[None, :xq_.shape[1], None, :]
-    xq_out = torch.view_as_real(xq_ * freqs).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+from models._components import precompute_freqs_cis, apply_rotary_emb
 
 
 class GQAAttentionLayer(nn.Module):

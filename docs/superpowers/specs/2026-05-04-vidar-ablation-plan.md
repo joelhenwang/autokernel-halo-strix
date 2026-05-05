@@ -187,6 +187,8 @@ python -m halo_training --model models/vidar_halo.py --class-name VidarHaloGPT2 
 | P3a Delayed recurrence | YES (short loop phase) | **DEFINITIVE** | Tier M has 1184 looped steps vs 328 at Tier S |
 | P4a Parallel residuals | YES | **CHECK throughput** | Tier M reveals bandwidth cost at d=768 |
 | P5a Skip connection | YES | YES | Structural, scale-independent |
+| P8a Curriculum warm-start | **NO** (BabyLM already "easy") | **YES** (WT103 has difficulty range) | Must use Tier M or V |
+| P9a HyPE positional | **NO** (needs multi-length eval) | **YES** (eval at 512/1024/2048) | Requires length extrapolation test |
 | Compile interaction | NO (eager) | **YES** | Tier M uses compiled mode |
 | Autokernel interaction | Partial (d_conv=320) | **YES** (d_conv=576) | Full production AK pattern |
 
@@ -492,6 +494,82 @@ loss += 0.1 * jepa_loss
 
 ---
 
+### Phase 8a: Curriculum Warm-Start
+
+**Source:** "Beyond Random Sampling: Efficient Language Model Pretraining via Curriculum Learning" (EACL 2026). Also recommended as top experiment in `docs/adal/llm_novelties_2025_2026_report.md` and `docs/adal/project_broad_deep_dive_report_2026-05-04.md`.
+
+**Change:** Order training data easy→hard for first 10-20% of steps, then switch to random sampling.
+
+**Difficulty proxy:** gzip compression ratio (cheapest, most effective per EACL paper). Lower compression = more redundant = "easier." Higher compression = more information-dense = "harder."
+
+```python
+# Pre-compute: sort training sequences by gzip compression ratio
+# Phase 1 (first 15% of steps): sample from easiest 33% of data
+# Phase 2 (15%-20%): sample from easiest 66%
+# Phase 3 (20%+): random sampling from all data (standard)
+```
+
+**Implementation:** Modify `halo_training/data.py` to accept a pre-computed difficulty index. Sort sequences by compression ratio. Use a phased sampler that restricts to easy buckets initially, then opens up.
+
+**Hypothesis:** Easy-first ordering builds robust low-level features (syntax, common patterns) before exposing the model to complex/noisy text. 18-45% faster convergence to baseline, up to 3.5% sustained gain after switching to random.
+
+| Metric | Predicted | Measurement |
+|--------|-----------|-------------|
+| BPB delta | −0.01 to −0.03 (at same step count) | |
+| Steps-to-target | −18 to −45% faster | |
+| tok/s delta | 0% (only changes data order) | |
+| Impl effort | 3-4 hours (difficulty scoring + phased sampler) | |
+
+**Risk:** LOW-MEDIUM. If difficulty proxy is noisy for STEM/code data, curriculum may not help. But the fallback (random sampling after 20%) means worst case = baseline performance.
+
+**Tier S note:** BabyLM is already "easy" text (child-directed speech). Curriculum effect may be invisible at Tier S. **Test this at Tier M (wikitext-103) or directly at Tier V (stem-crawl).**
+
+---
+
+### Phase 9a: HyPE Positional Encoding
+
+**Source:** HypeNet / HALO paper (2601.22156, ICML 2026). Also recommended in `docs/adal/llm_novelties_2025_2026_report.md` (#2 ranked experiment) and `docs/adal/project_broad_deep_dive_report_2026-05-04.md` (§2 "positional strategy is now a first-class architecture lever").
+
+**Change:** Use RoPE in ShortConv (recurrent) layers, NoPE (no positional encoding) in GQA (attention) layers.
+
+Currently Vidar uses RoPE only in GQA attention. ShortConv blocks have no explicit positional encoding (implicit from causal conv1d ordering). HyPE inverts this:
+- **Conv/recurrent layers:** Add RoPE → gives positional signal for local processing
+- **Attention layers:** Remove RoPE → enables length generalization (attention without position bias attends to content, not position)
+
+```python
+# In VidarMoDAGQABlock: remove RoPE from attention
+# self.attn uses freqs_cis=None (NoPE)
+
+# In VidarShortConvBlock: add RoPE-modulated gating
+# Apply RoPE to conv input or gate signal
+```
+
+**Why this is different from our current design:**
+
+| Component | Current Vidar | HyPE Vidar |
+|-----------|--------------|------------|
+| ShortConv blocks | No positional encoding | RoPE applied |
+| GQA block | RoPE in Q/K projections | **NoPE** (no RoPE) |
+| Length generalization | Limited to training length | Extrapolates beyond training length |
+
+**Hypothesis:** NoPE attention generalizes to longer contexts without explicit position bias. RoPE in recurrent layers provides local positional signal. Combined: better length extrapolation with no throughput cost. HypeNet achieved 99.8% NIAH at 256K from 4K training context.
+
+| Metric | Predicted | Measurement |
+|--------|-----------|-------------|
+| BPB delta (short context) | ±0.005 (may be slightly worse or neutral) | |
+| Length extrapolation | Significantly better | |
+| tok/s delta | 0% (same FLOPs, RoPE just moves location) | |
+| Params added | 0 | |
+| Impl effort | 2 hours | |
+
+**Risk:** MEDIUM. Short-context BPB might degrade slightly (attention without RoPE loses position information that may help at training length). The gain is in length generalization — which we can't measure in a 1-epoch BabyLM ablation.
+
+**Tier note:** Must evaluate at Tier M with varying eval context lengths (512, 1024, 2048, 4096) to see extrapolation benefit. Tier S is insufficient for this technique.
+
+**Variant 9b:** SWAN-style — keep RoPE in attention but only on sliding-window layers, remove from global attention layers. Lighter change, partial benefit.
+
+---
+
 ## Part 2: Matrix Ablation (Sensible Combinations)
 
 After sequential ablation identifies individual winners, test combinations. Only combinations with theoretical synergy — not random mixing.
@@ -501,12 +579,14 @@ After sequential ablation identifies individual winners, test combinations. Only
 | Combo | Rationale | Interference Risk |
 |-------|-----------|------------------|
 | 1a + 1b | Optimizer + schedule, independent mechanisms | NONE |
-| 1a + 1b + 1c | All zero-cost training improvements | LOW (LN scale interacts with depth_scale init) |
+| 1a + 1b + 1c | All zero-cost training improvements | LOW |
 | 3a + 1a + 1b | Delayed recurrence + better optimizer + better schedule | LOW |
 | 4a + 5a | Parallel residuals + skip connection = dual-path info flow | MEDIUM (both modify residual stream) |
 | 3a + 7a | Delayed → Progressive recurrence (7a subsumes 3a) | NONE (sequential) |
-| 2a + 1c | Softcap + LN scale = dual logit/activation control | LOW (complementary) |
-| 6a + everything | JEPA on top of best combo | LOW (additive loss) |
+| 2a + 1c | Softcap + iter scales = dual logit/activation control | LOW (complementary) |
+| 8a + 1a + 1b | Curriculum + optimizer + schedule = training efficiency trifecta | NONE (orthogonal domains) |
+| 9a + 4a | HyPE + parallel residuals = structural architecture change | MEDIUM (both change info flow) |
+| 8a + 3a | Curriculum warm-start + delayed recurrence = progressive complexity | LOW (synergistic: easy data → flat model, then hard data → deep model) |
 
 ### Matrix Design
 
@@ -542,17 +622,28 @@ Compare MX-10 vs MX-12: hard switch vs soft ramp at activation boundary.
 Compare MX-20 vs MX-21: which residual modification matters more?
 MX-22 tests for synergy vs interference.
 
-**Tier 4: Auxiliary loss** (run on Tier 3 winner)
+**Tier 4: Data and positional experiments** (run on Tier 3 winner, Tier M or V only)
 
 | ID | Config | Expected BPB | Notes |
 |----|--------|-------------|-------|
-| MX-30 | BEST_T3 + P6a | T3 − 0.003 | + JEPA aux loss |
+| MX-30 | BEST_T3 + P8a | T3 − 0.015 | + curriculum warm-start |
+| MX-31 | BEST_T3 + P9a | T3 − 0.005 (short ctx), better extrapolation | + HyPE (NoPE attention, RoPE conv) |
+| MX-32 | BEST_T3 + P8a + P3a | T3 − 0.020 | Curriculum + delayed recurrence (synergistic: easy→flat, hard→deep) |
 
-**Tier 5: Full stack** (final combination)
+**Note:** P8a (curriculum) and P9a (HyPE) can't be properly evaluated at Tier S. Run directly at Tier M.
+MX-32 tests the most interesting synergy: curriculum feeds easy data during flat phase, hard data during deep phase. Progressive complexity in BOTH data and architecture simultaneously.
+
+**Tier 5: Auxiliary loss** (run on Tier 4 winner, if compute remains)
 
 | ID | Config | Expected BPB | Notes |
 |----|--------|-------------|-------|
-| MX-40 | All winners stacked | Baseline − 0.06 to −0.10 | Best from each tier |
+| MX-35 | BEST_T4 + P6a | T4 − 0.003 | + JEPA aux loss (deferred, low priority) |
+
+**Tier 6: Full stack** (final combination)
+
+| ID | Config | Expected BPB | Notes |
+|----|--------|-------------|-------|
+| MX-40 | All winners stacked | Baseline − 0.07 to −0.12 | Best from each tier |
 | MX-41 | MX-40 3-seed | Same ± std | Statistical validation |
 
 ---
@@ -604,17 +695,18 @@ All runs: VidarHaloAblation d=384, BabyLM 1 epoch, ~12 min each.
 
 **20 runs in 2.5 hours.** Full screening done in a single session.
 
-### Day 2: Tier M — Scale Confirmation (~1 hr each)
+### Day 2: Tier M — Scale Confirmation + Tier M-Only Phases (~1 hr each)
 
-Promote Tier S winners (CE delta ≥ −0.05) to d=768 on wikitext-103. Also run combos.
+Promote Tier S winners (CE delta ≥ −0.05) to d=768 on wikitext-103. Also run Tier M-only experiments (P8a curriculum, P9a HyPE) that can't be evaluated at Tier S.
 
 | Slot | Machine A (~1 hr each) | Machine B (~1 hr each) |
 |------|------------------------|------------------------|
 | 1 (0:00-1:00) | B0-M baseline (d=768, WT103) | Best single technique from Tier S |
 | 2 (1:00-2:00) | 2nd best single technique | 3rd best single technique |
-| 3 (2:00-3:00) | Best combo from Tier S | Best combo + runner-up technique |
+| 3 (2:00-3:00) | Best combo from Tier S | P8a (curriculum warm-start) |
+| 4 (3:00-4:00) | P9a (HyPE positional encoding) | MX-32 (curriculum + delayed recurrence) |
 
-**6 runs in 3 hours.** Now have d=768 rankings. Compare Tier S vs Tier M ranking:
+**8 runs in 4 hours.** Now have d=768 rankings including data and positional experiments. Compare Tier S vs Tier M ranking:
 - **Rankings match:** Screening protocol is valid. Proceed confidently.
 - **Rankings diverge:** Scale-dependent effect found. Trust Tier M.
 
@@ -645,12 +737,12 @@ Promote top 2 Tier M winners to stem-crawl-solo, 1 full epoch.
 | Phase | Runs | Wall Time | Compute |
 |-------|------|-----------|---------|
 | Tier S screening (d=384, BabyLM) | 20 | **2.5 hours** | 2 machines × 2.5 hr |
-| Tier M confirmation (d=768, WT103) | 6 | **3 hours** | 2 machines × 3 hr |
+| Tier M confirmation + M-only phases (d=768, WT103) | 8 | **4 hours** | 2 machines × 4 hr |
 | Tier V validation (d=768, stem-crawl) | 4 | **16 hours** | 2 machines × 2 × 8 hr |
 | Tier V 3-seed | 3 | **16 hours** | 2 machines × 8 hr + 1 serial |
-| **Total** | **~33** | **~3-4 days** | |
+| **Total** | **~35** | **~3-4 days** | |
 
-**Funnel: 20 configs → 6 survivors → 2 finalists → 1 winner (3-seed validated).**
+**Funnel: 20 Tier S configs + 4 Tier M-only → 8 Tier M survivors → 2 Tier V finalists → 1 winner (3-seed validated).**
 
 ---
 

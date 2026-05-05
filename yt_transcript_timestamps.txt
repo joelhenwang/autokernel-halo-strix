@@ -1,0 +1,522 @@
+[00:14] Hi everyone. My name is Maxim Labonne.
+[00:16] In this presentation I want to talk
+[00:18] about the lessons I've learned
+[00:20] pre-training small models.
+[00:22] So for context I work at Liquid AI as
+[00:25] head of pre-training. At Liquid we
+[00:27] mostly focus on edge models for on
+[00:29] device deployment. And as you can see
+[00:31] here we have models from
+[00:34] 350 million parameters to 24 billion
+[00:37] parameters. So this is very very small.
+[00:40] And
+[00:41] yesterday we released our new VLM 450M
+[00:45] and the week before we released the new
+[00:47] version of the 350M model for text.
+[00:51] So this is what we do. We work across
+[00:53] text, vision and audio. And yeah, the
+[00:57] models are available on Hugging Face if
+[00:59] you want to try them out.
+[01:01] In this presentation I want to talk
+[01:03] about what separates small models and
+[01:07] big models. And there are three main
+[01:09] characteristics I want to talk about. So
+[01:11] first of all, the small models they're
+[01:12] memory bound um
+[01:14] because the hardware is is what it is,
+[01:17] right? On a phone, in a car, etc. We
+[01:20] can't really use super big models which
+[01:22] is why we try to keep the the size quite
+[01:24] small.
+[01:25] Because of that we have low knowledge
+[01:27] capacity compared to bigger models.
+[01:29] Then the models are task which is great
+[01:32] because if you have small knowledge
+[01:34] capacity you can at least focus on one
+[01:36] thing very well. And so that means that
+[01:39] they are usually not general purpose
+[01:40] chatbots like ChatGPT. They are a lot
+[01:43] more narrow in terms of focus and they
+[01:45] can do something like summarization to
+[01:47] use very very well.
+[01:49] So that's the second aspect. And the
+[01:51] final one is that it's very latency
+[01:54] sensitive. And that means that you need
+[01:56] to have very very fast throughput. So
+[02:00] all these characteristics are very
+[02:01] important and we'll see in this
+[02:02] presentation how they play with each
+[02:04] other and how we can do better.
+[02:07] But the main lesson I want you to retain
+[02:09] from this presentation is that small
+[02:11] models are not just scaled on versions
+[02:13] of bigger models. They also have their
+[02:15] unique challenges and we will see about
+[02:18] how we do it in this presentation. The
+[02:20] first thing I want to talk about is the
+[02:22] model architecture because there's a lot
+[02:24] of interesting things that we can do
+[02:26] here for edge models.
+[02:27] I want to first look about Gemma 3 270M
+[02:31] and Gemma 2.5 0.8B. So these models are
+[02:35] the smallest version of their respective
+[02:37] family. And you can see that both of
+[02:39] them they adopt a hybrid architecture.
+[02:42] Gemma 3 has sliding window attention and
+[02:45] GQA hybrid. Gemma 2.5 has a new
+[02:48] architecture with gated
+[02:51] Delta Net and gated attention. This is
+[02:53] great because this is a lot faster. But
+[02:55] what I'm interested in here is actually
+[02:57] the embedding layer. Because if you look
+[02:59] at the size of the embedding layer
+[03:01] compared to all the parameters of the
+[03:03] model you see that actually Gemma 3 270M
+[03:06] is mostly an embedding layer. It's 63%
+[03:09] of the total parameters. And even Gemma
+[03:12] 2.5 0.8B it's it's still like 29% of the
+[03:16] parameters.
+[03:17] So that's not super efficient because
+[03:20] the effective parameters, the parameters
+[03:22] that are really used for reasoning, for
+[03:24] knowledge capacity and all that stuff
+[03:26] are not the embedding parameters.
+[03:29] They're the rest. So the effective size
+[03:31] is actually a lot smaller and it means
+[03:34] that you could squeeze more reasoning
+[03:36] and more performance from the same
+[03:38] memory footprint.
+[03:39] And the reason why they do that is
+[03:41] because they use distillation to train
+[03:43] the models. So they distill
+[03:46] these models like those are the
+[03:48] student models and they have teacher
+[03:50] models with a huge vocabulary sizes and
+[03:53] this is why we have these super big
+[03:56] embedding layers.
+[03:58] All right, let's look about the LFM 2
+[04:01] architecture now. As you can see the LFM
+[04:03] 2 architecture is actually
+[04:05] not that different in terms of um
+[04:08] just layers. We also have like a hybrid
+[04:11] architecture and this time we have short
+[04:13] convolutions and GQA.
+[04:16] And I want to talk a bit about well
+[04:18] first you can see that the embedding
+[04:20] layer is actually a lot smaller compared
+[04:23] to the others. It's like 90% of the
+[04:24] parameters so we have more effective
+[04:26] parameters which is great. And I want to
+[04:29] talk about how we created this
+[04:30] architecture.
+[04:31] And we did on device profiling. So
+[04:33] instead of doing more like theoretical
+[04:36] work we decided to say like okay, let's
+[04:39] try to really implement it on the target
+[04:41] hardware. So we had two target hardware
+[04:43] here and we wanted to see how it
+[04:46] performs in real life to be able to
+[04:48] optimize
+[04:50] the architecture, find the right
+[04:51] operators here. And the thing that we
+[04:53] found is this gated short convolution
+[04:56] block that you can see here. And why
+[04:58] this is nice it's because it's very very
+[05:01] fast. The short convs are a lot faster
+[05:04] than all the alternatives. So you can
+[05:06] see here compared to sliding window
+[05:09] attention from Gemma 3, the gated Delta
+[05:11] Net from Gemma 2.5, gated linear
+[05:13] attention and group query attention. You
+[05:16] can see that
+[05:17] the cost ratio is really in favor of
+[05:19] short conv which is great because we
+[05:20] said that this is very latency
+[05:22] sensitive. So this is exactly what we
+[05:24] want. So this is quite theoretical but
+[05:27] if we look in practice and we profile
+[05:30] the inference of these models you can
+[05:32] see here on the 2 CPU, the AMD Ryzen Max
+[05:36] Plus 395 and the Samsung Galaxy S25
+[05:40] Ultra. Um
+[05:43] All these models don't have necessarily
+[05:45] the same size but it gives you a rough
+[05:46] picture and you can see that the short
+[05:48] conv really allow LFM 2 architecture to
+[05:50] be a lot faster and also use less
+[05:53] memory. So that's great.
+[05:55] And you can see also GPU. It's not
+[05:57] really just for CPU but also on GPU you
+[06:00] can see that it has a lot of throughput
+[06:03] even at very high concurrency levels.
+[06:07] All right, let's talk a bit about
+[06:08] training now.
+[06:10] So
+[06:12] the LFM 2.5 training recipe is quite
+[06:15] similar to what you can find find
+[06:17] elsewhere in terms of stages. We have
+[06:19] pre and mid-training
+[06:21] 28 trillion tokens. We have supervised
+[06:25] fine-tuning, preference alignment and
+[06:26] reinforcement learning.
+[06:28] And here you can see I'm talking about
+[06:30] 28 trillion tokens. And I said that we
+[06:32] released a model of 350M parameters last
+[06:37] week.
+[06:38] So yeah, we pre-trained a 350 million
+[06:40] parameter model on 28 trillion tokens.
+[06:43] If you're familiar with Chinchilla
+[06:45] scaling laws that might sound a bit
+[06:47] weird because we're supposed to be
+[06:50] compute optimal at like I don't know
+[06:52] like maybe 1 billion not not even 1
+[06:54] trillion parameter. I mean
+[06:56] but it's actually not the case and we
+[06:58] see that the performance still
+[07:01] grows when you scale the number of
+[07:03] pre-training tokens. And there was a
+[07:04] super interesting paper by Roberts et al
+[07:07] published last week about the test time
+[07:10] scaling laws. And you can see here how
+[07:13] LFM 2.5 350M compares to their new
+[07:16] scaling laws. You can see Chinchilla
+[07:18] scaling laws here and the new ones that
+[07:20] they proposed here. And actually we did
+[07:23] not pre-train the models on enough
+[07:24] tokens. We should pre-train even more to
+[07:27] be optimal according to their laws.
+[07:30] But this is cool because more
+[07:31] pre-training works and it works even at
+[07:34] the smallest scale which is great
+[07:35] because these models are a lot cheaper
+[07:37] to train than
+[07:39] much bigger models. And here you can see
+[07:41] a comparison. It's not just for
+[07:43] pre-training. It's like
+[07:45] post-training models. And you can see
+[07:48] that the LFM 2.5 model is significantly
+[07:52] better than the the previous version LFM
+[07:54] 2 350M on a lot of different benchmarks.
+[07:57] So you have knowledge with GPQA diamond.
+[08:00] You have instruction following with IF
+[08:01] bench. You have case report bench which
+[08:03] is data extraction. And also a lot of
+[08:06] tool use with BFCL and and Dow 2 bench.
+[08:09] With this model it's only 350 million
+[08:11] parameters. So what we wanted to do is
+[08:13] we wanted the model to be very very good
+[08:16] at data extraction and at tool use. And
+[08:19] the rest if it's not the best model at
+[08:21] encode it doesn't matter. Like people
+[08:23] don't use it that way anyway. Same for
+[08:24] math. I think it's really nice to try to
+[08:27] target some capabilities and not try to
+[08:29] be like average on everything.
+[08:31] All right, let's talk exactly about
+[08:33] that. Pre-training
+[08:35] small and big models. What's the
+[08:37] difference? We have pretty much the same
+[08:39] stage. So this is not really in terms of
+[08:41] stages that we see a difference. It's
+[08:43] more about how you do it. So for
+[08:45] supervised fine-tuning is better if you
+[08:47] actually quite narrow and you focus on
+[08:49] some task. It's true for general purpose
+[08:52] pre-training but it's also true if you
+[08:54] do fine-tuning. So you can take one of
+[08:56] these models on Hugging Face and just
+[08:58] fine-tune it for your use case. And for
+[09:00] example you have a use case where you
+[09:01] have a particular function that you want
+[09:03] to call. This is great. This is a
+[09:05] excellent use case. Like the more narrow
+[09:07] you can
+[09:08] you can
+[09:09] find it or design it the better it is.
+[09:12] Then we have preference alignment. So
+[09:14] during pre-training we have our on
+[09:18] on policy length normalized direct
+[09:20] preference optimization algorithm that
+[09:22] we quite like. And preference alignment
+[09:23] is very nice because it brings you
+[09:26] general improvements. It's not just
+[09:28] about benchmarks. It's really like
+[09:30] overall after preference alignment the
+[09:32] model is better. It sounds better and
+[09:35] this is really nice to be able to just
+[09:37] improve it overall.
+[09:39] And finally we have reinforcement
+[09:41] learning.
+[09:42] And reinforcement learning is extremely
+[09:44] efficient even at very small scale. It's
+[09:47] a really really important technique that
+[09:49] we use everywhere. And the main thing is
+[09:51] that it's very narrow in terms of focus.
+[09:53] So you want to have like as many
+[09:55] environments, as many tasks as possible,
+[09:57] and make sure that
+[09:59] you generalize well thanks to this.
+[10:02] Um
+[10:03] and then for small models in particular,
+[10:05] they're quite sensitive to cold start
+[10:07] SFT data. So, if you have a particular
+[10:10] task in reinforcement learning, it's
+[10:12] always good to have similar samples and
+[10:15] a similar task in your supervised
+[10:16] fine-tuning mixture. And this is good
+[10:19] feedback that you can see during
+[10:20] reinforcement learning something doesn't
+[10:22] train very well. It's probably because
+[10:24] you are missing some uh cold start SFT
+[10:26] data. Maybe the task is too complex,
+[10:28] there are different reasons, but um you
+[10:30] can try to
+[10:32] start again uh from the supervised
+[10:34] fine-tuning uh stage, add your data, and
+[10:37] then see if it improves anything.
+[10:41] All right, but there's a new problem uh
+[10:43] with small language models that you
+[10:45] might have encountered even with bigger
+[10:47] ones, and this is doom looping.
+[10:49] So, the problem with doom looping is, as
+[10:51] you can see here, it's going to start
+[10:52] repeating a sequence of words over and
+[10:55] over and over and over again, and it
+[10:56] just like never stops.
+[10:58] Um so, this is a problem all the time,
+[11:00] but it's particularly a problem if you
+[11:02] have small models, if you have reasoning
+[11:05] models, and if you have complex task. If
+[11:07] the task is basically too complex for
+[11:10] the model. Hopefully, this recipe is not
+[11:12] too complex for this model, but this can
+[11:13] happen anywhere, and you have the three
+[11:16] of them at the same time. So, if you
+[11:18] have a tiny reasoning models on like
+[11:21] super difficult math task, this is the
+[11:23] perfect recipe to have a lot of doom
+[11:26] loops.
+[11:27] Um so, this is a unique challenge that
+[11:29] you find with small models uh to give
+[11:31] you a concrete example.
+[11:33] And here I can talk about like how we
+[11:34] solve it. The first thing is that we
+[11:37] solve it during the preference alignment
+[11:39] stage, and in particular for the data
+[11:43] generation part that we do.
+[11:45] So, here you can see the pipeline that
+[11:47] we use uh to do the data generation, the
+[11:50] on-policy data generation for preference
+[11:52] alignment. So, we start with prompt like
+[11:55] 1 million samples to give you a rough
+[11:56] idea, and then we use the policy model,
+[12:00] the model that we want to train with
+[12:01] temperature sampling, and we just
+[12:03] generate five rollouts. Because we use
+[12:06] temperature sampling, these rollouts
+[12:08] tend to be a lot more diverse, and we
+[12:11] expect that not all of them will uh have
+[12:14] doom loops. At least one should not doom
+[12:15] loop, right? And on the other hand, we
+[12:18] generate just one extra uh rollout with
+[12:22] a policy model with temperature zero,
+[12:24] and this one we think that it's going to
+[12:26] doom loop.
+[12:27] And then we give everything to a LLM
+[12:30] jury to score all the um rollouts. We
+[12:33] pick the best one, the one with the
+[12:35] highest score as the chosen answer, the
+[12:37] one with the worst score as the rejected
+[12:39] answer, and the idea is that if we have
+[12:41] some doom loop here, the response for
+[12:44] the doom loop will be rejected. So, we
+[12:46] will train the model during preference
+[12:48] alignment to not doom loop. And this is
+[12:51] quite effective. So, this is solution
+[12:53] number one.
+[12:55] And then we have solution number two,
+[12:57] and this one is about using
+[12:59] reinforcement learning with verifiable
+[13:01] rewards, and we add a bit of n-gram
+[13:03] repetition penalty. Uh but you can see
+[13:06] that with reinforcement learning with um
+[13:09] verifiable rewards, it's a very nice way
+[13:12] to actually um solve this issue, because
+[13:16] if you have a question, like a math
+[13:18] question like this one,
+[13:20] you are going to try to extract the
+[13:22] final answer. If you do not have a final
+[13:25] answer, uh you won't get a positive
+[13:27] reward. So, this is already
+[13:30] being taken care of during um
+[13:33] reinforcement learning with verifiable
+[13:34] rewards. But on top of that, you can add
+[13:37] a bit of repetition penalty to make sure
+[13:39] that um you are going to generate more
+[13:43] like less doom loops in general, and
+[13:45] same thing, we also use temperature
+[13:46] sampling here, so the rollouts are also
+[13:49] quite diverse, and it just is less
+[13:52] likely that you are going to get like a
+[13:54] lot of doom loops uh all the time.
+[13:57] So, this is the the second uh solution.
+[14:00] And that allowed us to uh really reduce
+[14:03] the doom loop ratio. So, this is a real
+[14:05] example with uh LFM 2.5 1.2B thinking,
+[14:09] which is a small model. It's a reasoning
+[14:12] model, and on top of that, we threw
+[14:14] really hard task at it. So, you can see
+[14:16] that after pre-training, the doom loop
+[14:18] ratio that we calculated across like a
+[14:21] lot of benchmarks was about 15%.
+[14:24] Um or even 16%. And then after SFT, it
+[14:28] it barely moves. Like SFT is not the
+[14:30] right stage to fix this. Um we didn't
+[14:33] have doom loop uh examples during the
+[14:35] SFT stage, but it's not enough uh to get
+[14:38] rid of this issue.
+[14:40] Um after DPO, so that was our first
+[14:42] solution, um it really reduces quite a
+[14:45] lot, and you can see that after
+[14:46] reinforcement learning, the problem is
+[14:48] almost nonexistent. If today you try to
+[14:51] do the same thing with um Gwen 3.5 0.8B
+[14:55] in reasoning mode, you will see a lot a
+[14:57] lot a lot of doom loops, like over 50%
+[14:59] of doom loops, which is something that
+[15:01] people complain about online, and that
+[15:03] also shows that the Gwen 3.5, like this
+[15:06] tiny model, is just a scaled-down
+[15:07] version of bigger models. And this is
+[15:10] not the approach that we're taking here
+[15:12] at Liquid. We want to say, "Okay, like
+[15:14] the edge models, they are their own
+[15:16] thing, and um this is also a way to just
+[15:19] optimize the entire architecture, the
+[15:21] entire pre-training stack to make sure
+[15:23] that uh we treat them as um special as
+[15:26] possible.
+[15:28] And finally, I want to talk about uh
+[15:30] next stage, next steps for uh all these
+[15:33] uh small models with agentic
+[15:34] reinforcement learning. The final
+[15:36] characteristic I didn't mention here is
+[15:38] about uh being memory bound. If you're
+[15:40] memory bound, it means that you have low
+[15:42] knowledge capacity. If you have no low
+[15:44] knowledge capacity, it means that you're
+[15:46] going to hallucinate a lot. But a nice
+[15:48] way to solve this issue is just
+[15:50] providing like web search tools to the
+[15:52] model. If you have a tiny model, but
+[15:54] it's able to Google everything that you
+[15:56] um throw at it in terms of like
+[15:59] knowledge questions, you're going to
+[16:00] have like much much better performance
+[16:02] uh than if you just rely on the uh base
+[16:05] models.
+[16:07] And same thing with a a lot of problems
+[16:09] that you can uh throw at the model. I
+[16:11] think that
+[16:12] from experience, these tiny models are
+[16:15] actually very good at agentic task, and
+[16:17] this is how we should use them. Um it
+[16:20] doesn't matter if um they don't have the
+[16:23] knowledge capacity of big models. What
+[16:25] they truly need is really good reasoning
+[16:28] capabilities to make sure that they are
+[16:30] able to use these tools in a reliable
+[16:33] manner. And another point that I haven't
+[16:35] mentioned here is that small models are
+[16:37] also not very good at long context
+[16:40] capabilities. But it's okay, because if
+[16:42] you have like a recursive um language
+[16:44] model environment, then you can use
+[16:46] Python and and like basically take a
+[16:49] shortcut uh to to solve this issue. So,
+[16:52] most of the issues that you find with
+[16:54] small language models can actually be
+[16:56] fixed in different ways. It just
+[16:58] requires more creativity, it just
+[17:00] requires thinking about this problem not
+[17:02] like you would think about it uh from a
+[17:04] bigger model perspective, uh but
+[17:06] everything about this is fixable.
+[17:09] All right. So, in conclusion, some
+[17:11] takeaways, um I hope I convinced you
+[17:13] that edge models have unique challenges,
+[17:15] and they are actually interesting from
+[17:18] scientific point of view, and also
+[17:19] production point of view.
+[17:21] Um if you combine them with agentic
+[17:23] tools, they tend to perform really
+[17:24] really well, and this is something that
+[17:26] is currently underexplored. We talk
+[17:28] about agentic workloads with really big
+[17:31] models, but it's not necessarily um the
+[17:34] best use case, it's not necessarily the
+[17:35] best fit all the time. And uh yeah,
+[17:38] finally, we're working on LFM 3, and we
+[17:40] have like a a ton of crazy experiments
+[17:43] and uh ideas to try, so um come work
+[17:46] with us if you're interested uh in this
+[17:48] space.
+[17:49] Thank you, everyone.
+[17:58] Yes. Um
+[18:00] can you share a bit about how you use
+[18:02] these models in your workflow, and how
+[18:04] how you make the decision about when to
+[18:06] use big models
+[18:07] Yeah, this is a good question. So, the
+[18:09] question is like how are we use this
+[18:11] model in the workflows, and uh how we
+[18:13] decide between small models and big
+[18:15] models. So, the the main idea here is
+[18:17] that you will try to use the small
+[18:19] models when you
+[18:21] don't have uh internet connection, for
+[18:23] example. So, in-car deployment is a good
+[18:25] example of that, because you can't have
+[18:27] like a reliable internet connection, so
+[18:29] it makes sense. Uh latency is also a big
+[18:32] one. If you have a workload that is very
+[18:34] latency sensitive, uh small models
+[18:36] running locally are always going to be
+[18:38] better. And another one is is privacy.
+[18:41] If you're in a
+[18:43] regulated environment, um if you work in
+[18:45] finance or health care, this is also a
+[18:47] good one.
+[18:47] >> in in your specific workflow is the
+[18:49] question.
+[18:50] It I make the models, so I like I make
+[18:54] them most for other people, but uh like
+[18:56] in my workflows, like not necessarily.
+[19:00] Have you tried for doom looping have you
+[19:02] tried like you you talked about how Gwen
+[19:04] 3.5 is a scaled-down version of bigger
+[19:06] one? Yep. Have you seen uh the work that
+[19:09] you do with RL and all these uh
+[19:11] reduction of doom looping on a bigger
+[19:13] model
+[19:14] uh be able to be distilled into a
+[19:15] smaller model without having to re- redo
+[19:17] the steps?
+[19:19] It's a good question. I think we need to
+[19:21] do some experiments to see like if uh
+[19:23] just distilling from a bigger model
+[19:25] translates well in terms of doom
+[19:26] looping. I would say no. I would I don't
+[19:29] think so, because I think it would be
+[19:30] too close to SFT. So, it depends like
+[19:33] how you do this distillation. If you
+[19:35] stop K and you have like enough uh K,
+[19:38] maybe this is uh good enough, um but I I
+[19:41] think that it would not completely be
+[19:43] solved, and you would still need like
+[19:44] several batches to make sure that it
+[19:46] doesn't happen again.
+[19:48] All right. Yeah.
+[19:49] All right, I I think I should quit, but
+[19:51] um I'll be around if you you have other
+[19:53] questions. Thank you very much.

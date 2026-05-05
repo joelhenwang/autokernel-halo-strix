@@ -603,3 +603,223 @@ o = Linear_out(C ⊙ z)         # output gating + projection
 | Decoupled Top-K KD (binary + conditional within top-K) | LFM2 tech report | HIGH | Novel KD technique for small models |
 | 28T tokens on 350M — returns still growing | LFM2.5 | HIGH | We need orders of magnitude more data |
 | 65K vocab with ~10% embedding overhead | LFM2 | MEDIUM | Our 50K vocab = ~15% overhead, consider reduction |
+
+---
+
+## Batch 4: Poolside Laguna — Model Factory + XS.2 / M.1 (2026-05-03)
+
+4 sources analyzed: XS.2-M.1 intro blog, Laguna deeper dive, Titan infrastructure blog, HuggingFace model card.
+
+---
+
+### 15. Laguna XS.2 — Architecture (poolside/Laguna-XS.2)
+
+| Property | Value |
+|----------|-------|
+| Total params | 33B |
+| Active params/token | 3B (9.1% activation) |
+| Experts | 256 + 1 shared |
+| Layers | 40 (30 SWA + 10 global attention) |
+| SWA window | 512 tokens |
+| SWA:Global ratio | 3:1 |
+| Gating | Sigmoid, per-head, per-layer rotary scales |
+| Context | 128K |
+| Precision | BF16 train / FP8 inference |
+| Training tokens | 30T+ |
+| License | Apache 2.0 |
+
+256 experts is unusual — most MoE use 8-64. Each expert ~117M params. Shared expert ensures baseline capability. 3B/33B activation ratio sits between DeepSeek-V4-Flash (4.6%) and Mixtral (27.6%).
+
+Mixed attention: 30 SWA (window=512) + 10 global. Same pattern as HALO paper and xLSTM distillation — local attention cheap, global only where needed. 512-token window is emerging consensus (Poolside, xLSTM, Gemma3).
+
+### 16. Laguna M.1 — Architecture
+
+225B total / 23B active. MoE. API-only, internals not disclosed. Trained on same 30T+ tokens. XS.2 achieves 94% of M.1's SWE-bench Verified score at 13% active params — strong diminishing returns above 3B active for code tasks.
+
+---
+
+### 17. Training Pipeline — Muon, AutoMixer, Async RL (Deeper Dive)
+
+**Distributed Muon at 6,144 H200s:**
+- 15% fewer steps to match AdamW loss
+- 1 state/param vs AdamW's 2 → lower memory
+- Newton-Schulz distributed across ranks via GPUDirect RDMA
+- CUDA graphs for Newton-Schulz procedure
+- **<1% overhead** of total training step time
+- AdamW still used for embeddings + prediction head (same as DSV4)
+
+Largest public Muon validation. Confirms our choice in `halo_training/muon.py`.
+
+**Data: AutoMixer proxy-model ensemble:**
+- ~60 proxy models trained on different data mixes
+- Surrogate regression maps mix → downstream performance
+- Regularized toward baseline mix (prevents degenerate solutions)
+- **Key finding:** code quality driven by synthetic + curated code; math benefits from diverse web math
+- ~13% synthetic data in XS.2 final mix (~4.4T synthetic across series)
+
+**Deduplication insight — global dedup harmful:**
+- Global dedup disproportionately removes high-quality data (appears in multiple sources)
+- Snapshot-level dedup with quality-distribution matching instead
+- Result: **~2× more unique tokens** maintaining performance
+- Counterintuitive, important for our dolma processing
+
+**Asynchronous Agent RL with CISPO:**
+- Fully async: actors and trainer run independently
+- Solves sync RL problems for long-horizon code tasks:
+  - Sync RL: GPUs idle during long rollouts
+  - Sync RL: long trajectories systematically under-sampled
+- **CISPO algorithm variant** for off-policy stability
+- Token-in, token-out: preserve token IDs end-to-end (no re-tokenization drift)
+- Weight transfer via GPUDirect RDMA: 5 seconds for full M.1 BF16 weights
+- Sandboxed code execution containers for trajectory rollouts
+- Iceberg tables for trajectory storage
+
+**Off-policy drift sources identified:** stale weights, non-deterministic kernels, precision mismatches, re-tokenization errors. CISPO + token preservation addresses all.
+
+---
+
+### 18. Titan: Model Factory Infrastructure
+
+**Stack:** TorchTitan (distributed training) + Dagster (orchestration/lineage) + Neptune (metrics) + incident.io (monitoring) + GPUDirect RDMA + CUDA graphs + Sentry/FlightRecorder (debugging).
+
+**Hardware:** 10K H200 GPU cluster. M.1 trained on 6,144 interconnected Hopper GPUs. Kubernetes + torchrun.
+
+**Automation:**
+- Pre-flight node stress tests
+- Auto-recovery from faulty nodes/stalls (configurable 10-min timeout)
+- Escalation: 30-min soft ping → 60-min hard ping → auto Slack channel
+- **Periodic weight hash checks** for silent data corruption (SDC)
+- First model (Malibu v1) required weeks of manual babysitting; now fully automated
+
+**Disaggregated evaluation:** Checkpoint evals scheduled independently from training. Sometimes every few hundred steps. Separate compute.
+
+**XS.2 pre-training: 5 weeks** start to full post-training.
+
+---
+
+### Benchmark Results
+
+| Benchmark | M.1 (225B/23B) | XS.2 (33B/3B) | Devstral Small 2 (24B) | Claude Haiku 4.5 |
+|-----------|----------------|----------------|------------------------|------------------|
+| SWE-bench Verified | **72.5%** | **68.2%** | 68.0% | 73.3% |
+| SWE-bench Multilingual | **67.3%** | **62.4%** | 55.7% | — |
+| SWE-bench Pro | **46.9%** | **44.5%** | — | 39.5% |
+| Terminal-Bench 2.0 | **40.7%** | **30.1%** | 22.5% | — |
+
+Eval: Harbor Framework, max 500 steps, sandboxed, temp=0.7, top_k=20, 3-7 averaged runs.
+
+---
+
+### Cross-Source Synthesis: Portable Findings
+
+| Finding | Source | Confidence | Action |
+|---------|--------|------------|--------|
+| Muon 15% fewer steps, <1% overhead at 6K GPUs | Deeper dive | VERY HIGH | Already using. Validated at production scale |
+| Snapshot dedup > global dedup (2× more unique tokens) | Deeper dive | HIGH | Revisit dolma data processing pipeline |
+| AutoMixer ~60 proxy models for data mix | Deeper dive | HIGH | Scale CLIMB pipeline concept |
+| SWA window=512 + sparse global attention | Model card | HIGH | Matches our 4-conv + 2-GQA pattern |
+| Async RL mandatory for agentic code tasks | Deeper dive | HIGH | File for post-training RL stage |
+| CISPO for off-policy stability in agent RL | Deeper dive | HIGH | Better than GRPO/PPO for long-horizon |
+| Token-in, token-out prevents re-tokenization drift | Deeper dive | HIGH | Apply to agent.py runtime |
+| 256 experts works at 33B scale | Model card | MEDIUM | Not applicable at 58-170M |
+| Per-head sigmoid gating on attention layers | Model card | MEDIUM | Simple, portable gating mechanism |
+| FP8 KV cache quantization production-ready | Model card | MEDIUM | File for inference deployment |
+| Global dedup removes best data preferentially | Deeper dive | HIGH | Counterintuitive, verify on our data |
+| Disaggregated eval from training | Titan blog | LOW | Already doing this |
+| Periodic weight hashing for SDC | Titan blog | LOW | Only at >1K GPU scale |
+| XS.2 = 94% of M.1 at 13% active params | Benchmarks | HIGH | Extreme MoE sparsity works for code |
+
+---
+
+## Batch 5: OpenAI Parameter Golf — Competition Analysis (2026-05-04)
+
+44 entries analyzed from OpenAI's "Parameter Golf" competition (March-April 2026). Goal: best BPB in 16MB artifact, 10 min on 8×H100. Pure L(N) optimization.
+
+**Winner:** 1.0611 BPB (from 1.2244 baseline). Transformers dominate; SSM hybrids competitive but ~86 mBPB behind best transformer.
+
+---
+
+### Competition Setup
+
+| Constraint | Limit |
+|------------|-------|
+| Artifact size | 16,000,000 bytes (code + compressed model) |
+| Training time | 10 minutes on 8×H100 SXM |
+| Eval time | 10 minutes additional |
+| Metric | BPB on FineWeb validation |
+| Architecture | Unconstrained |
+
+Baseline: 9L, 512d, 1024 vocab, tied embeddings. Score: 1.2244.
+
+---
+
+### Winning Architecture (1.0611 BPB)
+
+11L × 512d × 8H/4KV GQA. SentencePiece 8192 vocab. Tied embeddings. LeakyReLU(0.5)² MLP 4×. Partial RoPE (16/64 dims). Logit softcap=30.
+
+**Key components stacked:**
+1. Depth recurrence (layers 3-5 looped 3×, activated at 35% of training)
+2. SmearGate (13-param bigram mixing, BOS masking)
+3. Parallel residuals (2-lane from layer 8+, learned mixing)
+4. Sparse attention gate (96 params/layer vs 4096)
+5. U-Net skip connections with sigmoid gates
+6. Layerwise LN scale: `1/sqrt(layer+1)`
+7. Polar-Express NS coefficients (per-iteration minimax-optimized)
+8. MIN_LR = 0.1 × peak (warmdown floor)
+9. EMA decay 0.9965
+10. GPTQ int6 + LQER rank-4 correction + lrzip ZPAQ compression
+11. CaseOps (lossless case factoring before tokenization)
+12. Phased TTT (3-phase score-first LoRA adaptation at eval)
+
+---
+
+### Key Techniques Explained
+
+**Depth Recurrence:** Loop layers 3-5 three times. 11 physical → 17 virtual layers. Zero parameter cost. Critical: delayed activation at 35% of training (train flat first, then enable looping).
+
+**SmearGate:** `x_t = x_t + λ·σ(W·x_t[:12])·x_{t-1}`. 13 parameters (12-dim linear + scalar). Zero-init (transparent at start). BOS masking prevents cross-document leakage. Input-dependent 1-token causal lookback.
+
+**Parallel Residuals:** 2-lane residual from layer 7+. Attention reads lane 0, MLP reads lane 1. Both write to both with learned scalars. Simplified 2-stream Hyperloop. Finding: MLP barely writes to attention lane in deep layers.
+
+**Polar-Express NS:** Replace Muon's fixed `(3.4445, -4.775, 2.0315)` with 5 per-iteration minimax-optimized tuples. Zero cost, better polar factor quality.
+
+**CaseOps:** Bijective transform factors capitalization from content before BPE. `"The NASA"` → `"TITLE the ALLCAPS nasa"`. BPE merges on content not case variants. ~5 mBPB free gain.
+
+**LQER:** Post-GPTQ error correction. Rank-4 SVD on quantization residuals for top-3 tensors. Stored at int4. ~280 KB savings over brute-force.
+
+**Phased TTT:** 3-phase eval-time adaptation. Score prefix docs → global SGD on scored docs → score more → SGD again. Per-document LoRA rank 80 with reset between docs.
+
+---
+
+### SSM Hybrid Results (Non-Record Track)
+
+| Entry | BPB | Architecture |
+|-------|-----|-------------|
+| Top transformer | 1.0611 | 11L full attention |
+| Hymba-8L | 1.1470 | Mamba + SWA parallel per-layer, sigmoid gate |
+| Mamba-3 Hybrid | 1.1473 | 7 Mamba-3 + 1 attention |
+| JEPA + Mamba-2 | 1.2064 | Pure Mamba-2 + JEPA aux loss |
+| Universal Transformer | 1.2249 | 3 blocks × 4 iterations |
+
+SSM hybrids ~86 mBPB behind best transformer. Pure Mamba-3 10.7 mBPB worse than hybrid (single attention layer essential). Hymba parallel fusion (SSM+attention per layer with sigmoid gate) most competitive.
+
+---
+
+### Portable Findings for TyrHaloLight
+
+| Finding | Priority | Effort | Expected Impact |
+|---------|----------|--------|-----------------|
+| **Polar-Express NS coefficients** | HIGH | 30 min | Free Muon upgrade, better convergence |
+| **MIN_LR = 0.1 × peak** | HIGH | 5 min | Better warmdown, convergent with DSV4/GPT-X2/Poolside |
+| **Layerwise LN scale 1/sqrt(l+1)** | HIGH | 15 min | Stability, prevents deep layer dominance |
+| **Delayed recurrence (35% of training)** | HIGH | 30 min | Train flat first, then enable Parcae loop |
+| **Logit softcap=30** | MEDIUM | 15 min | fp16 stability, Gemma2-validated |
+| **2-lane parallel residuals** | MEDIUM | 2 hr | Lighter than Hyperloop HC, learned mixing |
+| **Parcae iteration skip connections** | MEDIUM | 1 hr | Gated skip between loop iterations |
+| **JEPA aux loss** | MEDIUM | 2 hr | Zero inference cost, representation shaping |
+| **CaseOps tokenizer** | LOW | 4 hr | Only useful with custom tokenizer |
+| **Sparse attention gate** | LOW | 1 hr | Not param-limited at 58M |
+| **LQER post-quant correction** | LOW | 2 hr | File for deployment |
+| **Untied FFN per iteration** | RESEARCH | 2 hr | Needs ablation |
+| **Hymba parallel fusion** | RESEARCH | 4 hr | Different from our sequential pattern |
+| **Progressive recurrence** | RESEARCH | 1 hr | Start mean=1, increase mid-training |

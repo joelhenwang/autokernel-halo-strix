@@ -19,33 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * norm * self.weight
-
-
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-    t = torch.arange(end, dtype=torch.float32)
-    freqs = torch.outer(t, freqs)
-    return torch.polar(torch.ones_like(freqs), freqs)  # complex64
-
-
-def apply_rotary_emb(
-    xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs = freqs_cis[None, :xq_.shape[1], None, :]
-    xq_out = torch.view_as_real(xq_ * freqs).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+from models._components import RMSNorm, precompute_freqs_cis, apply_rotary_emb
 
 
 class Attention(nn.Module):

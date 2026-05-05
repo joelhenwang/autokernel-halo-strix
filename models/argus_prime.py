@@ -29,11 +29,7 @@ import torch.nn.functional as F
 from models.amadeus import RMSNorm, SwiGLU, GatedConv, FiLMConditioner
 from models.argus import TTTSwiGLU, precompute_freqs_cis, apply_rotary_emb
 
-try:
-    from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
-    _HAS_HYBRID_ATTN = True
-except ImportError:
-    _HAS_HYBRID_ATTN = False
+_HAS_HYBRID_ATTN = False  # disabled: flash_attn requires aiter
 
 try:
     from kernels.hip.fused_gated_conv import kernel_fn as fused_gated_conv_fn
@@ -47,56 +43,7 @@ except ImportError:
     pass
 
 
-# ---------------------------------------------------------------------------
-# GQA Attention with QK-Norm (LFM2 technique)
-# ---------------------------------------------------------------------------
-
-class Attention(nn.Module):
-    """GQA with RoPE + QK-Norm. Uses separate wq/wk/wv/wo for autokernel FusedQKV pattern."""
-
-    def __init__(self, dim: int, n_heads: int, n_kv_heads: int, qk_norm: bool = True):
-        super().__init__()
-        self.n_heads = n_heads
-        self.n_kv_heads = n_kv_heads
-        self.head_dim = dim // n_heads
-        self.n_rep = n_heads // n_kv_heads
-        self.qk_norm = qk_norm
-
-        # Separate Q/K/V so autokernel's FusedQKVPattern matches and fuses QKV+RoPE
-        self.wq = nn.Linear(dim, n_heads * self.head_dim, bias=False)
-        self.wk = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
-        self.wv = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
-        self.wo = nn.Linear(n_heads * self.head_dim, dim, bias=False)
-
-        if qk_norm:
-            self.q_scale = nn.Parameter(torch.ones(n_heads, 1, 1) * math.sqrt(self.head_dim))
-            self.k_scale = nn.Parameter(torch.ones(n_kv_heads, 1, 1) * math.sqrt(self.head_dim))
-
-    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-        B, T, _ = x.shape
-        q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
-        k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
-        v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
-        q, k = apply_rotary_emb(q, k, freqs_cis)
-        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
-
-        # QK-Norm: L2-normalize then scale (LFM2 technique)
-        if self.qk_norm:
-            q = F.normalize(q, dim=-1) * self.q_scale
-            k = F.normalize(k, dim=-1) * self.k_scale
-
-        if self.n_rep > 1:
-            k = k.repeat_interleave(self.n_rep, dim=1)
-            v = v.repeat_interleave(self.n_rep, dim=1)
-
-        # Hybrid attention: flash_attn forward + SDPA backward (8.9% faster)
-        if _HAS_HYBRID_ATTN and q.dtype == torch.float16:
-            y = hybrid_flash_sdpa_attention(
-                q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
-            ).transpose(1, 2)
-        else:
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
+from models.components.attention import Attention
 
 
 # ---------------------------------------------------------------------------
@@ -174,85 +121,7 @@ class MultiStepTTTSwiGLU(TTTSwiGLU):
 # Block types
 # ---------------------------------------------------------------------------
 
-class ShortConvBlock(nn.Module):
-    """GatedConv mixer + inlined momentum + SwiGLU FFN. Compile-friendly."""
-
-    def __init__(self, d_model: int, d_conv: int, ffn_inner: int,
-                 conv_kernel: int = 3, momentum_beta: float = 0.5):
-        super().__init__()
-        self.pre_norm = RMSNorm(d_model)
-        self.conv = GatedConv(d_model, d_conv, conv_kernel)
-        self.out_proj = nn.Linear(d_conv, d_model, bias=False)
-        self.log_beta = nn.Parameter(
-            torch.tensor(math.log(momentum_beta / (1 - momentum_beta)))
-        )
-        self.ffn_norm = RMSNorm(d_model)
-        self.ffn = SwiGLU(d_model, ffn_inner)
-
-    def forward(self, x, velocity):
-        # GatedConv — use native path (autograd + causal_conv1d backward is faster
-        # than our fused custom op with recomputation overhead)
-        normed = self.pre_norm(x)
-        conv_out = self.conv(normed)
-        mixer_out = self.out_proj(conv_out)
-
-        # Inlined momentum (compile-friendly)
-        beta = torch.sigmoid(self.log_beta)
-        velocity = beta * velocity + mixer_out
-        velocity = velocity.clamp(-8.0, 8.0)
-
-        # Inlined residual + RMSNorm (Inductor fuses element-wise)
-        x = x + velocity
-        rms = torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
-        normed = (x.float() * rms).to(x.dtype) * self.ffn_norm.weight
-
-        x = x + self.ffn(normed)
-        return x, velocity
-
-
-class GQABlock(nn.Module):
-    """GQA Attention + QK-Norm + inlined momentum + SwiGLU/TTT FFN."""
-
-    def __init__(self, d_model: int, ffn_inner: int,
-                 n_heads: int = 12, n_kv_heads: int = 4,
-                 momentum_beta: float = 0.5,
-                 ttt_mode: str = "none",
-                 ttt_chunk: int = 512, ttt_lr_init: float = 0.01):
-        super().__init__()
-        self.pre_norm = RMSNorm(d_model)
-        self.attn = Attention(d_model, n_heads, n_kv_heads, qk_norm=True)
-        self.log_beta = nn.Parameter(
-            torch.tensor(math.log(momentum_beta / (1 - momentum_beta)))
-        )
-        self.ffn_norm = RMSNorm(d_model)
-        self.ttt_mode = ttt_mode
-
-        if ttt_mode == "single":
-            self.ffn = TTTSwiGLU(d_model, ffn_inner, ttt_chunk, ttt_lr_init)
-        elif ttt_mode == "multi":
-            self.ffn = MultiStepTTTSwiGLU(d_model, ffn_inner, ttt_chunk, ttt_lr_init)
-        else:
-            self.ffn = SwiGLU(d_model, ffn_inner)
-
-    def forward(self, x, velocity, freqs_cis, ttt_target=None):
-        attn_out = self.attn(self.pre_norm(x), freqs_cis)
-
-        # Inlined momentum
-        beta = torch.sigmoid(self.log_beta)
-        velocity = beta * velocity + attn_out
-        velocity = velocity.clamp(-8.0, 8.0)
-
-        # Inlined residual + RMSNorm
-        x = x + velocity
-        rms = torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + 1e-6)
-        normed = (x.float() * rms).to(x.dtype) * self.ffn_norm.weight
-
-        if self.ttt_mode != "none" and ttt_target is not None:
-            x = x + self.ffn(normed, ttt_target=ttt_target)
-        else:
-            x = x + self.ffn(normed)
-
-        return x, velocity
+from models.components.conv_blocks import ShortConvBlock, GQABlock
 
 
 # ---------------------------------------------------------------------------
