@@ -173,27 +173,39 @@ def train(
         )
     elif compile:
         # compile_mode can be overridden via env var TORCH_COMPILE_MODE.
-        # Options: "default", "reduce-overhead" (CUDA graphs, lower memory),
-        # "max-autotune" (slowest warmup, potentially fastest runtime).
+        # Options: "default", "max-autotune" (best tok/s, ~2min first warmup),
+        # "max-autotune-no-cudagraphs", "reduce-overhead".
         #
-        # NOTE: reduce-overhead is NOT currently compatible with looped models
-        # (Parcae/HALO) because per-layer CUDA graphs reuse buffers across
-        # iterations, invalidating saved activations for backward. Falls back
-        # to "default" for such models.
+        # Phase 3 WI-A0 (2026-05-05): reduce-overhead does NOT crash on looped
+        # HALO models. But HIP's CUDA-graph capture silently fails with "empty
+        # graph" warnings, so reduce-overhead provides no benefit (net -1.8%
+        # throughput, no memory savings on this ROCm build).
+        #
+        # Phase 3 WI-B3 (2026-05-05): max-autotune delivers +5.17% on OdinHalo
+        # batch=16 block=256 with loss parity within fp16 noise over 200 steps.
+        # First compile 122s (autotune search), subsequent warm-cache ~9s.
         compile_mode = os.environ.get("TORCH_COMPILE_MODE", "default")
         if compile_mode == "reduce-overhead" and hasattr(model, "compile_zones"):
-            print("WARNING: reduce-overhead is incompatible with looped models "
-                  "(buffer reuse across Parcae iterations). Falling back to default.")
+            print("NOTE: reduce-overhead on looped HALO models provides no benefit "
+                  "on this HIP build (empty-graph capture). Using default instead. "
+                  "See docs/perf/phase3-wi-a0-consolidated.md")
             compile_mode = "default"
         cache_dir = os.environ.get("TORCHINDUCTOR_CACHE_DIR", "~/.cache/torchinductor")
         cache_exists = os.path.isdir(os.path.expanduser(cache_dir)) and len(os.listdir(os.path.expanduser(cache_dir))) > 0
         cache_status = "warm cache" if cache_exists else "cold — first compile will be slow"
         # For looped models (HALO family) compile per-layer via compile_zones.
-        # This avoids re-compiling the shared layer body at each Parcae iteration
-        # and lets Inductor fuse ops within a single layer cleanly.
-        if hasattr(model, "compile_zones") and compile_mode == "default":
-            print(f"Compiling model via compile_zones (per-layer, looped), cache: {cache_status}")
-            model.compile_zones()
+        # compile_zones now threads mode through env var (max-autotune, default).
+        if hasattr(model, "compile_zones"):
+            print(f"Compiling model via compile_zones (mode={compile_mode}), cache: {cache_status}")
+            try:
+                model.compile_zones(mode=compile_mode)
+            except TypeError:
+                # Older HALO models whose compile_zones() does not accept mode=.
+                # Fall back to bare call; mode will be hardcoded inside.
+                if compile_mode != "default":
+                    print(f"  NOTE: {type(model).__name__}.compile_zones() does not accept "
+                          f"mode arg. Using hardcoded default instead of {compile_mode}.")
+                model.compile_zones()
         else:
             print(f"Compiling model with torch.compile ({compile_mode}), cache: {cache_status}")
             model = torch.compile(model, mode=compile_mode)

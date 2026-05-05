@@ -257,32 +257,61 @@ class OdinHaloBase(nn.Module):
     def forward(self, input_ids: torch.Tensor, targets: Optional[torch.Tensor] = None):
         return self._forward_unrolled(input_ids)
 
-    def compile_zones(self):
-        """Per-layer compilation for ROCm kernel fusion."""
+    def compile_zones(self, mode: str = None):
+        """Per-layer compilation for ROCm kernel fusion.
+
+        Args:
+            mode: torch.compile mode. Defaults to env var TORCH_COMPILE_MODE,
+                or "default" if unset. Supported: "default", "max-autotune",
+                "max-autotune-no-cudagraphs".
+
+        Phase 3 WI-B3 finding: `mode="max-autotune"` gives +5.17% throughput
+        (14,018 -> 14,742 tok/s on OdinHalo batch=16 block=256) with loss parity
+        within fp16 noise (max |delta| = 0.21 over 200 steps). First-compile
+        warmup is ~2 minutes (one-time autotune search); subsequent warmups hit
+        the cache and are ~9s. Trade: cold-cache warmup up to 120s.
+        """
+        import os
+        if mode is None:
+            mode = os.environ.get("TORCH_COMPILE_MODE", "default")
+        # Reject modes unsupported for looped models (Phase 3 WI-A0 confirmed
+        # HIP CUDA-graph capture fails on this backend).
+        if mode == "reduce-overhead":
+            print("WARNING: reduce-overhead falls back to eager CUDA-graph capture "
+                  "on HIP; no benefit over default. Using default instead.")
+            mode = "default"
         try:
             from kernels.hip._torch_ops import disable_hip_backward
             disable_hip_backward()
         except ImportError:
             pass
+        print(f"compile_zones: per-layer torch.compile mode={mode}")
         for i in range(len(self.shared_layers)):
-            self.shared_layers[i] = torch.compile(self.shared_layers[i], mode="default")
+            self.shared_layers[i] = torch.compile(self.shared_layers[i], mode=mode)
         return self
 
-    def compile_zones_friendly(self):
+    def compile_zones_friendly(self, mode: str = None):
         """Per-layer compilation using compile-friendly inner paths.
 
         - Enables native PyTorch RoPE+gate (no HIP kernel break-in)
         - Result: Inductor sees full layer graph and can fuse
         - Trade: loses custom HIP fused_rope_gate_mul kernel (but Inductor
           usually fuses these ops anyway)
+
+        Accepts `mode` same as compile_zones; defaults to TORCH_COMPILE_MODE.
         """
+        import os
+        if mode is None:
+            mode = os.environ.get("TORCH_COMPILE_MODE", "default")
+        if mode == "reduce-overhead":
+            mode = "default"
         # Mark all HyPEShortConvBlocks to use compile-friendly RoPE
         from models.components.conv_blocks import HyPEShortConvBlock
         for layer in self.shared_layers:
             if isinstance(layer, HyPEShortConvBlock):
                 layer._compile_friendly = True
         for i in range(len(self.shared_layers)):
-            self.shared_layers[i] = torch.compile(self.shared_layers[i], mode="default")
+            self.shared_layers[i] = torch.compile(self.shared_layers[i], mode=mode)
         return self
 
     def param_count(self) -> Dict[str, int]:
