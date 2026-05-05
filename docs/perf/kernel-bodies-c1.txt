@@ -1,0 +1,83 @@
+
+
+=================================================================
+# KERNEL: triton_poi_fused__to_copy_mul_transpose_view_8  (instance 1/1, 2691 bytes)
+=================================================================
+
+
+import triton
+import triton.language as tl
+
+from torch._inductor.runtime import triton_helpers, triton_heuristics
+from torch._inductor.runtime.triton_helpers import libdevice, math as tl_math
+from torch._inductor.runtime.hints import AutotuneHint, ReductionHint, TileHint, DeviceProperties
+triton_helpers.set_driver_to_gpu()
+
+@triton_heuristics.pointwise(
+    size_hints={'x': 2097152}, 
+    filename=__file__,
+    triton_meta={'signature': {'in_ptr0': '*fp16', 'in_ptr1': '*fp32', 'in_ptr2': '*fp16', 'out_ptr0': '*fp16', 'out_ptr1': '*fp32', 'xnumel': 'i32', 'XBLOCK': 'constexpr'}, 'device': DeviceProperties(type='hip', index=0, multi_processor_count=20, cc='gfx1151', major=11, regs_per_multiprocessor=196608, max_threads_per_multi_processor=2048, max_threads_per_block=1024, warp_size=32), 'constants': {}, 'native_matmul': False, 'configs': [{(0,): [['tt.divisibility', 16]], (1,): [['tt.divisibility', 16]], (2,): [['tt.divisibility', 16]], (3,): [['tt.divisibility', 16]], (4,): [['tt.divisibility', 16]], (5,): [['tt.divisibility', 16]]}], 'enable_fp_fusion': True},
+    inductor_meta={'grid_type': 'Grid1D', 'autotune_hints': set(), 'kernel_name': 'triton_poi_fused__to_copy_mul_transpose_view_8', 'mutated_arg_names': [], 'optimize_mem': True, 'no_x_dim': False, 'atomic_add_found': False, 'num_load': 3, 'num_store': 2, 'num_reduction': 0, 'backend_hash': 'B8EA20A8FF8928E1ED144741A3CA609341B1A71217130FFCABD31FF0E52C6E3B', 'assert_indirect_indexing': True, 'autotune_local_cache': True, 'autotune_pointwise': True, 'autotune_remote_cache': None, 'force_disable_caches': False, 'dynamic_scale_rblock': True, 'max_autotune': False, 'max_autotune_pointwise': False, 'min_split_scan_rblock': 256, 'spill_threshold': 32, 'store_cubin': False, 'deterministic': False, 'force_filter_reduction_configs': False, 'are_deterministic_algorithms_enabled': False, 'is_hip': True, 'tiling_scores': {'x': 41943040}},
+    min_elem_per_thread=0
+)
+@triton.jit
+def triton_poi_fused__to_copy_mul_transpose_view_8(in_ptr0, in_ptr1, in_ptr2, out_ptr0, out_ptr1, xnumel, XBLOCK : tl.constexpr):
+    xnumel = 2097152
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)[:]
+    xmask = tl.full([XBLOCK], True, tl.int1)[:]
+    x0 = xindex
+    x1 = (xindex % 512)
+    x2 = xindex // 512
+    tmp0 = tl.load(in_ptr0 + (x0), None).to(tl.float32)
+    tmp2 = tl.load(in_ptr1 + (x0), None)
+    tmp5 = tl.load(in_ptr2 + (x1 + 1536*x2), None).to(tl.float32)
+    tmp1 = tmp0.to(tl.float32)
+    tmp3 = tmp1 * tmp2
+    tmp4 = tmp3.to(tl.float32)
+    tmp6 = tmp5.to(tl.float32)
+    tmp7 = tmp1 * tmp6
+    tl.store(out_ptr0 + (x0), tmp4, None)
+    tl.store(out_ptr1 + (x0), tmp7, None)
+
+
+
+=================================================================
+# KERNEL: triton_poi_fused__to_copy_mul_transpose_view_7  (instance 1/1, 2691 bytes)
+=================================================================
+
+
+import triton
+import triton.language as tl
+
+from torch._inductor.runtime import triton_helpers, triton_heuristics
+from torch._inductor.runtime.triton_helpers import libdevice, math as tl_math
+from torch._inductor.runtime.hints import AutotuneHint, ReductionHint, TileHint, DeviceProperties
+triton_helpers.set_driver_to_gpu()
+
+@triton_heuristics.pointwise(
+    size_hints={'x': 2097152}, 
+    filename=__file__,
+    triton_meta={'signature': {'in_ptr0': '*fp16', 'in_ptr1': '*fp32', 'in_ptr2': '*fp16', 'out_ptr0': '*fp16', 'out_ptr1': '*fp32', 'xnumel': 'i32', 'XBLOCK': 'constexpr'}, 'device': DeviceProperties(type='hip', index=0, multi_processor_count=20, cc='gfx1151', major=11, regs_per_multiprocessor=196608, max_threads_per_multi_processor=2048, max_threads_per_block=1024, warp_size=32), 'constants': {}, 'native_matmul': False, 'configs': [{(0,): [['tt.divisibility', 16]], (1,): [['tt.divisibility', 16]], (2,): [['tt.divisibility', 16]], (3,): [['tt.divisibility', 16]], (4,): [['tt.divisibility', 16]], (5,): [['tt.divisibility', 16]]}], 'enable_fp_fusion': True},
+    inductor_meta={'grid_type': 'Grid1D', 'autotune_hints': set(), 'kernel_name': 'triton_poi_fused__to_copy_mul_transpose_view_7', 'mutated_arg_names': [], 'optimize_mem': True, 'no_x_dim': False, 'atomic_add_found': False, 'num_load': 3, 'num_store': 2, 'num_reduction': 0, 'backend_hash': 'B8EA20A8FF8928E1ED144741A3CA609341B1A71217130FFCABD31FF0E52C6E3B', 'assert_indirect_indexing': True, 'autotune_local_cache': True, 'autotune_pointwise': True, 'autotune_remote_cache': None, 'force_disable_caches': False, 'dynamic_scale_rblock': True, 'max_autotune': False, 'max_autotune_pointwise': False, 'min_split_scan_rblock': 256, 'spill_threshold': 32, 'store_cubin': False, 'deterministic': False, 'force_filter_reduction_configs': False, 'are_deterministic_algorithms_enabled': False, 'is_hip': True, 'tiling_scores': {'x': 41943040}},
+    min_elem_per_thread=0
+)
+@triton.jit
+def triton_poi_fused__to_copy_mul_transpose_view_7(in_ptr0, in_ptr1, in_ptr2, out_ptr0, out_ptr1, xnumel, XBLOCK : tl.constexpr):
+    xnumel = 2097152
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)[:]
+    xmask = tl.full([XBLOCK], True, tl.int1)[:]
+    x0 = xindex
+    x1 = (xindex % 512)
+    x2 = xindex // 512
+    tmp0 = tl.load(in_ptr0 + (x0), None).to(tl.float32)
+    tmp2 = tl.load(in_ptr1 + (x0), None)
+    tmp5 = tl.load(in_ptr2 + (x1 + 1536*x2), None).to(tl.float32)
+    tmp1 = tmp0.to(tl.float32)
+    tmp3 = tmp1 * tmp2
+    tmp4 = tmp3.to(tl.float32)
+    tmp6 = tmp5.to(tl.float32)
+    tmp7 = tmp1 * tmp6
+    tl.store(out_ptr0 + (x0), tmp4, None)
+    tl.store(out_ptr1 + (x0), tmp7, None)
