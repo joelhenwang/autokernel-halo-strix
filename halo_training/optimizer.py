@@ -42,6 +42,8 @@ def build_optimizer(
     polar_ns: bool = False,
     use_lion: bool = False,
     lion_lr_ratio: float = 0.3,
+    use_clion: bool = False,
+    clion_nu: float = 1.0,
 ) -> torch.optim.Optimizer:
     """Build optimizer with COOKBOOK.md param group rules.
 
@@ -64,9 +66,15 @@ def build_optimizer(
                   LR is auto-scaled to base_lr * lion_lr_ratio (default 0.3x).
                   Mutually exclusive with use_muon.
         lion_lr_ratio: Lion LR = base_lr * this_ratio (paper recommends ~0.1-0.3 vs AdamW).
+        use_clion: Use CLion (Cautious Lion; arXiv:2604.14587). Same shape as Lion
+                   but gates sign() behind a threshold ν per tensor. Lower
+                   generalization error than Lion. Uses lion_lr_ratio for LR scaling.
+        clion_nu: ν threshold for cautious sign gate (default 1.0 from paper's
+                  generalization theorem; try 1/√d for very large models).
     """
-    if use_lion and use_muon:
-        raise ValueError("use_lion and use_muon are mutually exclusive")
+    n_opt_flags = int(use_lion) + int(use_muon) + int(use_clion)
+    if n_opt_flags > 1:
+        raise ValueError("use_lion, use_muon, use_clion are mutually exclusive")
 
     if use_muon:
         return _build_muon_optimizer(model, base_lr, muon_lr, weight_decay, polar_ns=polar_ns)
@@ -76,11 +84,21 @@ def build_optimizer(
     if use_lion:
         from halo_training.lion import Lion
         lion_lr = base_lr * lion_lr_ratio
-        # Rescale each group's lr by the same factor (preserves LR-multiplier pattern)
         for g in groups:
             g["lr"] = g["lr"] * lion_lr_ratio
         opt = Lion(groups, lr=lion_lr, betas=(0.9, 0.99), weight_decay=weight_decay)
         print(f"Using Lion optimizer (lr={lion_lr}, scaled from base_lr={base_lr} x {lion_lr_ratio})")
+        return opt
+
+    if use_clion:
+        from halo_training.clion import CLion
+        clion_lr = base_lr * lion_lr_ratio
+        for g in groups:
+            g["lr"] = g["lr"] * lion_lr_ratio
+        opt = CLion(groups, lr=clion_lr, betas=(0.9, 0.99),
+                    weight_decay=weight_decay, nu=clion_nu)
+        print(f"Using CLion optimizer (lr={clion_lr}, nu={clion_nu}, "
+              f"scaled from base_lr={base_lr} x {lion_lr_ratio})")
         return opt
 
     if optimizer_cls is not None:

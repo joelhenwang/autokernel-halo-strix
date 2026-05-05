@@ -99,6 +99,14 @@ def main():
                              "Mutually exclusive with --muon.")
     parser.add_argument("--lion-lr-ratio", type=float, default=0.3,
                         help="Lion LR = base_lr * this_ratio (default 0.3 per paper).")
+    parser.add_argument("--clion", action="store_true",
+                        help="Use CLion (Cautious Lion, arXiv:2604.14587). "
+                             "Same as Lion but gates sign() behind threshold nu. "
+                             "Lower generalization error. Mutually exclusive with "
+                             "--lion/--muon.")
+    parser.add_argument("--clion-nu", type=float, default=1.0,
+                        help="CLion sign-gate threshold (default 1.0 from paper). "
+                             "Try 1/sqrt(d) for very large models.")
     parser.add_argument("--num-workers", type=int, default=4,
                         help="DataLoader workers. 0 = synchronous (safer but slower data prep).")
     parser.add_argument("--model-kwarg", action="append", default=[],
@@ -296,6 +304,8 @@ def main():
         use_muon=args.muon,
         use_lion=args.lion,
         lion_lr_ratio=args.lion_lr_ratio,
+        use_clion=args.clion,
+        clion_nu=args.clion_nu,
         use_bf16=args.bf16,
         use_ema=args.ema,
         resume_from=args.resume_from,
