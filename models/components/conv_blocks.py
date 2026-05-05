@@ -296,5 +296,7 @@ class HyPEShortConvBlock(nn.Module):
         else:
             z = self.conv(y.transpose(1, 2))[:, :, :T].transpose(1, 2)
         conv_out = self.out_proj(c * z)
-        ffn_out = self.ffn(self.ffn_norm(x + conv_out))
-        return x + conv_out + ffn_out
+        # W5 dedup: compute x+conv_out once, reuse for both ffn_norm input and final residual
+        residual = x + conv_out
+        ffn_out = self.ffn(self.ffn_norm(residual))
+        return residual + ffn_out
