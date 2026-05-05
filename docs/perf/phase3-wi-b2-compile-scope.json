@@ -1,0 +1,80 @@
+{
+  "A: compile_zones (per-layer)": [
+    {
+      "label": "A: compile_zones (per-layer)",
+      "strategy": "A",
+      "warmup_s": 8.927538023010129,
+      "tok_s": 14133.287466048261,
+      "peak_gb": 5.279285907745361,
+      "final_loss": 5.814770698547363
+    },
+    {
+      "label": "A: compile_zones (per-layer)",
+      "strategy": "A",
+      "warmup_s": 5.86136220098706,
+      "tok_s": 14154.311147598482,
+      "peak_gb": 5.278919696807861,
+      "final_loss": 5.924127578735352
+    },
+    {
+      "label": "A: compile_zones (per-layer)",
+      "strategy": "A",
+      "warmup_s": 5.926090380991809,
+      "tok_s": 13997.500962454564,
+      "peak_gb": 5.279774188995361,
+      "final_loss": 5.806211471557617
+    }
+  ],
+  "B: compile _run_shared_block (per-iter-body)": [
+    {
+      "label": "B: compile _run_shared_block (per-iter-body)",
+      "strategy": "B",
+      "warmup_s": 6.3415109860070515,
+      "tok_s": 13973.37585758009,
+      "peak_gb": 5.303150653839111,
+      "final_loss": 5.821626663208008
+    },
+    {
+      "label": "B: compile _run_shared_block (per-iter-body)",
+      "strategy": "B",
+      "warmup_s": 5.957201081007952,
+      "tok_s": 13953.898050286954,
+      "peak_gb": 5.73682165145874,
+      "final_loss": 5.82404088973999
+    },
+    {
+      "label": "B: compile _run_shared_block (per-iter-body)",
+      "strategy": "B",
+      "warmup_s": 5.910705036018044,
+      "tok_s": 14009.946009962223,
+      "peak_gb": 6.169882297515869,
+      "final_loss": 5.776396751403809
+    }
+  ],
+  "C: compile _forward_unrolled (whole-model)": [
+    {
+      "label": "C: compile _forward_unrolled (whole-model)",
+      "strategy": "C",
+      "warmup_s": 7.780486242001643,
+      "tok_s": 14353.334285767509,
+      "peak_gb": 5.186861515045166,
+      "final_loss": 5.791140079498291
+    },
+    {
+      "label": "C: compile _forward_unrolled (whole-model)",
+      "strategy": "C",
+      "warmup_s": 5.787041942996439,
+      "tok_s": 14215.831413274162,
+      "peak_gb": 5.622607707977295,
+      "final_loss": 5.7916154861450195
+    },
+    {
+      "label": "C: compile _forward_unrolled (whole-model)",
+      "strategy": "C",
+      "warmup_s": 5.746400656003971,
+      "tok_s": 14317.265060276899,
+      "peak_gb": 6.055058002471924,
+      "final_loss": 5.799659729003906
+    }
+  ]
+}

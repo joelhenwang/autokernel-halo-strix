@@ -1,0 +1,80 @@
+{
+  "A: compile_zones (default mode, baseline)": [
+    {
+      "label": "A: compile_zones (default mode, baseline)",
+      "mode": "default_compile_zones",
+      "warmup_s": 11.785071065009106,
+      "tok_s": 14018.413255291887,
+      "peak_gb": 5.279285907745361,
+      "final_loss": 5.457263946533203
+    },
+    {
+      "label": "A: compile_zones (default mode, baseline)",
+      "mode": "default_compile_zones",
+      "warmup_s": 8.847909879987128,
+      "tok_s": 14002.269786729035,
+      "peak_gb": 5.278919696807861,
+      "final_loss": 5.401949405670166
+    },
+    {
+      "label": "A: compile_zones (default mode, baseline)",
+      "mode": "default_compile_zones",
+      "warmup_s": 8.889674687990919,
+      "tok_s": 13927.647260764565,
+      "peak_gb": 5.279774188995361,
+      "final_loss": 5.40887451171875
+    }
+  ],
+  "B: per-layer max-autotune": [
+    {
+      "label": "B: per-layer max-autotune",
+      "mode": "max-autotune",
+      "warmup_s": 122.62862528400728,
+      "tok_s": 14723.616893659293,
+      "peak_gb": 5.231560230255127,
+      "final_loss": 5.489693641662598
+    },
+    {
+      "label": "B: per-layer max-autotune",
+      "mode": "max-autotune",
+      "warmup_s": 9.657672492001439,
+      "tok_s": 14638.175520381883,
+      "peak_gb": 5.232867240905762,
+      "final_loss": 5.397097587585449
+    },
+    {
+      "label": "B: per-layer max-autotune",
+      "mode": "max-autotune",
+      "warmup_s": 9.096774158009794,
+      "tok_s": 14583.501577367459,
+      "peak_gb": 5.665433883666992,
+      "final_loss": 5.413360595703125
+    }
+  ],
+  "C: per-layer max-autotune-no-cudagraphs": [
+    {
+      "label": "C: per-layer max-autotune-no-cudagraphs",
+      "mode": "max-autotune-no-cudagraphs",
+      "warmup_s": 40.94821997001418,
+      "tok_s": 14257.067904063018,
+      "peak_gb": 6.653646945953369,
+      "final_loss": 5.380805969238281
+    },
+    {
+      "label": "C: per-layer max-autotune-no-cudagraphs",
+      "mode": "max-autotune-no-cudagraphs",
+      "warmup_s": 8.648494834982557,
+      "tok_s": 14304.046238015899,
+      "peak_gb": 6.651327610015869,
+      "final_loss": 5.446708679199219
+    },
+    {
+      "label": "C: per-layer max-autotune-no-cudagraphs",
+      "mode": "max-autotune-no-cudagraphs",
+      "warmup_s": 8.646331968979212,
+      "tok_s": 14276.212844172547,
+      "peak_gb": 6.652548313140869,
+      "final_loss": 5.3836798667907715
+    }
+  ]
+}
