@@ -5,7 +5,206 @@
 
 ---
 
+## CE Kernel Optimization Stack (2026-05-05)
+
+Two-phase rewrite of cross-entropy path on OdinHalo (V=32768, B=4, T=256).
+
+**Phase 1 (`kernel.py`):** Online softmax single-pass CE kernel with fused/tiny modes.
+  - Features baked in-kernel: `logit_softcap`, `z_loss`, `ignore_index`, `label_smoothing`
+  - `kernel_fn` fast path (forward-only) for bench.py compatibility
+  - `ce_full()` entry point with kwargs
+  - **Isolated perf (B=4096, V=32768)**: fwd 2.32×, bwd 1.54×, **fwd+bwd 1.66×** vs PyTorch
+  - Correctness: 5-stage bench + 16 feature tests all PASS
+
+**Phase 2 (`kernels/hip/chunked_linear_cross_entropy.py` rewritten):**
+Avoids materializing `[N, V]` logits tensor by chunked linear+CE+grad flow.
+  - Uses Phase 1 HIP kernel per chunk with pre-scaled grad (no bwd multiply pass)
+  - fp16 matmul (drops fp32 from prior impl)
+  - Supports softcap, label_smoothing, ignore_index, z_loss
+  - Tied weight grads handled via PyTorch autograd accumulation
+  - CLI flag: `--chunked-ce`
+  - Model integration: `FactorizedLMHead.use_chunked_ce` → returns `h_low` in training
+  - Gradient parity vs fp32 reference: loss_rel ~1e-7, grad_rel ~1e-3 (fp16 matmul floor)
+
+**Production OdinHalo (batch=4, T=256, V=32768) ablation:**
+
+| Config                                    | tok/s  | Memory  | Speedup |
+|-------------------------------------------|--------|---------|---------|
+| Baseline (PyTorch CE)                     | 9,807  | 1.93 GB | 1.000×  |
+| + Phase 1 HIP CE                          | 9,857  | 1.74 GB | 1.005×  |
+| + Phase 2 Chunked CE                      | 11,455 | 1.56 GB | 1.168×  |
+| + RoPE fusion (PyTorch CE)                | 11,295 | 1.96 GB | 1.152×  |
+| + RoPE + HIP CE  (**best tok/s**)         | 11,704 | 1.76 GB | **1.193×** |
+| + RoPE + Chunked CE (**best memory**)     | 11,366 | 1.59 GB | 1.159× (-343 MB) |
+
+**Files:**
+- `kernel.py` — rewritten Phase 1 kernel (online softmax + all features)
+- `kernels/hip/chunked_linear_cross_entropy.py` — Phase 2 chunked linear+CE
+- `models/components/embeddings.py` — FactorizedLMHead gained `forward_hlow()` + `use_chunked_ce` flag
+- `models/odin_halo.py` — conditional h_low return + `logit_softcap` attribute
+- `halo_training/trainer.py` — chunked_ce wired with softcap/z_loss/label_smoothing passthrough
+- `halo_training/cli.py` — `--chunked-ce` opt-in flag, auto-propagates `use_chunked_ce=True`
+- `scripts/test_ce_features.py` — 16 feature correctness cases
+- `scripts/test_chunked_ce.py` — gradient parity + memory test
+- `scripts/test_odin_chunked.py` — end-to-end OdinHalo integration test
+- `scripts/ablation_full.py` — full stack ablation
+- `scripts/ablation_modes.py` — fused vs tiny mode comparison
+
+---
+
+
+## Compile × Kernel Ablation + RoPE Bug Fix (2026-05-05 later)
+
+Critical bug fix + comprehensive compile ablation.
+
+### RoPE non-contiguous bug (fixed in `models/components/conv_blocks.py`)
+`freqs_cis.real[:T, :pairs].float()` — `.real` on a complex tensor returns a
+**non-contiguous view** (complex memory is interleaved [real, imag] fp32 pairs,
+so `.real` has stride 2). The HIP `fused_rope_gate_mul` kernel reads this as
+contiguous, effectively reading imag values as cos at odd positions → garbled
+RoPE rotation. Silent miscompute; all halo models using this path were training
+with WRONG positional encoding. Added `.contiguous()` in both HIP call sites.
+
+Isolated RoPE+gate output diff (fixed vs buggy HIP): **max_err = 13.7** (not noise).
+Isolated RoPE+gate output diff (fixed HIP vs native): max_err = 1e-3 (fp16 noise).
+
+### Compile investigation results
+
+OdinHalo has 4 graph breaks per HyPEShortConvBlock at default compile:
+1. HIP `fused_rope_gate_mul` (wrapped with `@torch.compiler.disable`)
+2-4. `causal_conv1d_fn` calls to DaoAILab C++ extension (non-contiguous `out=` tensor)
+
+Added **compile-friendly path** (`HyPEShortConvBlock._compile_friendly` flag) with:
+- Native PyTorch RoPE + gate multiply (no custom kernel)
+- Manual causal conv via `F.conv1d` (no DaoAILab extension)
+- Result: 0 graph breaks, compiles with `fullgraph=True`
+- Accessible via `model.compile_zones_friendly()`
+
+**However, 0 breaks did NOT materially speed up compile** — compile-friendly
+path runs ~ the same as default compile (both ~1.08× eager at batch=4). Root
+cause: HIP kernels are faster than the Inductor-generated triton for their
+specific operations, even with graph breaks.
+
+### Batch size sensitivity — MAJOR finding
+
+Compile lift grows dramatically with batch size. At small batches, kernel launch
+overhead dominates and compile can't help much. At larger batches, the overhead
+is amortized and Inductor's fusion + matmul autotuning pays off.
+
+### Full stack ablation (OdinHalo V=32768, 400 steps, 200 warmup, fused AdamW)
+
+| Config | batch=4 tok/s | batch=16 tok/s | Lift (bs=16) |
+|--------|---------------|----------------|--------------|
+| Baseline (PyTorch CE, no fusion)            |  9,793 | 11,145 | 1.000× |
+| + HIP CE (tiny)                             | 10,053 | 11,549 | 1.036× |
+| + HIP CE + RoPE fusion                      | 10,058 | 11,203 | 1.005× |
+| + HIP CE + RoPE + Chunked CE                |  9,790 | 10,959 | 0.983× |
+| compile + PyTorch CE                        | 10,745 | 14,108 | 1.266× |
+| **compile + HIP CE (best tok/s)**           | **11,066** | **14,682** | **1.317×** |
+| compile + HIP CE + RoPE fusion              | 11,047 | 14,506 | 1.302× |
+| **compile + HIP CE + RoPE + Chunked**       | 10,690 | 14,228 | 1.277× |
+| *(best mem at batch=16)*                    | 1.95 GB | **3.89 GB** | (vs 6.60 GB) |
+
+### reduce-overhead mode (CUDA graphs) — best memory configurations
+
+| batch | Config | tok/s | Peak mem | Notes |
+|-------|--------|-------|----------|-------|
+| 16 | compile default + HIP CE               | 14,682 | 4.83 GB | best tok/s at bs=16 |
+| 16 | compile reduce-overhead + HIP CE       | 14,425 | **2.14 GB** | -2.7 GB for 1.8% tok/s loss |
+| 16 | compile reduce-overhead + Chunked CE   | 13,933 | **1.67 GB** | absolute lowest memory |
+| 32 | compile default + HIP CE               | 13,967 | 9.72 GB | throughput plateaus |
+| 32 | compile reduce-overhead + Chunked CE   | 12,736 | 3.65 GB | largest effective batch at low mem |
+
+Throughput plateaus at batch≥16; going to batch=32 doesn't help (GPU saturated).
+
+### reduce-overhead limitations (IMPORTANT)
+
+`TORCH_COMPILE_MODE=reduce-overhead` is **NOT supported with looped models**
+(HALO family with `compile_zones`). CUDA graph buffer reuse across Parcae
+iterations invalidates saved activations for backward. The trainer detects this
+and auto-falls-back to default mode with a warning:
+
+```
+WARNING: reduce-overhead is incompatible with looped models
+  (buffer reuse across Parcae iterations). Falling back to default.
+```
+
+Similarly, `reduce-overhead + --chunked-ce` is unsupported (auto-disabled with
+warning). Use case: memory-savings are available via isolated-benchmark reduce-
+overhead testing, but for production training, use default compile mode.
+
+For non-looped models (e.g., plain Llama), reduce-overhead works fine.
+
+### Chunk size tuning for ChunkedLinearCrossEntropyLoss
+
+| chunk_size | tok/s (compiled) | Peak mem | Note |
+|-----------:|-----------------:|---------:|:-----|
+| 128 | 13,731 | 3.86 GB | more python overhead |
+| 256 | 14,117 | 3.89 GB | prior default |
+| **512** | **14,303** | 3.96 GB | **new default, sweet spot** |
+| 1024 | 12,397 | 4.09 GB | matmul shapes start to hurt |
+| 4096 | 12,358 | 4.90 GB | loses memory benefit |
+
+### Chunked CE extension to all halo models (session 2)
+
+Extended `use_chunked_ce=True` ctor arg to: VidarHalo, FenrirHalo, TyrHalo, BaldrHalo, ChimeraHalo
+(previously only OdinHalo). All 6 halo families + mini variants verified in
+`scripts/test_all_models_chunked_train.py`.
+
+### When to use Chunked CE — model-size dependent
+
+Chunked CE overhead (16 chunks × 4 GEMMs = 64 launches per step) is fixed cost.
+It becomes worthwhile only when:
+- Rest-of-model compute dominates (larger models, more Parcae iterations)
+- Memory headroom is tight (bigger batches, longer sequences)
+
+**Measured at batch=16, block=256:**
+
+| Model | PyTorch CE | Chunked CE | Δ tok/s | Δ mem | Recommend |
+|-------|-----------:|-----------:|--------:|------:|:----------|
+| **OdinHalo** (57M, 3 iter)  | 14,108 | 14,228 | +0.8% | -1.7 GB | ✓ use chunked |
+| **VidarHalo** (47M, 2 iter) | 27,334 | 11,207 | **-59%** | -1.4 GB | ✗ skip chunked |
+
+The rule: if your model is already GPU-saturated on compute (OdinHalo at bs=16),
+chunked CE frees up memory at ~0% cost. If your model is memory-bound and the
+CE path is proportionally large (VidarHalo), chunked CE's Python loop overhead
+dominates the savings.
+
+### Key takeaways
+1. **For production training use batch=16 + compile + HIP CE (tiny)**.
+2. **For memory-constrained setups** (larger batches, longer sequences): add
+   `TORCH_COMPILE_MODE=reduce-overhead` for 50%+ memory savings at <2% throughput cost.
+3. **For extreme memory savings** (1.67 GB): combine reduce-overhead + `--chunked-ce`.
+4. **RoPE HIP fusion and RoPE Inductor fusion are functionally equivalent** when
+   compile is on; no need to force HIP fusion under compile.
+5. **Fused AdamW** (`torch.optim.AdamW(..., fused=True)`) is +12% at batch=4.
+   Already default in `halo_training/optimizer.py`.
+6. **Trainer now auto-uses `compile_zones`** for looped models when `--compile` set.
+7. **`TORCH_COMPILE_MODE` env var** switches between default/reduce-overhead/max-autotune.
+
+### Scripts (this session)
+- `scripts/ablation_final.py` — comprehensive compile × kernel × batch_size
+- `scripts/ablation_compile.py` — compile-friendly vs default compile
+- `scripts/ablation_compile_modes.py` — mode={default, reduce-overhead, max-autotune}
+- `scripts/ablation_optimizer.py` — fused AdamW + grad_clip + batch size
+- `scripts/diag_compile.py`, `scripts/diag_compile_v2.py` — graph-break diagnosis
+- `scripts/test_compile_friendly_parity.py` — output parity tests
+- `scripts/trace_rope_in_block.py` — proved RoPE non-contig bug
+- `scripts/mini_rope_repro.py` — isolated RoPE math verification
+- `scripts/profile_step.py` — torch.profiler dump showing matmul=68%, AdamW=19%
+
+---
+
+
 ## Active Model
+
+**ODIN-HALO** (`models/odin_halo.py`, class `OdinHalo`) ← **NEW**
+- 57.6M unique / ~156M effective params
+- d=768, 6 shared layers (5 HyPEShortConv + 1 NoPE-GQA) × 3 Parcae iterations
+- HyPE: NoPE attention (content-only) + RoPE on conv gate
+- No momentum, iteration skip connections, logit softcap=30
+- Tokenizer: `tokenizers/odin-32k/tokenizer.json` (EOS=0, PAD=1, vocab=32768)
+- Dataset: `datasets/dolma-10b-odin32k.bin` (6.8B tokens, 13.7 GB, Machine A only)
 
 **VIDAR-HALO** (`models/vidar_halo.py`, class `VidarHalo`)
 - 47.0M unique / 95M effective params
@@ -134,4 +333,4 @@ DDP: `GLOO_SOCKET_IFNAME=thunderbolt0`, `MASTER_ADDR=10.77.0.1`, backend=gloo.
 
 ---
 
-*Last updated: 2026-05-04*
+*Last updated: 2026-05-05*
