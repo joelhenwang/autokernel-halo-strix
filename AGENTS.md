@@ -40,6 +40,19 @@ python -m halo_training --model models/odin_halo.py --class-name OdinHalo \
 
 # DDP smoke test (never full epoch)
 --max-steps 300 --time-budget 20
+
+# DDP full training (2 machines over Thunderbolt 4)
+# Launch from Machine A — it SSHs into Machine B to start rank 1
+bash run_remote.sh "cd ~/Desktop/ai_lab/autokernel-halo-strix && bash scripts/launch_ddp.sh"
+
+# OdinFlat on wikitext-103 (one epoch, ~1869 steps, ~39K tok/s aggregate)
+TORCH_COMPILE_MODE=max-autotune-no-cudagraphs
+torchrun --nnodes=2 --nproc_per_node=1 \
+  --master_addr=10.77.0.1 --master_port=29500 \
+  scripts/train_ddp.py --model models/odin_flat.py --class-name OdinFlat \
+  --dataset datasets/wikitext-103-odin32k.bin --epochs 1 \
+  --block-size 256 --batch-size 16 --accum-steps 8 \
+  --compile --no-muon --lr 8e-4 --backend gloo
 ```
 
 Monitor long runs: `bash run_remote.sh "tail -5 checkpoints/<run>/train_log.jsonl"`.
@@ -64,7 +77,8 @@ models/
     loop_utils.py           HyperloopHC, DepthMemoryCache
     mtp.py                  MTPHead (single source; was duplicated)
     speculative.py          DraftHeads, ForecastEmbeddings
-  odin_halo.py            ODIN-HALO (58M/156M, d=768, 6L×3iter, HyPE)
+  odin_halo.py            ODIN-HALO (58M/156M, d=768, 6L×3iter, HyPE, looped)
+  odin_flat.py            ODIN-FLAT (122M, d=768, 14L, HyPE, non-looped)
   vidar_halo.py, tyr_halo.py, ...  (7 more halo variants)
 ```
 
@@ -80,6 +94,7 @@ New models: import from `from models.components import X`, never from other mode
 - MTP head: ~45% throughput cost, no evidence at sub-100M scale. ODIN-HALO omits it.
 - WSD schedule: `--scheduler wsd --min-lr-ratio 0.1` (MIN_LR=10%, don't decay to zero).
 - Logit softcap=30: stability in fp16 looped models.
+- **`max-autotune` crashes with `accum_steps > 1`** (CUDA graph buffer overwrite). Use `max-autotune-no-cudagraphs` for any training with gradient accumulation. Same Triton autotuning benefit, no graph capture attempt.
 
 ## CE + chunked-CE stack (2026-05-05)
 

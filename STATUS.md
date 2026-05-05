@@ -364,6 +364,86 @@ Warm-cache subsequent: ~9 s.
 
 ---
 
+## OdinFlat: Flat (Non-Looped) Variant + DDP Training (2026-05-05)
+
+### Model
+
+`models/odin_flat.py` — **OdinFlat**: 14-layer flat hybrid LM, **121.7M params** (all unique).
+Same block internals as OdinHalo (HyPE conv gate, NoPE GQA with XSA, SwiGLU, factorized embed/head,
+logit softcap 30). Difference: no weight sharing, no Parcae loop, no MoDA, no injection/skip/iter machinery.
+
+Architecture: `FactorizedEmbed → [12 HyPEShortConvBlock + 2 NoPEGQABlock] → FactorizedLMHead`
+- GQA at positions 6 and 13 (center + end, mirroring looped's center-of-iteration pattern)
+- 14 forward passes per step (vs looped's 18 = 6 shared × 3 iters)
+- All compile infrastructure identical to OdinHalo (`compile_zones(mode=...)`)
+
+### Throughput comparison (500 steps, block=256, batch=16, max-autotune-no-cudagraphs)
+
+| Model | Unique params | Eff. params | Steady-state tok/s | Memory | Delta |
+|-------|-------------:|------------:|-------------------:|-------:|------:|
+| **OdinFlat** | 121.7M | 121.7M | **19,400** | 6.1 GB | **+27.5%** |
+| OdinHalo (looped) | 57.6M | ~157M | 15,220 | 5.9 GB | baseline |
+
+Flat is faster because: fewer forward passes (14 vs 18), no iteration overhead (injection, iter_norm,
+skip gates, MoDA depth_kv routing), better Inductor fusion (simple sequential loop vs Python control flow).
+
+### DDP training (active run)
+
+**Config:**
+```bash
+# Launch via scripts/launch_ddp.sh (Machine A orchestrates both)
+TORCH_COMPILE_MODE=max-autotune-no-cudagraphs
+torchrun --nnodes=2 --nproc_per_node=1
+  --model models/odin_flat.py --class-name OdinFlat
+  --dataset datasets/wikitext-103-odin32k.bin (123M tokens, 0.25 GB)
+  --epochs 1 --block-size 256 --batch-size 16 --accum-steps 8
+  --compile --no-muon --lr 8e-4 --backend gloo
+```
+
+- **Effective batch:** 16 × 8 × 2 nodes = **256 tokens/step × 256 block = 65,536 tokens/step**
+- **Network:** Thunderbolt 4 (10.77.0.x), gloo backend
+- **Optimizer:** AdamW (fused=True), cosine schedule, warmup=300 steps
+- **Total steps:** 1,869 optimizer steps (1 epoch over 123M tokens at eff batch 256)
+- **Checkpoints:** every 500 steps → `checkpoints/odin-flat-wikitext-ddp/`
+
+**DDP throughput (from rank 0 logs):**
+
+| Step | Loss | tok/s (aggregate) | MFU | Memory |
+|-----:|-----:|------------------:|----:|-------:|
+| 50 | 9.39 | 20,176 | 12.4% | 6.6 GB |
+| 100 | 7.01 | 39,933 | 24.5% | 6.6 GB |
+| 200 | 6.09 | 39,825 | 24.5% | 6.6 GB |
+| 500 | 5.28 | 39,538 | 24.3% | 6.6 GB |
+| 1000 | 4.86 | 39,400 | 24.2% | 6.6 GB |
+
+**Aggregate steady-state: ~39,500 tok/s** (2 GPUs, ~19,750 tok/s per node).
+Loss converging well: 9.39 → 4.86 at step 1000.
+
+### Important: max-autotune vs max-autotune-no-cudagraphs
+
+`max-autotune` crashes during trainer backward pass with gradient accumulation
+(`accum_steps > 1`) due to CUDA graph buffer overwrite conflict:
+```
+RuntimeError: Error: accessing tensor output of CUDAGraphs that has been overwritten
+by a subsequent run.
+```
+
+**Fix:** Use `TORCH_COMPILE_MODE=max-autotune-no-cudagraphs` for any training with
+`accum_steps > 1`. Gets the same Triton kernel autotuning benefit without attempting
+CUDA graph capture (which fails on HIP anyway per Phase 3 WI-A0).
+
+The smoke test (no gradient accumulation) works fine with plain `max-autotune`.
+
+### Artifacts
+
+- `models/odin_flat.py` — OdinFlat, OdinFlatAblation, OdinFlatMini, NoPEGQABlock
+- `scripts/launch_ddp.sh` — one-command DDP launcher (orchestrates both machines via SSH)
+- `scripts/tcp_test.py` — TB4 connectivity diagnostic
+- `datasets/wikitext-103-odin32k.bin` — 123M tokens pretokenized with odin-32k
+- `docs/perf/flat-vs-looped-odin-2026-05-05.md` — throughput comparison report
+- `checkpoints/odin-flat-wikitext-ddp/` — active training checkpoints
+
+---
 
 
 
