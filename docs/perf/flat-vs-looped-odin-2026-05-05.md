@@ -185,6 +185,68 @@ OdinHalo at ~157M effective params → ~24% MFU. Apples-to-apples.
   effective regularization
 - Want to probe emergent depth capabilities (18 effective layers with shared weights)
 
+## Inference Sampling Ablation (step_1869 checkpoints)
+
+Ran the 3-stage narrowing sweep `scripts/ablate_odin_flat_sampling.py` on both
+checkpoints with identical protocol: 2 prompts × 3 samples × 15 configs.
+Metrics: distinct-2 (higher = more diverse), self-PPL (lower = more confident).
+
+### Winning configurations
+
+| Parameter | OdinFlat | OdinHalo |
+|-----------|:--------:|:--------:|
+| `temperature` | 0.60 | 0.60 |
+| `repetition_penalty` | **1.00** | **1.15** |
+| `top_p` | **1.00** (disabled) | **0.95** |
+| `top_k` | **0** (disabled) | **40** |
+| distinct-2 | 0.765 | 0.990 |
+| self-PPL | 9.84 | 14.11 |
+
+### Key finding: OdinHalo needs MORE sampling constraints
+
+OdinFlat converged to unconstrained sampling (no top_p, no top_k, no rep_pen) —
+its distribution is tight enough that filtering hurts diversity without
+improving quality. OdinHalo needed all three knobs active:
+
+- **rep_pen=1.15** — OdinHalo repeats more at rep_pen=1.0 (dist2=0.797); a
+  1.15 penalty pushes dist2 up to 0.990 at modest PPL cost (11.6 → 14.1)
+- **top_p=0.95 + top_k=40** — OdinHalo's logit tail contains more low-quality
+  tokens; restricting to the top 40 / 95th percentile prevents sampling them
+
+This matches the loss gap: OdinHalo's final loss is 4.71 vs OdinFlat's 4.47.
+The 0.24 loss difference manifests as a less-confident output distribution,
+which benefits from tail clipping.
+
+### Sample quality
+
+Both produce Wikipedia-style English fragments with topical drift within ~30
+tokens, characteristic of a ~1× params-in-tokens training budget (well below
+Chinchilla-optimal ~20×).
+
+**OdinFlat sample (temp=0.6, prompt="The history of the Roman Empire"):**
+> "The history of the Roman Empire, by the British Revolution. The first Roman
+> Empire of the King John of the province was the pope @-@ century, with the
+> monarchy led by the throne of the region of the French and the Netherlands
+> in 1630s, the Commonwealth of the reign of the Welsh and the Empire..."
+
+**OdinHalo sample (same prompt, its winning config):**
+> "The history of the Roman Empire, and in the Roman Empire. The Roman Empire's
+> reign is a large role was the Holy Roman Catholic Church at the Kingdom and
+> the first to be seen by a Romanian, as well known as the Royalist or a
+> 'very good manor.'"
+
+OdinHalo tends to emit `<|endoftext|>` earlier (shorter generations) while
+OdinFlat keeps generating through 120 tokens. This tracks with OdinHalo's
+tendency to overpredict EOS in the wikitext corpus (short article fragments).
+
+### Diagnostic value
+
+The inference ablation is a sensitive detector of model quality at matched
+training budgets: the winning sampling config reveals the distribution shape,
+not just its mean. OdinFlat's "unconstrained sampling wins" is the signature
+of a well-trained-for-its-budget model. OdinHalo's "needs all filters on" is
+the signature of a looser distribution that benefits from restriction.
+
 ## Artifacts
 
 - `models/odin_flat.py` — OdinFlat model implementation
