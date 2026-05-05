@@ -285,6 +285,85 @@ Expected lift: 5-15% by eliminating HIP launch overhead via graph capture.
 
 ---
 
+## Phase 3 Throughput Investigation Results (2026-05-05)
+
+Phase 3 spec: `docs/superpowers/specs/2026-05-05-phase3-cuda-graphs-parcae-design.md`.
+Plan (revised): `docs/superpowers/plans/2026-05-05-phase3-throughput-plan.md`.
+Summary: `docs/perf/phase3-summary-2026-05-05.md`.
+
+### Summary
+
+Phase 3 pivoted from CUDA-graphs-only to broader throughput search after WI-A0
+refuted the original spec's premise. Shipped: **`TORCH_COMPILE_MODE=max-autotune`**
+for +5.17% OdinHalo steady-state throughput.
+
+| WI | Target | Outcome |
+|----|--------|:--------|
+| WI-A0 | Investigate reduce-overhead claim | CLOSED — HIP graph capture fails silently; no benefit. STATUS row 113's 2.14 GB claim does NOT reproduce. |
+| WI-A1/A2/A3 | Clone-at-boundaries / manual graphs / unrolled | CANCELLED by A0 findings (solving non-existent problem). |
+| WI-B1 | Shape sweep | CLOSED — all shapes within ±3% noise band. |
+| WI-B2 | Compile-per-iter / whole-model | CLOSED — marginal +1.3% below shipping gate. |
+| **WI-B3** | **max-autotune** | **SHIPPED — +5.17%** verified via 200-step parity test. |
+| WI-B4/B5 | aiter / rocBLAS audit | Not executed (user scope: OdinHalo only). |
+
+### Key findings
+
+1. **reduce-overhead on HIP silently fails graph capture.** The trainer's
+   auto-fallback warning was based on a premise that doesn't match reality:
+   loops don't cause aliasing, but HIP's CUDA-graph backend produces
+   "empty graph" warnings and runs eagerly — net −1.8% throughput.
+
+2. **Inductor fusion is already saturated (Phase 2 finding reaffirmed).**
+   WI-B2 showed widening the compile scope either regresses (wider function
+   hits Python-container graph breaks) or gives only +1.3% (whole-model).
+
+3. **max-autotune finds real pointwise-kernel tile wins.** rocBLAS still wins
+   over triton_mm for all matmuls. But autotune explores `num_warps`, `num_stages`,
+   `BLOCK_M/N/K` settings for the 92 fused pointwise triton kernels identified
+   in Phase 2 WI6, and finds faster configurations than default.
+
+### Winner config
+
+For OdinHalo production training:
+
+```bash
+TORCH_COMPILE_MODE=max-autotune python -m halo_training \
+  --model models/odin_halo.py --class-name OdinHalo --compile \
+  --dataset datasets/dolma-10b-odin32k.bin --epochs 1 \
+  ... (other flags)
+```
+
+First-compile: ~2 min (one-time autotune search).
+Warm-cache subsequent: ~9 s.
+
+### Verification
+
+200-step training run with same seed:
+
+| Metric | compile_zones default | max-autotune | Delta |
+|--------|---------------------:|-------------:|------:|
+| Steady-state tok/s (steps 50-199) | 14,018 | **14,742** | **+5.17%** |
+| Max |loss Δ| over 200 steps | — | — | 0.2085 (within fp16 noise) |
+| Mean |loss Δ| | — | — | 0.0862 |
+| Final loss (step 200) | 4.5037 | 4.6052 | 0.1015 |
+| Peak memory | 5.28 GB | 5.23 GB | comparable |
+
+### Code shipped
+
+- `models/odin_halo.py::OdinHaloBase.compile_zones(mode=None)` — env-var threading
+- `models/odin_halo.py::OdinHaloBase.compile_zones_friendly(mode=None)` — same
+- `halo_training/trainer.py` — thread `TORCH_COMPILE_MODE` through compile_zones
+  with TypeError fallback for other HALO models (old bare signature).
+- Docs: AGENTS.md compile strategy section updated.
+
+### Artifacts
+
+- 5 per-WI analyses in `docs/perf/phase3-wi-*.md`
+- 5 reusable benchmark scripts in `scripts/wi_*.py`
+- Summary: `docs/perf/phase3-summary-2026-05-05.md`
+
+---
+
 
 
 

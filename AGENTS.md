@@ -95,7 +95,8 @@ New models: import from `from models.components import X`, never from other mode
   - batch=4: ~1.08× (low value)
   - batch=16: ~1.32× (recommended minimum for compile benefit)
   - batch=32: GPU saturated, throughput plateaus
-- **`TORCH_COMPILE_MODE=reduce-overhead`** is **incompatible with looped models** (Parcae iterations). Trainer auto-falls-back to default with warning. Only use with non-looped models.
+- **`TORCH_COMPILE_MODE=max-autotune`** is the **production-recommended** mode for OdinHalo. Phase 3 WI-B3 measured **+5.17% tok/s** (14,018 → 14,742) with loss parity within fp16 noise. First-compile: ~2 min (autotune search, one-time). Warm-cache: ~9 s. Usage: `TORCH_COMPILE_MODE=max-autotune python -m halo_training --model models/odin_halo.py ...`. Trainer threads the env var through `compile_zones(mode=...)`.
+- **`TORCH_COMPILE_MODE=reduce-overhead`** does NOT crash on looped models (Phase 3 WI-A0 debunked the prior claim) but HIP's CUDA-graph backend produces "empty graph" warnings and runs eagerly — net −1.8% throughput, no memory benefit. Trainer auto-redirects to `default` with a NOTE. See `docs/perf/phase3-wi-a0-consolidated.md`.
 - HIP `fused_rope_gate_mul` and Inductor-generated RoPE fusion are performance-equivalent under compile; no need to force HIP fusion.
 - `HyPEShortConvBlock._compile_friendly = True` swaps HIP kernels for native PyTorch equivalents. 0 graph breaks vs 4 default. But NOT faster — provided for fullgraph compilation only.
 
