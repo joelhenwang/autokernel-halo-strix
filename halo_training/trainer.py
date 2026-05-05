@@ -42,6 +42,8 @@ def train(
     mode: str = "auto",
     checkpoint_every: int = 2,
     use_muon: bool = False,
+    use_lion: bool = False,
+    lion_lr_ratio: float = 0.3,
     use_bf16: bool = False,
     use_ema: bool = False,
     ema_decay: float = 0.999,
@@ -225,7 +227,9 @@ def train(
     dataloader = build_dataloader(dataset, batch_size=batch_size, num_workers=num_workers)
 
     # --- Setup optimizer (NEVER compile this) ---
-    optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon, polar_ns=polar_ns)
+    optimizer = build_optimizer(model, base_lr=base_lr, use_muon=use_muon,
+                                use_lion=use_lion, lion_lr_ratio=lion_lr_ratio,
+                                polar_ns=polar_ns)
 
     total_steps = len(dataloader) * epochs // accum_steps
     if max_steps:

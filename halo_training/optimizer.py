@@ -40,6 +40,8 @@ def build_optimizer(
     use_muon: bool = False,
     muon_lr: float = 0.005,
     polar_ns: bool = False,
+    use_lion: bool = False,
+    lion_lr_ratio: float = 0.3,
 ) -> torch.optim.Optimizer:
     """Build optimizer with COOKBOOK.md param group rules.
 
@@ -58,11 +60,28 @@ def build_optimizer(
         use_muon: Use Muon optimizer for 2D weight matrices, AdamW for rest.
                   ~2x token-efficiency, ~50% less optimizer memory.
         muon_lr: Learning rate for Muon params (default 0.02, different scale from AdamW).
+        use_lion: Use Lion optimizer (sign-based momentum; 1 state buffer vs AdamW's 2).
+                  LR is auto-scaled to base_lr * lion_lr_ratio (default 0.3x).
+                  Mutually exclusive with use_muon.
+        lion_lr_ratio: Lion LR = base_lr * this_ratio (paper recommends ~0.1-0.3 vs AdamW).
     """
+    if use_lion and use_muon:
+        raise ValueError("use_lion and use_muon are mutually exclusive")
+
     if use_muon:
         return _build_muon_optimizer(model, base_lr, muon_lr, weight_decay, polar_ns=polar_ns)
 
     groups = _build_param_groups(model, base_lr, weight_decay)
+
+    if use_lion:
+        from halo_training.lion import Lion
+        lion_lr = base_lr * lion_lr_ratio
+        # Rescale each group's lr by the same factor (preserves LR-multiplier pattern)
+        for g in groups:
+            g["lr"] = g["lr"] * lion_lr_ratio
+        opt = Lion(groups, lr=lion_lr, betas=(0.9, 0.99), weight_decay=weight_decay)
+        print(f"Using Lion optimizer (lr={lion_lr}, scaled from base_lr={base_lr} x {lion_lr_ratio})")
+        return opt
 
     if optimizer_cls is not None:
         return optimizer_cls(groups, lr=base_lr)

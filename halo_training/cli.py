@@ -93,6 +93,12 @@ def main():
     parser.add_argument("--chunked-ce", action="store_true",
                         help="Use ChunkedLinearCrossEntropyLoss to avoid materializing "
                              "[N, V] logits tensor. Requires model with use_chunked_ce=True.")
+    parser.add_argument("--lion", action="store_true",
+                        help="Use Lion optimizer (sign-based momentum, 1 state buffer "
+                             "vs AdamW's 2). LR auto-scaled to base_lr * 0.3. "
+                             "Mutually exclusive with --muon.")
+    parser.add_argument("--lion-lr-ratio", type=float, default=0.3,
+                        help="Lion LR = base_lr * this_ratio (default 0.3 per paper).")
     parser.add_argument("--num-workers", type=int, default=4,
                         help="DataLoader workers. 0 = synchronous (safer but slower data prep).")
     parser.add_argument("--model-kwarg", action="append", default=[],
@@ -288,6 +294,8 @@ def main():
         checkpoint_interval=args.checkpoint_interval,
         log_interval=args.log_interval,
         use_muon=args.muon,
+        use_lion=args.lion,
+        lion_lr_ratio=args.lion_lr_ratio,
         use_bf16=args.bf16,
         use_ema=args.ema,
         resume_from=args.resume_from,
