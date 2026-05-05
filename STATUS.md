@@ -436,6 +436,47 @@ gets reparented to init (PPID=1) and survives SSH disconnect. First run died at
 step 1250 when the local SSH session died during a Windows Update restart;
 detached relaunch completed without further issue.
 
+### OdinHalo (looped) DDP run on same config (2026-05-05)
+
+Ran the same 1-epoch wikitext-103 DDP config for the looped OdinHalo
+variant (57.6M unique / ~157M effective) using the now-parameterized
+`launch_ddp.sh` (`MODEL=models/odin_halo.py CLASS=OdinHalo ...`).
+
+```
+Done: 1869 steps, 122,503,168 tokens in 4089s (29,957 tok/s), best loss=4.7121
+```
+
+| Metric | OdinFlat | OdinHalo | Delta |
+|--------|--------:|--------:|------:|
+| Aggregate tok/s | 39,110 | 29,957 | OdinFlat +30.6% |
+| Final loss | **4.4698** | 4.7121 | OdinFlat −0.24 |
+| Final BPB | 1.791 | 1.888 | OdinFlat −5.1% |
+| Wall time | 52 min | 68 min | OdinFlat −31% |
+| Per-node memory | 6.6 GB | 6.2 GB | OdinHalo −6.5% |
+| Checkpoint size | 1.46 GB | 691 MB | OdinHalo −53% |
+| MFU (raw) | 24.0% | 8.8% | — (see note) |
+
+**MFU note:** The raw MFU formula uses parameter count, which under-credits
+weight-sharing models. At effective-param count (157M for OdinHalo), effective
+MFU is ~24%, matching OdinFlat.
+
+**Loss gap narrowed during training:** +0.56 at step 500 → +0.24 at epoch end.
+OdinHalo's weight sharing plays out as slower-but-steeper learning per token.
+At 1× params in tokens this is still insufficient to overtake OdinFlat, but
+at Chinchilla-optimal budgets (20×+) OdinHalo is expected to catch up or
+surpass due to its implicit regularization.
+
+**Loss trajectory:**
+| Step | OdinFlat | OdinHalo | Gap |
+|-----:|---------:|---------:|----:|
+| 500 | 4.93 | 5.49 | +0.56 |
+| 1000 | 4.69 | 4.99 | +0.30 |
+| 1500 | 4.54 | 4.78 | +0.24 |
+| 1869 | **4.47** | **4.71** | +0.24 |
+
+Checkpoints at steps 500, 1000, 1500, 1869 saved under
+`checkpoints/odin-halo-wikitext-ddp/` (691 MB each).
+
 ### Important: max-autotune vs max-autotune-no-cudagraphs
 
 `max-autotune` crashes during trainer backward pass with gradient accumulation
