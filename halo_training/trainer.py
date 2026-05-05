@@ -236,6 +236,22 @@ def train(
                                 clion_gate_mode=clion_gate_mode,
                                 polar_ns=polar_ns)
 
+    # W4 experimental: optionally compile optimizer.step (PyTorch >= 2.5).
+    # Guarded by env var to keep it off by default until proven beneficial.
+    if os.environ.get("TORCH_COMPILE_OPTIMIZER") == "1":
+        try:
+            pt_ver = tuple(int(x) for x in torch.__version__.split(".")[:2])
+        except Exception:
+            pt_ver = (0, 0)
+        if pt_ver >= (2, 5):
+            try:
+                optimizer.step = torch.compile(optimizer.step, fullgraph=False)
+                print("Compiled optimizer.step (TORCH_COMPILE_OPTIMIZER=1)")
+            except Exception as e:
+                print(f"WARNING: torch.compile(optimizer.step) failed: {e}")
+        else:
+            print(f"WARNING: TORCH_COMPILE_OPTIMIZER requires PyTorch >= 2.5 (got {torch.__version__})")
+
     total_steps = len(dataloader) * epochs // accum_steps
     if max_steps:
         total_steps = min(total_steps, max_steps)
