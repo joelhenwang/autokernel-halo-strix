@@ -93,6 +93,8 @@ def main():
     parser.add_argument("--chunked-ce", action="store_true",
                         help="Use ChunkedLinearCrossEntropyLoss to avoid materializing "
                              "[N, V] logits tensor. Requires model with use_chunked_ce=True.")
+    parser.add_argument("--num-workers", type=int, default=4,
+                        help="DataLoader workers. 0 = synchronous (safer but slower data prep).")
     parser.add_argument("--model-kwarg", action="append", default=[],
                         help="Model constructor kwargs as key=value (repeatable)")
     parser.add_argument("--system-prompt", default="You are a helpful assistant.",
@@ -302,6 +304,7 @@ def main():
         min_lr_ratio=args.min_lr_ratio,
         polar_ns=args.polar_ns,
         chunked_ce=args.chunked_ce,
+        num_workers=args.num_workers,
     )
 
     print(f"\nFinal stats: {stats}")

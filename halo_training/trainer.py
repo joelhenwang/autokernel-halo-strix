@@ -274,7 +274,7 @@ def train(
 
         def default_loss_fn(output, batch):
             _, targets = batch
-            targets = targets.to(device)
+            targets = targets.to(device, non_blocking=True)
             if isinstance(output, torch.Tensor):
                 logits = output
             elif isinstance(output, dict):
@@ -345,8 +345,8 @@ def train(
 
                 # Forward + backward with mixed precision
                 input_ids, targets = batch
-                input_ids = input_ids.to(device)
-                targets = targets.to(device)
+                input_ids = input_ids.to(device, non_blocking=True)
+                targets = targets.to(device, non_blocking=True)
 
                 try:
                     torch.compiler.cudagraph_mark_step_begin()
