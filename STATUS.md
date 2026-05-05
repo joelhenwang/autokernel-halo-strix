@@ -217,6 +217,74 @@ Phase 2 (fusion investigation) should use the W1 profile as its starting point.
 
 ---
 
+## Phase 2 Fusion Investigation Results (2026-05-05)
+
+Phase 2 spec: `docs/superpowers/specs/2026-05-05-phase2-fusion-investigation-design.md`.
+Plan: `docs/superpowers/plans/2026-05-05-phase2-fusion-investigation-plan.md`.
+Summary: `docs/perf/phase2-summary-2026-05-05.md`.
+
+### Summary
+
+Six work items evaluated in ~4 hours. **Zero fusions shipped. Zero regressions.**
+Phase 1 already captured all attainable wins on this stack.
+
+| WI | Target (% of Phase 1 wall) | Outcome |
+|----|----------------------------|:--------|
+| WI1 | `triton_poi_fused__to_copy_mul_transpose_view_{7,8}` (9.1%) | CLOSED — already optimal Inductor fusion of 5 ops (RoPE+cast+QKV gather). Memory-bandwidth-bound. |
+| WI2 | `aten::add_` + `aten::copy_` (9.3%) | CLOSED — 67% add_ is autograd weight-grad accumulation; 90% copy_ is input H2D upload. |
+| WI3 | `aten::embedding_dense_backward` (4.1%) | DEFERRED — already near 1.3 TB/s bandwidth limit; tied-embedding autograd fusion too risky. |
+| WI4 | `Memset (Device)` (4.1%) | CLOSED — framework-internal (rocBLAS scratch, fused_adamw, GradScaler); no user-reachable source. |
+| WI5 | `Memcpy HtoD` (4.0%) | CLOSED — all 4 H2D strategies slower than baseline on unified memory. |
+| WI6 | Inductor fusion catalog | SHIPPED — 92 unique triton kernels documented (up to 24 ops fused per kernel). |
+
+### Key findings
+
+1. **Inductor fuses aggressively under `compile_zones`:** 92 triton kernels cover
+   nearly every elementwise chain in the model. `mul` appears in 81 kernels, `add` in 33.
+   Writing custom HIP kernels for patterns already in the catalog would yield no speedup.
+
+2. **Unified-memory H2D wisdom is inverted on Strix Halo.** Prefetching, pinned memory, and
+   non-blocking copies all REGRESS throughput by 1-2%. Current `pin_memory=False +
+   non_blocking=True` is the local optimum.
+
+3. **Gradient lifecycle alternatives regress.** `set_to_none=True` beats `set_to_none=False`
+   and pre-allocated foreach_zero_ by ~2%. Caching allocator already handles this well.
+
+4. **The 4.1% Memsets are invisible to user code.** Every `aten::zero_` reports 0 μs.
+   The actual Memsets come from rocBLAS/fused_adamw/GradScaler internals.
+
+5. **Post-Phase-1 the stack is memory-bandwidth-limited at nearly every hot op.**
+   Each of the 5% profile entries is already near its shape's theoretical bandwidth ceiling.
+   Further gains require CUDA graphs (Phase 3) or batch-size scaling, not more fusion.
+
+### Baseline confirmation
+
+Post-Phase-2 ablation matches Phase 1 (no regressions):
+
+| Config | Batch=16 tok/s | Peak GB |
+|--------|--------------:|--------:|
+| **compile + HIP CE (best throughput)** | **14,708** | 4.83 |
+| compile + HIP CE + RoPE + Chunked CE (best memory) | 14,152 | **3.89** |
+
+### Permanent artifacts delivered
+
+- `docs/perf/inductor-fusion-catalog.md` + `.json` — 92-kernel structured catalog.
+- `docs/perf/wi{1,2,3,4,5}-*.md` — per-WI analyses with closure rationales.
+- `docs/perf/kernel-bodies-c1.txt` — triton source for the 9.1% kernel.
+- `docs/perf/phase2-summary-2026-05-05.md` — consolidated summary.
+
+Reusable tooling:
+- `scripts/dump_inductor_output.py`, `parse_inductor_cache.py`, `extract_kernel_body.py`.
+- `scripts/profile_shape_calls.py` — shape-annotated per-op profile.
+- `scripts/bench_h2d_strategies.py`, `bench_zero_grad.py` — ablation harnesses.
+
+### Next step: Phase 3 (CUDA graphs through Parcae)
+
+Phase 3 starts from confirmed baseline **14,708 tok/s** at `compile + HIP CE`.
+Expected lift: 5-15% by eliminating HIP launch overhead via graph capture.
+
+---
+
 
 
 
