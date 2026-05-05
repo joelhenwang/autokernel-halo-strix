@@ -16,6 +16,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.amadeus import SwiGLU, GatedConv
+from models._components import precompute_freqs_cis
+from models.components import FactorizedEmbedding, FactorizedLMHead
+from models.components import SimpleParcaeInjection
+from models.components import CodaAttention
 
 
 class NativeRMSNorm(torch.nn.Module):
@@ -36,10 +40,6 @@ class NativeRMSNorm(torch.nn.Module):
         return torch.rms_norm(x, (x.size(-1),), self.weight.to(x.dtype), self.eps)
 
 RMSNorm = NativeRMSNorm
-from models.argus import precompute_freqs_cis
-from models.chimera_halo import FactorizedEmbedding, FactorizedLMHead
-from models.griffin_halo import SimpleParcaeInjection
-from models.jormungandr_halo import CodaAttention
 
 
 class VidarShortConvBlock(nn.Module):
@@ -94,19 +94,7 @@ class VidarMoDAGQABlock(nn.Module):
         return k, v
 
 
-class MTPHead(nn.Module):
-    """Multi-Token Prediction auxiliary head (tied weights). Training only."""
-
-    def __init__(self, d_model: int, embed_rank: int, embed_table: nn.Embedding,
-                 depth: int = 1):
-        super().__init__()
-        self.depth = depth
-        self.proj = nn.Linear(d_model, embed_rank, bias=False)
-        self.embed_table = embed_table
-
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        trimmed = h[:, :-(self.depth + 1)]
-        return F.linear(self.proj(trimmed), self.embed_table.weight)
+from models.components.mtp import MTPHead
 
 
 class VidarHaloBase(nn.Module):
@@ -149,6 +137,7 @@ class VidarHaloBase(nn.Module):
         use_xsa: bool = True,
         use_moda: bool = True,
         use_mtp: bool = False,
+        use_chunked_ce: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -157,10 +146,13 @@ class VidarHaloBase(nn.Module):
         self.backprop_depth = backprop_depth
         self.use_moda = use_moda
         self.use_mtp = use_mtp
+        self.use_chunked_ce = use_chunked_ce
+        self.logit_softcap = 0.0  # VidarHalo doesn't use softcap
 
         self.tok_embeddings = FactorizedEmbedding(vocab_size, embed_rank, d_model)
         self.norm = RMSNorm(d_model)
         self.lm_head = FactorizedLMHead(d_model, embed_rank, self.tok_embeddings.embed)
+        self.lm_head.use_chunked_ce = use_chunked_ce
 
         gqa_set = set(gqa_positions)
         self._is_gqa = [i in gqa_set for i in range(n_shared_layers)]
@@ -239,7 +231,12 @@ class VidarHaloBase(nn.Module):
             if current_kvs:
                 depth_kv_buffer.append(current_kvs)
 
-        logits = self.lm_head(self.norm(h))
+        normed = self.norm(h)
+        if self.use_chunked_ce and self.training:
+            # Return low-rank hidden state for trainer-side ChunkedLinearCrossEntropyLoss.
+            return self.lm_head.forward_hlow(normed)
+
+        logits = self.lm_head(normed)
 
         if self.training and self.use_mtp and hasattr(self, "mtp_head"):
             return {"logits": logits, "mtp1": self.mtp_head(h)}

@@ -27,297 +27,31 @@ import torch.nn.functional as F
 
 from models.amadeus import RMSNorm, SwiGLU, GatedConv
 from models.argus import precompute_freqs_cis, apply_rotary_emb
-from models.argus_prime import Attention, ShortConvBlock
-from models.chimera_halo import FactorizedEmbedding, FactorizedLMHead
-from models.griffin_halo import SimpleParcaeInjection
-from models.jormungandr_halo import CodaAttention
+from models.components import Attention, ShortConvBlock
+from models.components import FactorizedEmbedding, FactorizedLMHead
+from models.components import SimpleParcaeInjection
+from models.components import CodaAttention
 
-try:
-    from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
-    _HAS_HYBRID_ATTN = True
-except ImportError:
-    _HAS_HYBRID_ATTN = False
+_HAS_HYBRID_ATTN = False  # disabled: flash_attn requires aiter
 
 
 # ---------------------------------------------------------------------------
 # Hyperloop Hyper-Connections (MIT, 2604.21254 — replaces mHC Sinkhorn)
 # ---------------------------------------------------------------------------
 
-class HyperloopHC(nn.Module):
-    """Diagonal hyper-connections for looped transformers.
-
-    n parallel residual streams with diagonal sigmoid gating (not Sinkhorn).
-    Applied at loop boundaries only. Hyperloop paper proves diagonal > Sinkhorn.
-    """
-
-    def __init__(self, d_model: int, n_streams: int = 4, n_iters: int = 2):
-        super().__init__()
-        self.n_streams = n_streams
-        self.d_model = d_model
-        nd = n_streams * d_model
-        self.norm = RMSNorm(nd)
-        self.hc = nn.ModuleList([
-            nn.ModuleDict({
-                'w_pre': nn.Linear(nd, n_streams, bias=True),
-                'w_post': nn.Linear(nd, n_streams, bias=True),
-                'w_res': nn.Linear(nd, n_streams, bias=True),
-                'alpha_pre': nn.ParameterList([nn.Parameter(torch.ones(1))]),
-                'alpha_post': nn.ParameterList([nn.Parameter(torch.ones(1))]),
-                'alpha_res': nn.ParameterList([nn.Parameter(torch.ones(1))]),
-            })
-            for _ in range(n_iters)
-        ])
-        self._init_near_identity()
-
-    def _init_near_identity(self):
-        for hc in self.hc:
-            nn.init.zeros_(hc['w_pre'].weight)
-            nn.init.zeros_(hc['w_pre'].bias)
-            nn.init.zeros_(hc['w_post'].weight)
-            nn.init.zeros_(hc['w_post'].bias)
-            nn.init.zeros_(hc['w_res'].weight)
-            nn.init.zeros_(hc['w_res'].bias)
-
-    def expand(self, h: torch.Tensor) -> torch.Tensor:
-        """(B, T, d) -> (B, T, n, d) by copying."""
-        return h.unsqueeze(2).expand(-1, -1, self.n_streams, -1).clone()
-
-    def contract(self, streams: torch.Tensor) -> torch.Tensor:
-        """(B, T, n, d) -> (B, T, d) by averaging."""
-        return streams.mean(dim=2)
-
-    def read_write(self, streams: torch.Tensor, block_output: torch.Tensor,
-                   iter_idx: int) -> torch.Tensor:
-        """Apply hyper-connection at loop boundary.
-
-        streams: (B, T, n, d)
-        block_output: (B, T, d)
-        returns: (B, T, n, d)
-        """
-        B, T, n, d = streams.shape
-        z = self.norm(streams.reshape(B, T, n * d))
-        hc = self.hc[iter_idx]
-
-        H_pre = torch.sigmoid(hc['alpha_pre'][0] * hc['w_pre'](z))       # (B, T, n)
-        H_post = 2.0 * torch.sigmoid(hc['alpha_post'][0] * hc['w_post'](z))  # (B, T, n)
-        H_res = torch.sigmoid(hc['alpha_res'][0] * hc['w_res'](z))        # (B, T, n)
-
-        gated = streams * H_res.unsqueeze(-1)
-        written = H_post.unsqueeze(-1) * block_output.unsqueeze(2)
-        return gated + written
-
-    def read(self, streams: torch.Tensor, iter_idx: int) -> torch.Tensor:
-        """Read from n streams -> single d-dim tensor for block input."""
-        B, T, n, d = streams.shape
-        z = self.norm(streams.reshape(B, T, n * d))
-        hc = self.hc[iter_idx]
-        H_pre = torch.sigmoid(hc['alpha_pre'][0] * hc['w_pre'](z))  # (B, T, n)
-        return (streams * H_pre.unsqueeze(-1)).sum(dim=2)
-
+from models.components.conv_blocks import MoDAGQABlock
+from models.components.mtp import MTPHead
+from models.components.loop_utils import HyperloopHC
 
 # Legacy alias
 mHCBranchManager = HyperloopHC
 
 
 # ---------------------------------------------------------------------------
-# MoDA-GQA Block (GQA + Depth Attention + XSA + momentum + SwiGLU)
-# ---------------------------------------------------------------------------
-
-class MoDAGQABlock(nn.Module):
-    """GQA with MoDA depth-attention, XSA, momentum, SwiGLU FFN.
-
-    MoDA: each attention head attends to both sequence KVs and depth KVs
-    (representations from same token position in prior loop iterations).
-    Depth KV projection produces position-independent cross-layer retrieval keys.
-    """
-
-    def __init__(self, d_model: int, ffn_inner: int,
-                 n_heads: int = 10, n_kv_heads: int = 2,
-                 momentum_beta: float = 0.5, use_xsa: bool = True):
-        super().__init__()
-        self.head_dim = d_model // n_heads
-        self.n_kv_heads = n_kv_heads
-        self.pre_norm = RMSNorm(d_model)
-        if use_xsa:
-            self.attn = CodaAttention(d_model, n_heads, n_kv_heads,
-                                      qk_norm=True, exclusive=True)
-        else:
-            self.attn = Attention(d_model, n_heads, n_kv_heads, qk_norm=True)
-        self.use_xsa = use_xsa
-        self.depth_kv_proj = nn.Linear(d_model, n_kv_heads * self.head_dim * 2, bias=False)
-        self.log_beta = nn.Parameter(
-            torch.tensor(math.log(momentum_beta / (1 - momentum_beta)))
-        )
-        self.ffn_norm = RMSNorm(d_model)
-        self.ffn = SwiGLU(d_model, ffn_inner)
-
-    def forward(self, x: torch.Tensor, velocity: torch.Tensor,
-                freqs_cis: torch.Tensor,
-                depth_kvs: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
-                ) -> Tuple[torch.Tensor, torch.Tensor]:
-        normed = self.pre_norm(x)
-        if self.use_xsa:
-            attn_out = self.attn(normed, freqs_cis, depth_kvs=depth_kvs)
-        else:
-            attn_out = self.attn(normed, freqs_cis)
-
-        beta = torch.sigmoid(self.log_beta)
-        velocity = beta * velocity + attn_out
-        velocity = velocity.clamp(-8.0, 8.0)
-
-        x = x + velocity
-        x = x + self.ffn(self.ffn_norm(x))
-        return x, velocity
-
-    def compute_depth_kv(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Project hidden state into depth KV pair for future iterations."""
-        B, T, _ = x.shape
-        kv = self.depth_kv_proj(x)
-        k, v = kv.chunk(2, dim=-1)
-        k = k.reshape(B, T, self.n_kv_heads, self.head_dim).permute(0, 2, 1, 3)
-        v = v.reshape(B, T, self.n_kv_heads, self.head_dim).permute(0, 2, 1, 3)
-        return k, v
-
-
-# ---------------------------------------------------------------------------
-# MTP Auxiliary Head
-# ---------------------------------------------------------------------------
-
-class MTPHead(nn.Module):
-    """Multi-Token Prediction auxiliary head. Shares embedding table (tied weights).
-
-    Predicts token at position +depth+1 from hidden states.
-    Discarded after training; improves backbone representations via auxiliary loss.
-    """
-
-    def __init__(self, d_model: int, embed_rank: int, embed_table: nn.Embedding,
-                 depth: int = 1):
-        super().__init__()
-        self.depth = depth
-        self.proj = nn.Linear(d_model, embed_rank, bias=False)
-        self.embed_table = embed_table
-
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        """Returns logits for token at position +(depth+1).
-
-        h: (B, T, d_model)
-        returns: (B, T - depth - 1, vocab_size)
-        """
-        trimmed = h[:, :-(self.depth + 1)]
-        return F.linear(self.proj(trimmed), self.embed_table.weight)
-
-
-# ---------------------------------------------------------------------------
 # DS2D Forecast Embeddings (Samsung, 2026 — self-speculative decoding)
 # ---------------------------------------------------------------------------
 
-class ForecastEmbeddings(nn.Module):
-    """Learned prefix embeddings that prime the model for multi-token prediction.
-
-    Appended to the input embedding sequence during inference. The model learns
-    to use these positions as "forecast slots" that predict future tokens.
-    Trained via prefix tuning on frozen backbone.
-    Ref: "Dynamic Self-Speculative Decoding" (Samsung, 2026)
-    """
-
-    def __init__(self, d_model: int, n_forecast: int = 4):
-        super().__init__()
-        self.n_forecast = n_forecast
-        self.embeds = nn.Parameter(torch.randn(1, n_forecast, d_model) * 0.02)
-
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        """Append forecast embeddings to hidden state sequence.
-
-        h: (B, T, d) -> returns (B, T + n_forecast, d)
-        """
-        return torch.cat([h, self.embeds.expand(h.shape[0], -1, -1)], dim=1)
-
-
-# ---------------------------------------------------------------------------
-# Draft Heads (inference-time parallel token prediction from h_iter0)
-# ---------------------------------------------------------------------------
-
-class DraftHeads(nn.Module):
-    """K parallel linear probes on intermediate hidden state for speculative drafting.
-
-    Each head predicts token at position t+k from h_iter0. Shares embedding table.
-    Grounded in linear probing theorem: h_{L-k} has ~(1-k/L)^2 of final accuracy.
-    Validated by DFlash ablation: no-KV-injection baseline gives 2.83x speedup.
-    """
-
-    def __init__(self, d_model: int, embed_rank: int, embed_table: nn.Embedding,
-                 n_drafts: int = 4):
-        super().__init__()
-        self.n_drafts = n_drafts
-        self.probes = nn.ModuleList([
-            nn.Linear(d_model, embed_rank, bias=False) for _ in range(n_drafts)
-        ])
-        self.embed_table = embed_table
-
-    def forward(self, h_iter0: torch.Tensor) -> List[torch.Tensor]:
-        """Generate K draft token logits from intermediate hidden state.
-
-        h_iter0: (B, T, d) — hidden state after first loop iteration
-        returns: list of K tensors, each (B, 1, vocab_size) — logits for t+1..t+K
-        """
-        last_h = h_iter0[:, -1:, :]  # only last position for decode
-        return [F.linear(probe(last_h), self.embed_table.weight)
-                for probe in self.probes]
-
-    def draft_tokens(self, h_iter0: torch.Tensor) -> torch.Tensor:
-        """Greedy-decode K draft tokens.
-
-        returns: (B, K) — draft token IDs
-        """
-        logits_list = self.forward(h_iter0)
-        return torch.cat([lg.argmax(dim=-1) for lg in logits_list], dim=-1)
-
-
-# ---------------------------------------------------------------------------
-# CTG: Concurrent Token Generation (for batched ES rollouts)
-# ---------------------------------------------------------------------------
-
-def concurrent_generate(
-    model: nn.Module,
-    input_ids: torch.Tensor,
-    n_streams: int = 8,
-    max_new_tokens: int = 128,
-    temperature: float = 1.0,
-) -> torch.Tensor:
-    """Generate n_streams independent completions in parallel via partitioned KV.
-
-    Each stream gets independent sampling from the same prefill. Useful for
-    ES alignment where K=16 rollouts are needed per prompt.
-    Ref: "Concurrent Token Generation" (Samsung, 2026)
-
-    Args:
-        model: TyrHaloBase instance (eval mode)
-        input_ids: (1, T) — single prompt
-        n_streams: number of parallel generation streams
-        max_new_tokens: tokens to generate per stream
-        temperature: sampling temperature
-
-    Returns:
-        (n_streams, T + max_new_tokens) — all completions
-    """
-    assert input_ids.shape[0] == 1, "CTG expects single prompt"
-    device = input_ids.device
-
-    # Expand prompt to n_streams copies
-    ids = input_ids.expand(n_streams, -1).clone()
-
-    model.eval()
-    with torch.no_grad():
-        for _ in range(max_new_tokens):
-            logits = model(ids)
-            if isinstance(logits, dict):
-                logits = logits["logits"]
-            next_logits = logits[:, -1, :] / max(temperature, 1e-8)
-            probs = F.softmax(next_logits, dim=-1)
-            next_tokens = torch.multinomial(probs, num_samples=1)
-            ids = torch.cat([ids, next_tokens], dim=1)
-
-    return ids
+from models.components.speculative import ForecastEmbeddings, DraftHeads, concurrent_generate
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +95,7 @@ class TyrHaloBase(nn.Module):
         max_seq_len: int = 1024,
         use_prelude: bool = True,
         use_coda: bool = True,
+        use_chunked_ce: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -376,11 +111,14 @@ class TyrHaloBase(nn.Module):
         self.use_mtp = use_mtp
         self.use_draft_heads = use_draft_heads
         self.use_forecast = use_forecast
+        self.use_chunked_ce = use_chunked_ce
+        self.logit_softcap = 0.0  # TyrHalo doesn't use softcap
 
         # === FACTORIZED EMBEDDINGS ===
         self.tok_embeddings = FactorizedEmbedding(vocab_size, embed_rank, d_model)
         self.norm = RMSNorm(d_model)
         self.lm_head = FactorizedLMHead(d_model, embed_rank, self.tok_embeddings.embed)
+        self.lm_head.use_chunked_ce = use_chunked_ce
 
         # RoPE
         head_dim = d_model // n_heads
@@ -577,7 +315,11 @@ class TyrHaloBase(nn.Module):
         if self.use_coda:
             h, velocity = self.coda(h, velocity, freqs_cis)
 
-        logits = self.lm_head(self.norm(h))
+        normed = self.norm(h)
+        if self.use_chunked_ce and self.training:
+            return self.lm_head.forward_hlow(normed)
+
+        logits = self.lm_head(normed)
 
         if self.training and self.use_mtp and hasattr(self, 'mtp_head'):
             return {"logits": logits, "mtp1": self.mtp_head(h)}

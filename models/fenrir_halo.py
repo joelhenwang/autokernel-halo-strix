@@ -23,16 +23,12 @@ import torch.nn.functional as F
 
 from models.amadeus import RMSNorm, SwiGLU, GatedConv
 from models.argus import precompute_freqs_cis, apply_rotary_emb
-from models.argus_prime import Attention, ShortConvBlock
-from models.chimera_halo import FactorizedEmbedding, FactorizedLMHead
-from models.griffin_halo import SimpleParcaeInjection
-from models.jormungandr_halo import DepthMemoryCache, CodaAttention
+from models.components import Attention, ShortConvBlock
+from models.components import FactorizedEmbedding, FactorizedLMHead
+from models.components import SimpleParcaeInjection
+from models.components import DepthMemoryCache, CodaAttention
 
-try:
-    from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
-    _HAS_HYBRID_ATTN = True
-except ImportError:
-    _HAS_HYBRID_ATTN = False
+_HAS_HYBRID_ATTN = False  # disabled: flash_attn requires aiter
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +108,7 @@ class FenrirHaloBase(nn.Module):
         max_seq_len: int = 1024,
         use_prelude: bool = True,
         use_coda: bool = True,
+        use_chunked_ce: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -122,11 +119,14 @@ class FenrirHaloBase(nn.Module):
         self.gqa_positions = set(gqa_positions)
         self.use_prelude = use_prelude
         self.use_coda = use_coda
+        self.use_chunked_ce = use_chunked_ce
+        self.logit_softcap = 0.0
 
         # === FACTORIZED EMBEDDINGS ===
         self.tok_embeddings = FactorizedEmbedding(vocab_size, embed_rank, d_model)
         self.norm = RMSNorm(d_model)
         self.lm_head = FactorizedLMHead(d_model, embed_rank, self.tok_embeddings.embed)
+        self.lm_head.use_chunked_ce = use_chunked_ce
 
         # RoPE
         head_dim = d_model // n_heads
@@ -309,7 +309,10 @@ class FenrirHaloBase(nn.Module):
         if self.use_coda:
             h, velocity = self.coda(h, velocity, freqs_cis)
 
-        return self.lm_head(self.norm(h))
+        normed = self.norm(h)
+        if self.use_chunked_ce and self.training:
+            return self.lm_head.forward_hlow(normed)
+        return self.lm_head(normed)
 
 
 # ---------------------------------------------------------------------------

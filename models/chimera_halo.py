@@ -29,51 +29,18 @@ import torch.nn.functional as F
 
 from models.amadeus import RMSNorm, SwiGLU, GatedConv
 from models.argus import precompute_freqs_cis, apply_rotary_emb
-from models.argus_prime import Attention, ShortConvBlock
-from models.griffin_halo import SimpleParcaeInjection
-from models.jormungandr_halo import DepthMemoryCache, CodaAttention
+from models.components import Attention, ShortConvBlock
+from models.components import SimpleParcaeInjection
+from models.components import DepthMemoryCache, CodaAttention
 
-try:
-    from kernels.hip.hybrid_attention import hybrid_flash_sdpa_attention
-    _HAS_HYBRID_ATTN = True
-except ImportError:
-    _HAS_HYBRID_ATTN = False
+_HAS_HYBRID_ATTN = False  # disabled: flash_attn requires aiter
 
 
 # ---------------------------------------------------------------------------
 # Factorized Embedding (Nandi-style: vocab → rank → d_model)
 # ---------------------------------------------------------------------------
 
-class FactorizedEmbedding(nn.Module):
-    """Low-rank embedding: Embedding(V, R) → Linear(R, D).
-
-    Saves (V * D - V * R - R * D) params. With V=50260, R=256, D=768:
-    saves ~25M params vs standard Embedding(V, D).
-    """
-
-    def __init__(self, vocab_size: int, rank: int, d_model: int):
-        super().__init__()
-        self.embed = nn.Embedding(vocab_size, rank)
-        self.proj_up = nn.Linear(rank, d_model, bias=False)
-
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        return self.proj_up(self.embed(input_ids))
-
-
-class FactorizedLMHead(nn.Module):
-    """Factorized output: Linear(D, R) → matmul with embed table^T.
-
-    Shares the embedding table from FactorizedEmbedding (tied weights).
-    """
-
-    def __init__(self, d_model: int, rank: int, embed_table: nn.Embedding):
-        super().__init__()
-        self.proj_down = nn.Linear(d_model, rank, bias=False)
-        self.embed_table = embed_table
-
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        h_low = self.proj_down(h)
-        return F.linear(h_low, self.embed_table.weight)
+from models.components.embeddings import FactorizedEmbedding, FactorizedLMHead
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +120,7 @@ class ChimeraHaloBase(nn.Module):
         max_seq_len: int = 1024,
         use_prelude: bool = True,
         use_coda: bool = True,
+        use_chunked_ce: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -164,11 +132,14 @@ class ChimeraHaloBase(nn.Module):
         self.gqa_positions = set(gqa_positions)
         self.use_prelude = use_prelude
         self.use_coda = use_coda
+        self.use_chunked_ce = use_chunked_ce
+        self.logit_softcap = 0.0
 
         # === FACTORIZED EMBEDDINGS ===
         self.tok_embeddings = FactorizedEmbedding(vocab_size, embed_rank, d_model)
         self.norm = RMSNorm(d_model)
         self.lm_head = FactorizedLMHead(d_model, embed_rank, self.tok_embeddings.embed)
+        self.lm_head.use_chunked_ce = use_chunked_ce
 
         # RoPE
         head_dim = d_model // n_heads
@@ -346,7 +317,10 @@ class ChimeraHaloBase(nn.Module):
         if self.use_coda:
             h, velocity = self.coda(h, velocity, freqs_cis)
 
-        return self.lm_head(self.norm(h))
+        normed = self.norm(h)
+        if self.use_chunked_ce and self.training:
+            return self.lm_head.forward_hlow(normed)
+        return self.lm_head(normed)
 
 
 # ---------------------------------------------------------------------------

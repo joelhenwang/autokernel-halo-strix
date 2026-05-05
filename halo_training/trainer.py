@@ -58,6 +58,7 @@ def train(
     wd_end: float = 0.01,
     min_lr_ratio: float = 0.0,
     polar_ns: bool = False,
+    chunked_ce: bool = False,
 ) -> Dict[str, Any]:
     """Train a model using Mode A (direct) or Mode B (layer-streaming).
 
@@ -166,12 +167,31 @@ def train(
             compile_layers=compile,
         )
     elif compile:
-        compile_mode = "default"
+        # compile_mode can be overridden via env var TORCH_COMPILE_MODE.
+        # Options: "default", "reduce-overhead" (CUDA graphs, lower memory),
+        # "max-autotune" (slowest warmup, potentially fastest runtime).
+        #
+        # NOTE: reduce-overhead is NOT currently compatible with looped models
+        # (Parcae/HALO) because per-layer CUDA graphs reuse buffers across
+        # iterations, invalidating saved activations for backward. Falls back
+        # to "default" for such models.
+        compile_mode = os.environ.get("TORCH_COMPILE_MODE", "default")
+        if compile_mode == "reduce-overhead" and hasattr(model, "compile_zones"):
+            print("WARNING: reduce-overhead is incompatible with looped models "
+                  "(buffer reuse across Parcae iterations). Falling back to default.")
+            compile_mode = "default"
         cache_dir = os.environ.get("TORCHINDUCTOR_CACHE_DIR", "~/.cache/torchinductor")
         cache_exists = os.path.isdir(os.path.expanduser(cache_dir)) and len(os.listdir(os.path.expanduser(cache_dir))) > 0
         cache_status = "warm cache" if cache_exists else "cold — first compile will be slow"
-        print(f"Compiling model with torch.compile ({compile_mode}), cache: {cache_status}")
-        model = torch.compile(model, mode=compile_mode)
+        # For looped models (HALO family) compile per-layer via compile_zones.
+        # This avoids re-compiling the shared layer body at each Parcae iteration
+        # and lets Inductor fuse ops within a single layer cleanly.
+        if hasattr(model, "compile_zones") and compile_mode == "default":
+            print(f"Compiling model via compile_zones (per-layer, looped), cache: {cache_status}")
+            model.compile_zones()
+        else:
+            print(f"Compiling model with torch.compile ({compile_mode}), cache: {cache_status}")
+            model = torch.compile(model, mode=compile_mode)
 
     # --- Setup EMA (TRM paper: 7.5% generalization gain) ---
     ema_model = None
@@ -218,16 +238,37 @@ def train(
         scheduler = build_scheduler(optimizer, total_steps, warmup_steps=warmup_steps)
 
     # --- Setup loss ---
-    chunked_ce = None
+    chunked_ce_fn = None
+    chunked_ce_handles_zloss = False
     if loss_fn is None:
-        # Try chunked CE for memory-efficient LM head backward when using optimized kernels
-        if optimize_kernels and hasattr(model, "lm_head"):
-            try:
-                from kernels.hip.chunked_linear_cross_entropy import ChunkedLinearCrossEntropyLoss
-                chunked_ce = ChunkedLinearCrossEntropyLoss(chunk_size=1024)
-                print("Using chunked linear cross-entropy (saves ~300MB, 25% faster LM head backward)")
-            except Exception:
-                pass
+        # Chunked CE: activated if user opts in via --chunked-ce AND model supports it
+        # (model.use_chunked_ce=True → forward returns h_low instead of logits).
+        if chunked_ce and hasattr(model, "use_chunked_ce") and model.use_chunked_ce:
+            if os.environ.get("TORCH_COMPILE_MODE") == "reduce-overhead":
+                print("WARNING: --chunked-ce + TORCH_COMPILE_MODE=reduce-overhead is not "
+                      "currently supported (CUDA graph aliasing issue). "
+                      "Falling back to standard CE.")
+                model.use_chunked_ce = False
+            else:
+                try:
+                    from kernels.hip.chunked_linear_cross_entropy import ChunkedLinearCrossEntropyLoss
+                    softcap = float(getattr(model, "logit_softcap", 0.0) or 0.0)
+                    # Pass z_loss through chunked CE so we avoid re-computing over logits
+                    chunked_z_weight = float(z_loss_weight) if z_loss_weight > 0 else 0.0
+                    chunked_ce_fn = ChunkedLinearCrossEntropyLoss(
+                        chunk_size=512,
+                        softcap=softcap,
+                        ignore_index=-100,
+                        label_smoothing=float(label_smoothing),
+                        z_loss_weight=chunked_z_weight,
+                    )
+                    chunked_ce_handles_zloss = chunked_z_weight > 0
+                    print(f"Using ChunkedLinearCrossEntropyLoss "
+                          f"(softcap={softcap}, z_loss={chunked_z_weight}, "
+                          f"label_smoothing={label_smoothing}, chunk=512)")
+                except Exception as e:
+                    print(f"Chunked CE disabled: {e}")
+                    chunked_ce_fn = None
 
         ce_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing, ignore_index=-100)
 
@@ -322,16 +363,19 @@ def train(
                     if isinstance(output, torch.Tensor) and output.dim() == 0:
                         # Model returned scalar loss (adaptive head with chunked CE)
                         loss = output / accum_steps
-                    elif chunked_ce is not None and isinstance(output, torch.Tensor) and output.dim() >= 2:
+                    elif chunked_ce_fn is not None and isinstance(output, torch.Tensor) and output.dim() >= 2:
                         # Chunked CE: compute loss directly from hidden/logits + lm_head weight
-                        # If output has vocab-sized last dim, it's logits (use standard CE)
-                        # If output has hidden-sized last dim, use chunked CE with lm_head
-                        vocab_size = getattr(model, "vocab_size", None) or model.lm_head.weight.shape[0]
-                        if output.shape[-1] != vocab_size and hasattr(model, "lm_head"):
-                            # Output is hidden states — use chunked CE
-                            loss = chunked_ce(
+                        vocab_size = getattr(model, "vocab_size", None)
+                        if vocab_size is None and hasattr(model, "lm_head") and hasattr(model.lm_head, "weight"):
+                            vocab_size = model.lm_head.weight.shape[0]
+                        if vocab_size is not None and output.shape[-1] != vocab_size and hasattr(model, "lm_head"):
+                            if hasattr(model.lm_head, "embed_table"):
+                                weight = model.lm_head.embed_table.weight
+                            else:
+                                weight = model.lm_head.weight
+                            loss = chunked_ce_fn(
                                 output.view(-1, output.shape[-1]),
-                                model.lm_head.weight,
+                                weight,
                                 targets.view(-1),
                             ) / accum_steps
                         else:
@@ -339,7 +383,8 @@ def train(
                     else:
                         loss = loss_fn(output, batch) / accum_steps
 
-                if z_loss_weight > 0 and global_step < total_steps * z_loss_fraction:
+                # z_loss: skip if chunked CE already incorporated it
+                if (not chunked_ce_handles_zloss) and z_loss_weight > 0 and global_step < total_steps * z_loss_fraction:
                     if isinstance(output, dict) and "logits" in output:
                         z_logits = output["logits"]
                     elif isinstance(output, torch.Tensor) and output.dim() >= 2:

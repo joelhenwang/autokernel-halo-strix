@@ -20,59 +20,13 @@ import torch.nn.functional as F
 
 from models.amadeus import RMSNorm, SwiGLU, GatedConv
 from models.argus import precompute_freqs_cis, apply_rotary_emb
-from models.argus_prime import Attention, ShortConvBlock
-from models.chimera_halo import FactorizedEmbedding, FactorizedLMHead
-from models.jormungandr_halo import CodaAttention
-from models.tyr_halo import MTPHead
+from models.components import Attention, ShortConvBlock
+from models.components import FactorizedEmbedding, FactorizedLMHead
+from models.components import CodaAttention
+from models.components import MTPHead
 
 
-class MoDAGQABlock(nn.Module):
-    """GQA with MoDA cross-layer depth-attention + XSA + momentum + SwiGLU."""
-
-    def __init__(self, d_model: int, ffn_inner: int,
-                 n_heads: int = 12, n_kv_heads: int = 4,
-                 momentum_beta: float = 0.5, use_xsa: bool = True):
-        super().__init__()
-        self.head_dim = d_model // n_heads
-        self.n_kv_heads = n_kv_heads
-        self.pre_norm = RMSNorm(d_model)
-        if use_xsa:
-            self.attn = CodaAttention(d_model, n_heads, n_kv_heads,
-                                      qk_norm=True, exclusive=True)
-        else:
-            self.attn = Attention(d_model, n_heads, n_kv_heads, qk_norm=True)
-        self.use_xsa = use_xsa
-        self.depth_kv_proj = nn.Linear(d_model, n_kv_heads * self.head_dim * 2, bias=False)
-        self.log_beta = nn.Parameter(
-            torch.tensor(math.log(momentum_beta / (1 - momentum_beta)))
-        )
-        self.ffn_norm = RMSNorm(d_model)
-        self.ffn = SwiGLU(d_model, ffn_inner)
-
-    def forward(self, x: torch.Tensor, velocity: torch.Tensor,
-                freqs_cis: torch.Tensor,
-                depth_kvs: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
-                ) -> Tuple[torch.Tensor, torch.Tensor]:
-        normed = self.pre_norm(x)
-        if self.use_xsa:
-            attn_out = self.attn(normed, freqs_cis, depth_kvs=depth_kvs)
-        else:
-            attn_out = self.attn(normed, freqs_cis)
-
-        beta = torch.sigmoid(self.log_beta)
-        velocity = beta * velocity + attn_out
-        velocity = velocity.clamp(-8.0, 8.0)
-        x = x + velocity
-        x = x + self.ffn(self.ffn_norm(x))
-        return x, velocity
-
-    def compute_depth_kv(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        B, T, _ = x.shape
-        kv = self.depth_kv_proj(x)
-        k, v = kv.chunk(2, dim=-1)
-        k = k.reshape(B, T, self.n_kv_heads, self.head_dim).permute(0, 2, 1, 3)
-        v = v.reshape(B, T, self.n_kv_heads, self.head_dim).permute(0, 2, 1, 3)
-        return k, v
+from models.components.conv_blocks import MoDAGQABlock
 
 
 class BaldrHaloBase(nn.Module):
@@ -96,16 +50,20 @@ class BaldrHaloBase(nn.Module):
         mtp_depth: int = 1,
         momentum_beta_init: float = 0.5,
         max_seq_len: int = 1024,
+        use_chunked_ce: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
         self.gqa_positions = set(gqa_positions)
         self.use_moda = use_moda
         self.use_mtp = use_mtp
+        self.use_chunked_ce = use_chunked_ce
+        self.logit_softcap = 0.0
 
         self.tok_embeddings = FactorizedEmbedding(vocab_size, embed_rank, d_model)
         self.norm = RMSNorm(d_model)
         self.lm_head = FactorizedLMHead(d_model, embed_rank, self.tok_embeddings.embed)
+        self.lm_head.use_chunked_ce = use_chunked_ce
 
         head_dim = d_model // n_heads
         self.register_buffer(
@@ -168,7 +126,11 @@ class BaldrHaloBase(nn.Module):
             else:
                 h, velocity = layer(h, velocity)
 
-        logits = self.lm_head(self.norm(h))
+        normed = self.norm(h)
+        if self.use_chunked_ce and self.training:
+            return self.lm_head.forward_hlow(normed)
+
+        logits = self.lm_head(normed)
 
         if self.training and self.use_mtp and hasattr(self, 'mtp_head'):
             return {"logits": logits, "mtp1": self.mtp_head(h)}
