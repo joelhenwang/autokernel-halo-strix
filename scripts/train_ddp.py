@@ -352,6 +352,7 @@ def main():
     parser.add_argument("--no-fp16-compress", action="store_true", help="Disable fp16 grad compression")
     parser.add_argument("--no-muon", action="store_true", help="Use AdamW instead of Muon")
     parser.add_argument("--warmup-steps", type=int, default=300, help="LR warmup steps")
+    parser.add_argument("--num-workers", type=int, default=4, help="DataLoader worker processes")
     args = parser.parse_args()
 
     use_async = not args.no_async
@@ -423,7 +424,7 @@ def main():
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
     dataloader = DataLoader(
         dataset, batch_size=args.batch_size, sampler=sampler,
-        num_workers=4, pin_memory=False, drop_last=True,
+        num_workers=args.num_workers, pin_memory=False, drop_last=True,
     )
 
     # --- Optimizer + Scheduler ---

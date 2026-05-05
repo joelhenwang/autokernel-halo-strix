@@ -33,6 +33,10 @@ BLOCK="${BLOCK:-256}"
 BATCH="${BATCH:-16}"
 ACCUM="${ACCUM:-8}"
 LR="${LR:-8e-4}"
+WARMUP_STEPS="${WARMUP_STEPS:-300}"
+CHECKPOINT_INTERVAL="${CHECKPOINT_INTERVAL:-500}"
+NUM_WORKERS="${NUM_WORKERS:-4}"
+MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
 
 mkdir -p "$CKPT_DIR"
 
@@ -47,6 +51,7 @@ echo "  Master: $MASTER_ADDR:$MASTER_PORT (thunderbolt0)"
 echo "  Model: $MODEL ($CLASS)"
 echo "  Dataset: $DATASET"
 echo "  Config: batch=${BATCH}x${ACCUM}x2=$((BATCH*ACCUM*2)), block=$BLOCK, lr=$LR"
+echo "  Warmup: $WARMUP_STEPS steps | ckpt every: $CHECKPOINT_INTERVAL | workers: $NUM_WORKERS | grad_clip: $MAX_GRAD_NORM"
 echo ""
 
 # Launch rank 1 (Machine B) via SSH — fully detached with nohup + setsid
@@ -67,7 +72,9 @@ ssh joelwang-ai-1@10.77.0.2 "
     --dataset $DATASET --epochs $EPOCHS \
     --block-size $BLOCK --batch-size $BATCH --accum-steps $ACCUM \
     --compile --no-muon --lr $LR --backend gloo \
-    --checkpoint-dir $CKPT_DIR --checkpoint-interval 500 --log-interval 50 \
+    --warmup-steps $WARMUP_STEPS --num-workers $NUM_WORKERS \
+    --max-grad-norm $MAX_GRAD_NORM \
+    --checkpoint-dir $CKPT_DIR --checkpoint-interval $CHECKPOINT_INTERVAL --log-interval 50 \
     $RESUME_ARG \
     > $CKPT_DIR/rank1.log 2>&1 < /dev/null &
   disown
@@ -85,7 +92,9 @@ setsid nohup torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 \
   --dataset $DATASET --epochs $EPOCHS \
   --block-size $BLOCK --batch-size $BATCH --accum-steps $ACCUM \
   --compile --no-muon --lr $LR --backend gloo \
-  --checkpoint-dir $CKPT_DIR --checkpoint-interval 500 --log-interval 50 \
+  --warmup-steps $WARMUP_STEPS --num-workers $NUM_WORKERS \
+  --max-grad-norm $MAX_GRAD_NORM \
+  --checkpoint-dir $CKPT_DIR --checkpoint-interval $CHECKPOINT_INTERVAL --log-interval 50 \
   $RESUME_ARG \
   > $CKPT_DIR/rank0.log 2>&1 < /dev/null &
 disown
