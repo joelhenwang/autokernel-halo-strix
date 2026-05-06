@@ -108,6 +108,43 @@ def save_checkpoint(model, optimizer, step, checkpoint_dir, total_tokens=0):
         "total_tokens": total_tokens,
     }, path)
     print(f"[rank 0] Checkpoint saved: {path}")
+    return path
+
+
+def spawn_auto_eval(checkpoint_path: str, model_path: str, class_name: str) -> None:
+    """Fire scripts/eval_checkpoint.py as a detached subprocess post-save.
+
+    Sprint 2 --auto-eval hook. Runs independently of the trainer so a failing
+    evaluator never crashes training. STDOUT/STDERR are captured to
+    ``<checkpoint>.eval.log`` for post-hoc inspection. A warning is emitted
+    conspicuously to rank0 stdout so eval-job failures are visible in train
+    logs without requiring log-file spelunking.
+    """
+    import subprocess
+
+    log_path = checkpoint_path + ".eval.log"
+    cmd = [
+        sys.executable, "scripts/eval_checkpoint.py",
+        "--checkpoint", checkpoint_path,
+        "--model", model_path,
+        "--class-name", class_name,
+    ]
+    try:
+        with open(log_path, "w", encoding="utf-8") as lf:
+            # start_new_session detaches so it won't be killed when the trainer
+            # terminates via SIGINT (unless trainer gets SIGKILL, which is fine
+            # — the eval was started speculatively).
+            subprocess.Popen(
+                cmd,
+                stdout=lf, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        print(f"[rank 0] >>> auto-eval spawned for {checkpoint_path} (log: {log_path})")
+    except Exception as exc:  # noqa: BLE001
+        # Conspicuous warning per Sprint 2 spec: log + warn, do NOT block training.
+        print(f"[rank 0] WARNING: auto-eval spawn FAILED for {checkpoint_path}")
+        print(f"[rank 0] WARNING: {type(exc).__name__}: {exc}")
+        print(f"[rank 0] WARNING: training continuing; investigate offline")
 
 
 def compute_bpb(ce_loss: float) -> float:
@@ -353,6 +390,9 @@ def main():
     parser.add_argument("--no-muon", action="store_true", help="Use AdamW instead of Muon")
     parser.add_argument("--warmup-steps", type=int, default=300, help="LR warmup steps")
     parser.add_argument("--num-workers", type=int, default=12, help="DataLoader worker processes")
+    parser.add_argument("--auto-eval", action="store_true",
+                        help="Spawn scripts/eval_checkpoint.py as detached subprocess "
+                             "after each checkpoint save (Sprint 2 scorecard).")
     args = parser.parse_args()
 
     use_async = not args.no_async
@@ -603,8 +643,10 @@ def main():
 
                     # Checkpoint
                     if rank == 0 and args.checkpoint_dir and global_step % ckpt_every == 0:
-                        save_checkpoint(model, optimizer, global_step,
-                                        args.checkpoint_dir, total_tokens * world_size)
+                        saved_path = save_checkpoint(model, optimizer, global_step,
+                                                     args.checkpoint_dir, total_tokens * world_size)
+                        if args.auto_eval:
+                            spawn_auto_eval(saved_path, args.model, args.class_name)
 
                 # 2. Record loss for THIS step + stability checks
                 running_loss += step_loss
@@ -625,8 +667,10 @@ def main():
                         pending_handles = None
                     # Save emergency checkpoint before rollback
                     if rank == 0 and args.checkpoint_dir:
-                        save_checkpoint(model, optimizer, global_step,
-                                        args.checkpoint_dir, total_tokens * world_size)
+                        saved_path = save_checkpoint(model, optimizer, global_step,
+                                                     args.checkpoint_dir, total_tokens * world_size)
+                        if args.auto_eval:
+                            spawn_auto_eval(saved_path, args.model, args.class_name)
                     rollback_step, ok = guard.rollback(model, optimizer, device)
                     if not ok:
                         raise RuntimeError("StabilityGuard: unrecoverable instability")
@@ -680,8 +724,10 @@ def main():
 
     # Final checkpoint
     if rank == 0 and args.checkpoint_dir:
-        save_checkpoint(model, optimizer, global_step,
-                        args.checkpoint_dir, total_tokens * world_size)
+        saved_path = save_checkpoint(model, optimizer, global_step,
+                                     args.checkpoint_dir, total_tokens * world_size)
+        if args.auto_eval:
+            spawn_auto_eval(saved_path, args.model, args.class_name)
 
     if rank == 0:
         elapsed = time.time() - start_time

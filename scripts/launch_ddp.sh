@@ -37,6 +37,7 @@ WARMUP_STEPS="${WARMUP_STEPS:-300}"
 CHECKPOINT_INTERVAL="${CHECKPOINT_INTERVAL:-500}"
 NUM_WORKERS="${NUM_WORKERS:-12}"   # was 4; sweep showed flat across {4,8,12,14}, std on 12
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
+EXTRA_FLAGS="${EXTRA_FLAGS:-}"     # e.g. "--auto-eval" for Sprint 2 scorecard hook
 
 mkdir -p "$CKPT_DIR"
 
@@ -75,7 +76,7 @@ ssh joelwang-ai-1@10.77.0.2 "
     --warmup-steps $WARMUP_STEPS --num-workers $NUM_WORKERS \
     --max-grad-norm $MAX_GRAD_NORM \
     --checkpoint-dir $CKPT_DIR --checkpoint-interval $CHECKPOINT_INTERVAL --log-interval 50 \
-    $RESUME_ARG \
+    $RESUME_ARG $EXTRA_FLAGS \
     > $CKPT_DIR/rank1.log 2>&1 < /dev/null &
   disown
   echo LAUNCHED_B_pid=\$!
@@ -95,7 +96,7 @@ setsid nohup torchrun --nproc_per_node=1 --nnodes=2 --node_rank=0 \
   --warmup-steps $WARMUP_STEPS --num-workers $NUM_WORKERS \
   --max-grad-norm $MAX_GRAD_NORM \
   --checkpoint-dir $CKPT_DIR --checkpoint-interval $CHECKPOINT_INTERVAL --log-interval 50 \
-  $RESUME_ARG \
+  $RESUME_ARG $EXTRA_FLAGS \
   > $CKPT_DIR/rank0.log 2>&1 < /dev/null &
 disown
 

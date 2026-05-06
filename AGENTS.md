@@ -167,6 +167,37 @@ freqs_cos = freqs_cis.real[:T, :pairs].contiguous().float()
 
 Already fixed in `models/components/conv_blocks.py` HyPEShortConvBlock. All other halo models use `apply_rotary_emb` from `models/_components.py` which uses `torch.view_as_complex`/`torch.view_as_real` — not affected by this bug.
 
+## Checkpoint evaluation (Sprint 2 scorecard, 2026-05-06)
+
+```bash
+# Per-checkpoint scorecard (5 evaluators: per-domain BPB, sampling, inference,
+# sample-pack regression, activation stats). Wall time 30-80s per checkpoint.
+EVAL_MACHINE=a python scripts/eval_checkpoint.py \
+    --checkpoint <path.pt> --model <model.py> --class-name <Class>
+
+# Auto-trigger on every checkpoint save during training
+EXTRA_FLAGS='--auto-eval' bash scripts/launch_ddp.sh
+
+# Cross-machine parity check on same checkpoint
+bash scripts/compare_parity.py <machine_a_scorecard>.json <machine_b_scorecard>.json
+```
+
+Outputs:
+  - `docs/perf/eval-scorecards/<name>.json` — full scorecard
+  - `docs/perf/eval-scorecard.jsonl` — one-line-per-run index (grep/jq friendly)
+
+`--auto-eval` fires a detached subprocess; never blocks training. Failures
+emit conspicuous warnings to rank0 log but do not stop training.
+
+Sample pack is frozen at `evals/sample_pack_v1.txt` (20 prompts). Never
+mutate v1 — if you want different prompts, create v2 and update the
+`prompts_file` argument; older scorecards stay comparable.
+
+Int4 BPB evaluator dropped from original design (2026-05-06); no near-term
+deployment path justifies per-tensor symmetric int4 as a readiness metric.
+Reintroducible later via `scripts/quantize_eval.py` or by restoring the
+evaluator module.
+
 ## Data
 
 - Custom 32K tokenizer: `tokenizers/vidar-32k/tokenizer.json` (EOS=0, not 50256).

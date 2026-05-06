@@ -5,6 +5,95 @@
 
 ---
 
+## Sprint 2: Evaluation Scorecard Infrastructure (2026-05-06)
+
+Per-checkpoint multi-dimensional scorecard shipped. Gate C → B CLEARED.
+
+**Spec:** [docs/superpowers/specs/2026-05-06-sprint2-eval-scorecard-design.md](docs/superpowers/specs/2026-05-06-sprint2-eval-scorecard-design.md)
+**Plan:** [docs/superpowers/plans/2026-05-06-sprint2-eval-scorecard-plan.md](docs/superpowers/plans/2026-05-06-sprint2-eval-scorecard-plan.md)
+
+### Infrastructure delivered
+
+- `scripts/eval_checkpoint.py` — CLI entry point, all-by-default evaluator dispatch with `--skip-*` opt-outs
+- `halo_training/eval/` — 5 evaluators + common helpers + scorecard schema
+  - `common.py` — checkpoint/model/tokenizer loading, `_orig_mod.` stripping, validation split discovery
+  - `scorecard.py` — schema v1.0, JSON/JSONL assembly
+  - `per_domain_bpb.py` — BPB on tail slices of wikitext/gpt-small/stem-crawl/dolma
+  - `sampling.py` — wraps refactored `ablate_odin_flat_sampling` to extract distinct-2 / self-PPL at winning config
+  - `inference_profile.py` — tok/s + peak memory at seq={256, 512, 1024}, batch=1
+  - `sample_pack.py` — 20-prompt deterministic regression with hash + prior-checkpoint diff
+  - `activation_stats.py` — per-layer kurtosis / RMS via forward hooks (auto-skips when model lacks `.layers`)
+- `evals/sample_pack_v1.txt` — 20 frozen prompts (never mutate; bump to v2 for changes)
+- `scripts/train_ddp.py --auto-eval` — detached-subprocess hook after every `save_checkpoint`
+- `scripts/launch_ddp.sh` — `EXTRA_FLAGS` env var flows through to both ranks
+- `scripts/test_eval_scorecard.py` — 22 unit tests, all green on both machines
+- `scripts/test_auto_eval_spawn.py` — Phase 5 spawn smoke-test helper
+- `scripts/compare_parity.py` — cross-machine scorecard diff tool
+
+### Scope changes from original design
+
+- **Int4 BPB DROPPED** (2026-05-06 revision) — per-tensor symmetric int4 too crude as a deployment-readiness indicator at 122M scale; no near-term deployment path. Can be reintroduced later as standalone `scripts/quantize_eval.py` or re-added to scorecard.
+- lm-evaluation-harness benchmarks (HellaSwag, ARC, MMLU, PIQA, BLiMP) deferred to Sprint 4 (post-training) as originally planned.
+
+### Retroactive validation (Phase 6)
+
+Three reference scorecards committed:
+
+| Checkpoint | Wall time | BPB (wiki / gpt-small / stem / dolma) | distinct_2 | self_ppl |
+|---|---:|---|---:|---:|
+| `odin-flat-wikitext-ddp/step_1869.pt` | 33.6s | 1.80 / 3.01 / 3.43 / 3.14 | 0.765 | 9.84 |
+| `odin-flat-stem-crawl-ddp/step_4046.pt` | 67.8s | 2.52 / 2.47 / 1.63 / 2.13 | 0.535 | 6.82 |
+| `odin-halo-wikitext-ddp/step_1869.pt` | 34.0s | 1.97 / 3.08 / 3.42 / 2.81 | 0.990 | 14.12 |
+
+- Catastrophic-forgetting pattern visible: stem-crawl checkpoint has low BPB on stem (1.63) but high on wikitext (2.52).
+- OdinHalo shows higher distinct-2 (0.99 vs OdinFlat's 0.77) — its looped architecture produces more diverse continuations at winning config.
+- Activation stats skip gracefully on OdinHalo ("no `.layers` iterable") — as designed.
+
+### Machine parity (Phase 6c)
+
+Same `odin-flat-wikitext-ddp/step_1869.pt` eval'd on Machine A and Machine B:
+
+| Metric | Machine A | Machine B | Delta |
+|---|---:|---:|---:|
+| wikitext_val BPB | 1.8013 | 1.8013 | +0.00% |
+| gpt_small_val BPB | 3.0087 | 3.0087 | +0.00% |
+| stem_crawl_val BPB | 3.4344 | 3.4344 | +0.00% |
+| distinct_2 | 0.7648 | 0.7648 | +0.00% |
+| self_ppl | 9.84 | 9.84 | +0.00% |
+| sample_pack hash | sha256:356b6389b3b52db0 | sha256:356b6389b3b52db0 | identical |
+| tok_s_seq512_bs1 | 59,156 | 58,671 | -0.82% |
+| peak_mem_gb_seq512 | 0.432 | 0.433 | +0.23% |
+
+All within ±5% budget; BPB + sampling + sample-pack hashes bit-identical across machines.
+dolma_val not present on Machine B (deliberately Machine-A-only per AGENTS.md).
+
+### Usage
+
+```bash
+# Basic (single checkpoint)
+EVAL_MACHINE=a python scripts/eval_checkpoint.py \
+    --checkpoint checkpoints/odin-flat-wikitext-ddp/step_1869.pt \
+    --model models/odin_flat.py --class-name OdinFlat
+
+# Selective evaluators
+python scripts/eval_checkpoint.py --checkpoint ... \
+    --skip-sample-pack --skip-activation-stats
+
+# Auto-trigger during DDP training
+EXTRA_FLAGS='--auto-eval' bash scripts/launch_ddp.sh
+
+# Machine parity check
+bash scripts/compare_parity.py docs/perf/eval-scorecards/<name>.json /tmp/parity-b/<name>.json
+```
+
+**Outputs:**
+- `docs/perf/eval-scorecards/<name>.json` — full scorecard per checkpoint
+- `docs/perf/eval-scorecard.jsonl` — one-line-per-run rolling index (jq/grep-friendly)
+
+**Gate unlocked:** Sprint 3 (T²-optimal dolma training) can run with `--auto-eval` for per-checkpoint visibility during the 50-hour run. Sprint 1 and Sprint 1.5 ablations now have a multi-dimensional measurement harness.
+
+---
+
 ## CE Kernel Optimization Stack (2026-05-05)
 
 Two-phase rewrite of cross-entropy path on OdinHalo (V=32768, B=4, T=256).

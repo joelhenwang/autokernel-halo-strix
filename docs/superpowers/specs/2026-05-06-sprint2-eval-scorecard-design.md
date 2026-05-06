@@ -12,7 +12,9 @@
 
 ## 1. Goal
 
-Ship a per-checkpoint evaluation scorecard that unlocks multi-dimensional capability measurement for all subsequent sprints. Before Sprint 2, the only training-time signal is loss/BPB. After Sprint 2, every checkpoint emits a machine-readable JSON report covering generalization (per-domain BPB), deployment readiness (int4 BPB, inference throughput, memory profile), sampling quality (distinct-N, self-PPL), regression risk (sample-pack diff), and architectural health (activation statistics).
+Ship a per-checkpoint evaluation scorecard that unlocks multi-dimensional capability measurement for all subsequent sprints. Before Sprint 2, the only training-time signal is loss/BPB. After Sprint 2, every checkpoint emits a machine-readable JSON report covering generalization (per-domain BPB), deployment readiness (inference throughput, memory profile), sampling quality (distinct-N, self-PPL), regression risk (sample-pack diff), and architectural health (activation statistics).
+
+**Scope note (2026-05-06 revision):** Int4 quantized BPB was dropped from the original design. Rationale: per-tensor symmetric int4 is a crude deployment-readiness indicator, and we have no near-term deployment path. If int4 evaluation is wanted later, it can be added as a standalone `scripts/quantize_eval.py` or reintroduced to the scorecard by reversing this edit.
 
 Sprint 2 delivers the infrastructure; Sprints 3 and 4 consume it.
 
@@ -41,7 +43,6 @@ Comprehensive scorecard minus lm-evaluation-harness benchmarks (deferred to Spri
 | Category | Metrics | Notes |
 |----------|---------|-------|
 | Per-domain BPB | wikitext-val, gpt-small-val, stem-crawl-val, dolma-val | Custom BPB on our `.bin` validation splits |
-| Quantized performance | int4 BPB on same 4 splits | On-the-fly int4 quantization; deployment-readiness delta |
 | Sampling quality | distinct-2, distinct-3, self-PPL at winning sampling config | Wraps `scripts/ablate_odin_flat_sampling.py` |
 | Inference throughput | tok/s at seq={256, 512, 1024} batch=1 autoregressive | Custom HIP-aware inference harness |
 | Memory profile | peak VRAM at seq={256, 512, 1024} batch=1 | `torch.cuda.max_memory_allocated` |
@@ -51,6 +52,7 @@ Comprehensive scorecard minus lm-evaluation-harness benchmarks (deferred to Spri
 ### Out of scope
 
 - **lm-evaluation-harness integration** (HellaSwag, ARC-easy, MMLU-CF, PIQA, BLiMP) — deferred to Sprint 4 (post-training). At 122M pre-SFT these benchmarks are near-chance and provide noisy signal.
+- **Int4 quantized BPB** — dropped from original design (2026-05-06 revision). No near-term deployment path; per-tensor symmetric int4 is a crude indicator. Can be added later as standalone `scripts/quantize_eval.py` or reintroduced to scorecard.
 - **Instruction-following benchmarks** (MT-Bench, AlpacaEval, HumanEval) — require SFT model, out of scope until Sprint 4
 - **Automated dashboards / visualization** — JSONL index is sufficient; `jq` is our dashboard
 - **Distributed eval** — single-node inference is fast enough for 122M; not worth DDP coordination
@@ -96,7 +98,6 @@ The trainer fires `scripts/eval_checkpoint.py` as a subprocess after every `save
 | `scripts/eval_checkpoint.py` **NEW** | Main CLI entry point; dispatches to each evaluator module; writes per-checkpoint JSON, appends JSONL index | ~200 |
 | `halo_training/eval/__init__.py` **NEW** | Package init | ~10 |
 | `halo_training/eval/per_domain_bpb.py` **NEW** | Loads validation splits; computes BPB per domain | ~100 |
-| `halo_training/eval/int4_quant.py` **NEW** | Runtime int4 quantization wrapper + quantized BPB calculator | ~120 |
 | `halo_training/eval/sampling.py` **NEW** | Wraps `ablate_odin_flat_sampling.py` to extract metrics at winning config | ~80 |
 | `halo_training/eval/inference_profile.py` **NEW** | tok/s + memory profiling at fixed seq lengths | ~100 |
 | `halo_training/eval/sample_pack.py` **NEW** | 20-prompt generation; diffs against prior checkpoint's outputs | ~120 |
@@ -108,7 +109,7 @@ The trainer fires `scripts/eval_checkpoint.py` as a subprocess after every `save
 | `scripts/train_ddp.py` | Hook for `--auto-eval` (fires post-checkpoint-save as detached subprocess) | +25 |
 | `scripts/launch_ddp.sh` | No change (`--auto-eval` flows through via existing `EXTRA_FLAGS`) | +0 |
 
-**Total: ~975 LoC across 11 new files + 2 edits** (11 new = 9 code modules + 2 data/doc files; 2 edits to existing code; `launch_ddp.sh` gets no change since `--auto-eval` flows through the existing `EXTRA_FLAGS`). Slightly higher than the brainstorm estimate due to `common.py` deduplication.
+**Total: ~855 LoC across 10 new files + 2 edits** (10 new = 8 code modules + 2 data/doc files; 2 edits to existing code; `launch_ddp.sh` gets no change since `--auto-eval` flows through the existing `EXTRA_FLAGS`). Int4 evaluator (original design: ~120 LoC) removed per 2026-05-06 scope revision.
 
 ### 5.2 Architecture — modular evaluator design
 
@@ -118,7 +119,6 @@ scripts/eval_checkpoint.py
     ├── load_checkpoint(path) + load_model(file, class)  [via eval/common.py]
     ├── run each evaluator (selectable via --skip-*):
     │   ├── per_domain_bpb.run(model, validation_splits)    →  {wikitext_val, gpt_small_val, ...}
-    │   ├── int4_quant.run(model, validation_splits)         →  {int4_wikitext_val, ...}
     │   ├── sampling.run(model, tokenizer)                   →  {distinct_2, distinct_3, self_ppl}
     │   ├── inference_profile.run(model)                     →  {tok_s per seq, peak_mem per seq}
     │   ├── sample_pack.run(model, prompts, prior_ckpt)      →  {outputs, hash, diff_vs_prior}
@@ -169,45 +169,7 @@ def run(model, tokenizer, validation_splits, batch_size=8, max_tokens=50_000):
 
 **Budget:** ~1-2 minutes total for all 4 domains at 50K tokens each.
 
-### 5.4 Int4 quantization (`halo_training/eval/int4_quant.py`)
-
-**Strategy:** runtime per-tensor symmetric int4 quantization for the model's 2D weight matrices; embeddings/lm_head stay fp16.
-
-```python
-# halo_training/eval/int4_quant.py
-@torch.no_grad()
-def quantize_model_int4(model):
-    """Returns a deepcopy of the model with 2D weights int4-quantized.
-    
-    Symmetric per-tensor: scale = max(|w|) / 7; round to [-8, 7]; dequantize
-    at forward via torch.dequantize. Falls back to fp16 if tensor has ndim < 2
-    or contains 'embed' / 'lm_head' in its qualified name.
-    """
-    quantized = copy.deepcopy(model)
-    for name, module in quantized.named_modules():
-        if isinstance(module, nn.Linear):
-            if "embed" in name or "lm_head" in name:
-                continue
-            w = module.weight.data
-            scale = w.abs().max() / 7.0
-            q = torch.round(w / scale).clamp(-8, 7).to(torch.int8)
-            # Store quantized + scale; replace forward to dequantize on-the-fly
-            module.weight = nn.Parameter(q.to(torch.int8), requires_grad=False)
-            module.scale = scale
-            module.forward = make_int4_forward(module)
-    return quantized
-
-def run(model, tokenizer, validation_splits, batch_size=8, max_tokens=50_000):
-    """Compute int4-quantized BPB per domain for deployment-readiness delta."""
-    int4_model = quantize_model_int4(model)
-    return per_domain_bpb.run(int4_model, tokenizer, validation_splits, batch_size, max_tokens)
-```
-
-**Budget:** ~1-2 minutes (second forward pass over same splits).
-
-**Caveat:** per-tensor symmetric int4 is a crude lower bound on deployment quality. Real int4 deployment would use per-channel + asymmetric + group quantization. Sprint 2's int4 is a "deployment-readiness indicator," not a production quantization path.
-
-### 5.5 Sampling integration (`halo_training/eval/sampling.py`)
+### 5.4 Sampling integration (`halo_training/eval/sampling.py`)
 
 Wraps the existing `scripts/ablate_odin_flat_sampling.py` — does NOT duplicate the sampling harness. Uses its functions directly:
 
@@ -240,7 +202,7 @@ Refactor may be needed in `scripts/ablate_odin_flat_sampling.py` to expose these
 
 **Budget:** ~1-2 minutes (same as running `ablate_odin_flat_sampling.py` manually).
 
-### 5.6 Inference profile (`halo_training/eval/inference_profile.py`)
+### 5.5 Inference profile (`halo_training/eval/inference_profile.py`)
 
 ```python
 # halo_training/eval/inference_profile.py
@@ -273,7 +235,7 @@ def run(model, tokenizer, seq_lengths=(256, 512, 1024), batch_size=1, warmup=10,
 
 **Note:** This measures **full-seq forward** throughput, not autoregressive decode (which is much slower due to KV-cache reuse overhead). For Sprint 4 (post-training) we'd add true autoregressive decode; Sprint 2's forward-only is a deployment-readiness ceiling.
 
-### 5.7 Sample-pack regression (`halo_training/eval/sample_pack.py`)
+### 5.6 Sample-pack regression (`halo_training/eval/sample_pack.py`)
 
 **Prompts file:** `evals/sample_pack.txt` — 20 hand-curated prompts covering:
 - Domain diversity: history, science, fiction, code, math, dialogue, instruction-following
@@ -327,7 +289,7 @@ def run(model, tokenizer, prompts_file, prior_ckpt=None, seed=42, max_tokens=100
 
 **Budget:** ~2-3 minutes (20 prompts × 100 tokens, sequential decode).
 
-### 5.8 Activation stats (`halo_training/eval/activation_stats.py`)
+### 5.7 Activation stats (`halo_training/eval/activation_stats.py`)
 
 Forward hooks on specific modules collect activations during a probe batch; compute kurtosis, RMS norm, and attention head entropy.
 
@@ -372,7 +334,7 @@ def run(model, tokenizer, validation_splits, num_batches=10, seq_len=512, batch_
 
 **Budget:** ~2 minutes (10 batches × 8 × 512 = ~40K tokens).
 
-### 5.9 Scorecard JSON schema
+### 5.8 Scorecard JSON schema
 
 Per-checkpoint JSON output structure (canonical reference):
 
@@ -401,12 +363,6 @@ Per-checkpoint JSON output structure (canonical reference):
     "wikitext_val": 1.79,
     "gpt_small_val": 2.03,
     "stem_crawl_val": 2.11,
-    "dolma_val": null
-  },
-  "int4_bpb": {
-    "wikitext_val": 1.83,
-    "gpt_small_val": 2.08,
-    "stem_crawl_val": 2.15,
     "dolma_val": null
   },
   "sampling": {
@@ -440,13 +396,13 @@ Per-checkpoint JSON output structure (canonical reference):
 **Global JSONL index** (`docs/perf/eval-scorecard.jsonl`):
 
 ```jsonl
-{"ts":"2026-05-08T14:22Z","ckpt":"odin-flat-wikitext-ddp-step-1869","avg_bpb":1.98,"int4_delta_bpb":0.04,"distinct_2":0.765,"tok_s_512":120,"peak_mem_gb_512":1.44,"full":"docs/perf/eval-scorecards/odin-flat-wikitext-ddp-step-1869.json"}
-{"ts":"2026-05-08T14:28Z","ckpt":"odin-halo-wikitext-ddp-step-1869","avg_bpb":2.11,"int4_delta_bpb":0.05,"distinct_2":0.990,"tok_s_512":95,"peak_mem_gb_512":1.21,"full":"docs/perf/eval-scorecards/odin-halo-wikitext-ddp-step-1869.json"}
+{"ts":"2026-05-08T14:22Z","ckpt":"odin-flat-wikitext-ddp-step-1869","avg_bpb":1.98,"distinct_2":0.765,"tok_s_512":120,"peak_mem_gb_512":1.44,"full":"docs/perf/eval-scorecards/odin-flat-wikitext-ddp-step-1869.json"}
+{"ts":"2026-05-08T14:28Z","ckpt":"odin-halo-wikitext-ddp-step-1869","avg_bpb":2.11,"distinct_2":0.990,"tok_s_512":95,"peak_mem_gb_512":1.21,"full":"docs/perf/eval-scorecards/odin-halo-wikitext-ddp-step-1869.json"}
 ```
 
 One line per run — cheap to grep, jq, diff.
 
-### 5.10 CLI surface
+### 5.9 CLI surface
 
 ```
 Usage:
@@ -470,7 +426,6 @@ Optional:
 
 Skip flags (default: all evaluators run; use to opt out):
   --skip-per-domain-bpb
-  --skip-int4
   --skip-sampling
   --skip-inference-profile
   --skip-sample-pack
@@ -500,7 +455,6 @@ Sprint 2 succeeds if ALL of:
 
 | Failure | Response |
 |---------|----------|
-| int4 quantization produces garbage BPB (>5× fp16 BPB) | Mark int4 as "unreliable at this scale" in JSON; ship with a documented caveat |
 | Sampling wrapper refactor breaks `ablate_odin_flat_sampling.py` | Refactor more carefully; preserve the existing CLI |
 | Machine parity drift > 5% | Investigate determinism; document any aiter-related variation; if persistent, restrict to one machine |
 | Wall time > 15 min | Profile each evaluator; gate `activation_stats` behind opt-in flag if it's the bottleneck |
@@ -513,27 +467,26 @@ Sprint 2 succeeds if ALL of:
 
 | Phase | Duration | What |
 |-------|----------|------|
+| 0 (docs) | 0.1 day | Edit spec + plan to strike int4 BPB (this revision) |
 | 1 (dev) | 0.5 day | `scripts/eval_checkpoint.py` skeleton, JSON schema, JSONL append, CLI parsing, checkpoint load helper |
-| 2 (dev) | 0.75 day | `per_domain_bpb.py` + `int4_quant.py`; unit tests |
-| 3 (dev) | 0.75 day | `sampling.py` (with refactor of `ablate_odin_flat_sampling.py`) + `inference_profile.py`; unit tests |
-| 4 (dev) | 0.75 day | `sample_pack.py` + 20-prompt curation + `activation_stats.py`; unit tests |
+| 2 (dev) | 0.5 day | `per_domain_bpb.py`; unit tests |
+| 3 (dev) | 1.0 day | `sampling.py` (with refactor of `ablate_odin_flat_sampling.py`) + `inference_profile.py`; unit tests |
+| 4 (dev) | 0.5 day | `sample_pack.py` + 20-prompt curation + `activation_stats.py`; unit tests |
 | 5 (dev) | 0.5 day | `--auto-eval` flag in trainer; detached-subprocess integration; subprocess log capture |
 | 6 (validation) | 0.25 day | Retroactive run on 1 OdinFlat + 1 OdinHalo checkpoint; verify output; machine parity check |
-| 7 (docs + commit) | 0.5 day | STATUS.md, AGENTS.md, `knowledge/INDEX.md` updates; single commit |
+| 7 (docs + commit) | 0.25 day | STATUS.md, AGENTS.md, `knowledge/INDEX.md` updates; single commit |
 
-**Total: ~4 days dev + validation** (matches brainstorm Q3's "add polish" extension from 3 to 4 days).
+**Total: ~3.6 days dev + validation** (reduced from ~4 after int4 BPB scope cut).
 
 ## 8. Testing
 
-### 8.1 Unit tests (11 total per brainstorm)
+### 8.1 Unit tests (9 total after int4 scope cut)
 
 | Test | Verifies | Phase |
 |------|----------|:-:|
 | `test_scorecard_json_schema` | Output JSON has all required top-level keys; parseable | 1 |
 | `test_jsonl_index_append` | Appends one line; previous lines preserved | 1 |
 | `test_per_domain_bpb_finite` | Returns finite BPB for all 4 configured splits (or null for unavailable) | 2 |
-| `test_int4_quant_roundtrip` | int4-quantize → dequantize preserves ~99% of fp16 output | 2 |
-| `test_int4_bpb_sanity` | int4 BPB within 20% of fp16 BPB (bounded degradation) | 2 |
 | `test_sampling_metrics_extractable` | Wrapping `ablate_odin_flat_sampling.py` produces dict with distinct_2, self_ppl | 3 |
 | `test_inference_profile_tok_s_positive` | tok/s > 0 at all tested seq lengths; monotonic decrease with seq_len | 3 |
 | `test_sample_pack_20_prompts_load` | `evals/sample_pack.txt` exists; loads exactly 20 non-empty entries | 4 |
@@ -558,7 +511,6 @@ Both should produce complete, finite scorecards. Spot-check values against known
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|:---:|:---:|------|
-| int4 quantization produces garbage BPB (per-tensor sym too crude) | Medium | Low | Document as "indicator, not production"; gate behind `--skip-int4` if broken |
 | Sampling refactor breaks the existing `ablate_odin_flat_sampling.py` CLI | Low | Medium | Refactor carefully; keep CLI exactly as-is; only extract pure functions |
 | Machine parity drift > 5% (aiter vs not) | Medium | Low | Document drift; restrict to one machine if persistent |
 | `--auto-eval` subprocess blocks trainer (e.g., shares GPU) | Medium | Medium | Subprocess runs on different machine than trainer via `EVAL_MACHINE`; or on same machine but after step synced |
@@ -573,13 +525,13 @@ Both should produce complete, finite scorecards. Spot-check values against known
 
 | Day | Activity |
 |:---:|----------|
-| 1 | Phase 1 + part of Phase 2 — skeleton + per-domain BPB |
-| 2 | Rest of Phase 2 + Phase 3 — int4 + sampling + inference profile |
+| 1 | Phase 0 + Phase 1 + part of Phase 2 — docs revision + skeleton + per-domain BPB |
+| 2 | Phase 3 — sampling + inference profile |
 | 3 | Phase 4 — sample-pack curation + activation stats + tests |
-| 3-4 | Phase 5 — auto-eval trainer hook |
+| 3.5 | Phase 5 — auto-eval trainer hook |
 | 4 | Phase 6 validation + Phase 7 docs + commit |
 
-**Total elapsed: ~4 days.**
+**Total elapsed: ~3.6 days.**
 
 ## 11. Dependencies
 
@@ -596,13 +548,13 @@ Both should produce complete, finite scorecards. Spot-check values against known
 
 ## 12. End state
 
-1. `scripts/eval_checkpoint.py` + 7 evaluator modules committed
+1. `scripts/eval_checkpoint.py` + 6 evaluator modules committed (5 eval + `common.py` helpers)
 2. 20-prompt sample pack (`evals/sample_pack.txt`) committed
 3. JSON schema documented; JSONL index file exists with at least 2 entries (one per validation checkpoint)
 4. `--auto-eval` trainer flag works in a smoke test
 5. Machine parity verified (±5% accepted)
 6. Wall time ≤ 15 min on either machine
-7. 11 unit tests passing
+7. 9 unit tests passing
 8. STATUS.md, AGENTS.md, `knowledge/INDEX.md` updated
 9. Single commit — rollback-by-revert compatible
 10. Gate C → B cleared — ready to start Sprint 3 with scorecard in place
@@ -610,5 +562,4 @@ Both should produce complete, finite scorecards. Spot-check values against known
 ## 13. Open questions (do not block Sprint 2)
 
 1. **Validation splits — new files or offset markers into existing `.bin`?** Default: offset markers (e.g., last 5M tokens of each .bin) to avoid data duplication. Decide during Phase 2.
-2. **int4 per-channel vs per-tensor?** Default: per-tensor (simpler). Revisit in Sprint 4 if deployment path matters.
-3. **Sample pack prompt domain coverage** — 20 prompts is small. Revisit expansion in a future sprint if regression signal is weak.
+2. **Sample pack prompt domain coverage** — 20 prompts is small. Revisit expansion in a future sprint if regression signal is weak.

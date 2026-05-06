@@ -1,8 +1,8 @@
 # Sprint 2 Implementation Plan — Evaluation Scorecard
 
 **Companion to:** `docs/superpowers/specs/2026-05-06-sprint2-eval-scorecard-design.md`
-**Date:** 2026-05-06
-**Sequence:** 7 dev phases over ~4 days; no long compute; retroactive validation + final commit
+**Date:** 2026-05-06 (int4 BPB scope removed)
+**Sequence:** 7 dev phases over ~3.6 days; no long compute; retroactive validation + final commit
 **Pre-requisite:** None strictly (can proceed in parallel with Sprint 1 training work, as dev-only during Sprint 1 compute)
 
 ---
@@ -109,7 +109,6 @@ from halo_training.eval.common import load_model, load_checkpoint, load_tokenize
 
 EVALUATORS = [
     "per_domain_bpb",
-    "int4_quant",
     "sampling",
     "inference_profile",
     "sample_pack",
@@ -191,7 +190,6 @@ def append_jsonl(scorecard, jsonl_path):
         "ts": scorecard["eval_timestamp"],
         "ckpt": scorecard["checkpoint_name"],
         "avg_bpb": compute_avg_bpb(scorecard.get("per_domain_bpb")),
-        "int4_delta_bpb": compute_int4_delta(scorecard),
         "distinct_2": (scorecard.get("sampling") or {}).get("distinct_2"),
         "tok_s_512": (scorecard.get("inference") or {}).get("tok_s_seq512_bs1"),
         "peak_mem_gb_512": (scorecard.get("inference") or {}).get("peak_mem_gb_seq512"),
@@ -212,14 +210,6 @@ def compute_avg_bpb(per_domain):
         return None
     values = [v for v in per_domain.values() if v is not None]
     return round(sum(values) / len(values), 3) if values else None
-
-
-def compute_int4_delta(scorecard):
-    fp16 = compute_avg_bpb(scorecard.get("per_domain_bpb"))
-    int4 = compute_avg_bpb(scorecard.get("int4_quant"))
-    if fp16 is None or int4 is None:
-        return None
-    return round(int4 - fp16, 3)
 
 
 if __name__ == "__main__":
@@ -243,7 +233,7 @@ At this point, evaluators are stubs returning empty dicts — we add them in Pha
 
 ---
 
-## Phase 2 — Per-domain BPB + int4 (0.75 day)
+## Phase 2 — Per-domain BPB (0.5 day)
 
 ### Task 2.1 — Validation splits
 
@@ -389,78 +379,14 @@ def _avg_bytes_per_token(tokenizer, sample_tokens):
 
 **Rollback:** Delete `per_domain_bpb.py`; `eval_checkpoint.py` will substitute a None placeholder.
 
-### Task 2.3 — Int4 quantization evaluator
-
-**File:** `halo_training/eval/int4_quant.py` **NEW**
-
-```python
-"""Int4 quantization evaluator — deployment-readiness BPB delta."""
-
-import copy
-import math
-
-import torch
-import torch.nn as nn
-
-from halo_training.eval import per_domain_bpb
-
-
-@torch.no_grad()
-def run(model, tokenizer, validation_splits, args=None):
-    """Quantize model to int4 (per-tensor symmetric), compute BPB per domain."""
-    quantized = _quantize_model_int4(model)
-    return per_domain_bpb.run(quantized, tokenizer, validation_splits, args=args)
-
-
-def _quantize_model_int4(model):
-    """Per-tensor symmetric int4 quantization of 2D Linear weights.
-
-    Excludes tok_embeddings and lm_head (they stay fp16).
-    Stores quantized weight as int8 (range [-8, 7]) plus scalar scale.
-    Replaces module forward to dequantize on-the-fly.
-    """
-    quantized = copy.deepcopy(model)
-    for name, module in quantized.named_modules():
-        if not isinstance(module, nn.Linear):
-            continue
-        if "embed" in name or "lm_head" in name:
-            continue
-        w = module.weight.data
-        if w.dim() < 2:
-            continue
-        scale = w.abs().max() / 7.0 + 1e-6
-        q = torch.round(w / scale).clamp(-8, 7).to(torch.int8)
-        module.weight = nn.Parameter(q.to(torch.int8), requires_grad=False)
-        module.scale = float(scale.item())
-        module.forward = _make_int4_forward(module)
-    return quantized
-
-
-def _make_int4_forward(module):
-    def forward(x):
-        dequant = module.weight.to(x.dtype) * module.scale
-        bias = module.bias if module.bias is not None else None
-        return torch.nn.functional.linear(x, dequant, bias)
-    return forward
-```
-
-**Exit criterion:**
-- `_quantize_model_int4` produces a model whose Linear weights are int8 with a `scale` attribute
-- Quantized model's forward produces finite outputs
-- `run()` returns dict with int4 BPBs within 20% of fp16 BPB per domain
-
-**Test:** `tests/test_int4_quant.py::test_quantize_roundtrip`, `test_int4_bpb_sanity`
-
-**Rollback:** Delete `int4_quant.py`; scorecard substitutes None.
-
 ### Phase 2 exit gate
 
-- `scripts/eval_checkpoint.py` with `--skip-sampling --skip-inference-profile --skip-sample-pack --skip-activation-stats` produces a JSON with valid `per_domain_bpb` and `int4_quant` sections
-- 4 unit tests passing
+- `scripts/eval_checkpoint.py` with `--skip-sampling --skip-inference-profile --skip-sample-pack --skip-activation-stats` produces a JSON with valid `per_domain_bpb` section
+- 3 unit tests passing (scorecard schema, JSONL append, per-domain BPB finite)
 
 ---
 
-## Phase 3 — Sampling + inference profile (0.75 day)
+## Phase 3 — Sampling + inference profile (1.0 day)
 
 ### Task 3.1 — Refactor `scripts/ablate_odin_flat_sampling.py` to expose functions
 
@@ -596,12 +522,12 @@ def run(model, tokenizer, validation_splits, args=None):
 
 ### Phase 3 exit gate
 
-- `eval_checkpoint.py` with `--skip-sample-pack --skip-activation-stats` produces a scorecard with `per_domain_bpb`, `int4_quant`, `sampling`, `inference` sections all populated
-- 4 unit tests passing
+- `eval_checkpoint.py` with `--skip-sample-pack --skip-activation-stats` produces a scorecard with `per_domain_bpb`, `sampling`, `inference` sections all populated
+- 5 unit tests passing
 
 ---
 
-## Phase 4 — Sample-pack + activation stats (0.75 day)
+## Phase 4 — Sample-pack + activation stats (0.5 day)
 
 ### Task 4.1 — Curate 20-prompt sample pack
 
@@ -880,7 +806,7 @@ def _mean_attn_entropy(attn_probs_by_layer):
 ### Phase 4 exit gate
 
 - `eval_checkpoint.py` produces a complete scorecard JSON (all sections populated or null-gracefully)
-- 8 unit tests total passing
+- 8 unit tests total passing (cumulative: schema+jsonl, bpb, sampling, inference, inference-monotonic, prompt-load, sample-pack-deterministic, activation-hooks-no-leak)
 
 ---
 
@@ -958,7 +884,7 @@ bash run_remote.sh "cd ~/Desktop/ai_lab/autokernel-halo-strix && \
 ### Phase 5 exit gate
 
 - `--auto-eval` works end-to-end
-- 9 unit tests total passing (kept counting as we add tests)
+- 9 unit tests total passing (add test_auto_eval.py::test_subprocess_spawns)
 
 ---
 
@@ -1031,14 +957,13 @@ Plan: docs/superpowers/plans/2026-05-06-sprint2-eval-scorecard-plan.md
 
 Infrastructure delivered:
   - scripts/eval_checkpoint.py (per-checkpoint scorecard CLI)
-  - halo_training/eval/ (7 evaluator modules)
+  - halo_training/eval/ (5 evaluator modules + common helpers)
   - evals/sample_pack.txt (20 curated prompts)
   - --auto-eval trainer flag
 
 Retroactive scorecard on existing checkpoints:
   OdinFlat wikitext step_1869:
     BPB:    wikitext_val=1.79, gpt_small_val=X.XX, stem_crawl_val=X.XX
-    int4 BPB delta: +X.XX
     Sampling: winning config ..., distinct_2=0.765, self_ppl=9.84
     Inference: tok/s @ 512 = XXX, peak_mem_gb @ 1024 = X.XX
 
@@ -1076,7 +1001,7 @@ Add new entry under `training/` or a new `eval/` section:
 | File | Description |
 |------|-------------|
 | [../scripts/eval_checkpoint.py](...) | Sprint 2 scorecard CLI; writes per-checkpoint JSON + JSONL index |
-| [../halo_training/eval/](...) | 7 evaluator modules: per-domain BPB, int4 quant, sampling, inference profile, sample-pack, activation stats |
+| [../halo_training/eval/](...) | 5 evaluator modules: per-domain BPB, sampling, inference profile, sample-pack, activation stats |
 ```
 
 ### Task 7.4 — Single commit
@@ -1086,7 +1011,6 @@ Sprint 2: Evaluation scorecard infrastructure
 
 Delivers per-checkpoint multi-dimensional evaluation:
   - Per-domain BPB (wikitext, gpt-small, stem-crawl, dolma validation splits)
-  - Int4 quantized BPB (deployment-readiness delta)
   - Sampling quality (distinct-2/3, self-PPL at winning config, via
     wraps of ablate_odin_flat_sampling.py)
   - Inference tok/s + peak memory at seq={256, 512, 1024}
@@ -1109,7 +1033,8 @@ Retroactive validation on OdinFlat + OdinHalo wikitext checkpoints
 produced finite, consistent metrics. Machine parity within ±X%.
 Wall time ≤ X min per scorecard.
 
-Does NOT include lm-evaluation-harness benchmarks (HellaSwag, ARC,
+Does NOT include int4 BPB (dropped from original design; no near-term
+deployment path) or lm-evaluation-harness benchmarks (HellaSwag, ARC,
 MMLU, PIQA, BLiMP). Those are deferred to Sprint 4 when paired with
 instruction-following benchmarks (MT-Bench, AlpacaEval) that require
 a post-trained model.
@@ -1124,13 +1049,14 @@ Plan: docs/superpowers/plans/2026-05-06-sprint2-eval-scorecard-plan.md
 
 | Day | Phase | Activity |
 |:---:|-------|----------|
-| 1 | Phase 1 + 2.1-2.2 | Scaffolding + per-domain BPB |
-| 2 | Phase 2.3 + Phase 3 | int4 + sampling + inference profile |
+| 0.1 | Phase 0 | Strike int4 BPB from spec + plan (this revision) |
+| 1 | Phase 1 + 2 | Scaffolding + per-domain BPB |
+| 2 | Phase 3 | Sampling + inference profile |
 | 3 | Phase 4 | Sample-pack curation + activation stats |
 | 3.5 | Phase 5 | `--auto-eval` trainer hook |
 | 4 | Phase 6 + 7 | Retroactive validation + docs + commit |
 
-**Total: ~4 elapsed days, minimal compute (< 1 hour of eval runs).**
+**Total: ~3.6 elapsed days, minimal compute (< 1 hour of eval runs).**
 
 ## Dependencies external to Sprint 2
 

@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/odin-flat-wikitext-ddp/step_1869.pt",
+  "checkpoint_name": "odin-flat-wikitext-ddp-step-1869",
+  "step": 1869,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681696,
+    "trainable_params": 121681696,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "a",
+  "eval_timestamp": "2026-05-06T13:45:31Z",
+  "eval_duration_s": 33.64,
+  "eval_config": {
+    "max_tokens_per_domain": 20000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 1.8013,
+    "gpt_small_val": 3.0087,
+    "stem_crawl_val": 3.4344,
+    "dolma_val": 3.1447,
+    "_raw_ce": {
+      "wikitext_val": 4.4948,
+      "gpt_small_val": 7.5078,
+      "stem_crawl_val": 8.5699,
+      "dolma_val": 7.8471
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 20000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "distinct_2": 0.7648,
+    "self_ppl": 9.84,
+    "avg_length": 84.3,
+    "sample_preview": "The history of the Roman Empire , by the British Revolution . The first Roman Empire of the King Joh",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.6128,
+        "self_ppl": 5.188
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.7423,
+        "self_ppl": 7.615
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "distinct_2": 0.7648,
+        "self_ppl": 9.84
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 50169.7,
+    "peak_mem_gb_seq256": 0.38,
+    "tok_s_seq512_bs1": 59156.2,
+    "peak_mem_gb_seq512": 0.432,
+    "tok_s_seq1024_bs1": 65073.0,
+    "peak_mem_gb_seq1024": 0.535
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:356b6389b3b52db0",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new world in which was created by the world . In this point , he was also an influential composer David Pomphe , a ",
+      "In the field of particle physics, the Standard Model describes the first @-@ dimensional model of the current models , and is a number of the same model . \n<|en",
+      "To prove that the square root of 2 is irrational, we assume , and there are not very strong points on a lot of our own . I don 't do this . \" \n<|endoftext|>"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/odin-flat-wikitext-ddp/step_1500.pt",
+      "prior_hash": "sha256:cb5242c7866e2f34",
+      "diff_count": 17,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with a new world in which was created by the world . In this point , he was also an influential composer David Pomphe , a ",
+          "prior": "The history of the Roman Empire began with a new world in which was a major city of the reign of its own , and an important historical center of many years . In"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the first @-@ dimensional model of the current models , and is a number of the same model . \n<|en",
+          "prior": "In the field of particle physics, the Standard Model describes the first to be more accurate and is too powerful . In a nuclear device that it must be required "
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume , and there are not very strong points on a lot of our own . I don 't do this . \" \n<|endoftext|>",
+          "prior": "To prove that the square root of 2 is irrational, we assume , and there are not very strong points on a lot of an action . I don 't do this . I have to give the"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      2.416,
+      2.126,
+      1.829,
+      1.584,
+      1.333,
+      1.719,
+      1.285,
+      1.138,
+      1.021,
+      0.929,
+      0.853,
+      0.818,
+      0.818,
+      0.927
+    ],
+    "layer_rms_norm": [
+      1.644,
+      1.697,
+      1.759,
+      1.83,
+      1.951,
+      2.201,
+      2.899,
+      2.993,
+      3.13,
+      3.289,
+      3.458,
+      3.635,
+      3.828,
+      4.474
+    ],
+    "mean_layer_kurtosis": 1.343,
+    "mean_layer_rms_norm": 2.771,
+    "max_layer_kurtosis": 2.416,
+    "max_layer_rms_norm": 4.474,
+    "_split_used": "wikitext_val"
+  }
+}

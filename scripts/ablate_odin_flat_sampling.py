@@ -4,9 +4,14 @@ Loads model + checkpoint once, runs a narrowing sweep over (temperature,
 repetition_penalty), then top_p, then top_k. Reports distinct-2, self-PPL,
 length, and a preview for each config across two prompts.
 
-Usage:
+Usage as CLI:
     python scripts/ablate_odin_flat_sampling.py \
         --checkpoint checkpoints/odin-flat-wikitext-ddp/step_1869.pt
+
+Usage as library (Sprint 2 scorecard):
+    from scripts.ablate_odin_flat_sampling import run_ablation, select_winning_config
+    results = run_ablation(model, tokenizer, prompts=None, verbose=False)
+    winner = select_winning_config(results["stage3"])
 """
 
 import argparse
@@ -184,7 +189,7 @@ def print_table(title, configs, results, fixed_note):
 
 
 def run_stage(stage_name, stage_configs, fixed_note, model, tok, bl_decoder,
-              eos_id, vocab_size, prompt_ids_list, prompts):
+              eos_id, vocab_size, prompt_ids_list, prompts, *, verbose=True):
     results = []
     for cfg in stage_configs:
         t0 = time.time()
@@ -192,15 +197,111 @@ def run_stage(stage_name, stage_configs, fixed_note, model, tok, bl_decoder,
                               cfg, prompt_ids_list, prompts)
         elapsed = time.time() - t0
         results.append({"cfg": cfg, "metrics": metrics, "elapsed": elapsed})
-        print(f"  ran cfg temp={cfg['temp']:.2f} rep_pen={cfg['rep_pen']:.2f} "
-              f"top_p={cfg['top_p']:.2f} top_k={cfg['top_k']} "
-              f"in {elapsed:.1f}s — dist2={metrics['dist2']:.3f} "
-              f"ppl={metrics['ppl']:.1f}")
+        if verbose:
+            print(f"  ran cfg temp={cfg['temp']:.2f} rep_pen={cfg['rep_pen']:.2f} "
+                  f"top_p={cfg['top_p']:.2f} top_k={cfg['top_k']} "
+                  f"in {elapsed:.1f}s — dist2={metrics['dist2']:.3f} "
+                  f"ppl={metrics['ppl']:.1f}")
     # Attach previews into a nested dict for print_table
     for r in results:
         r["metrics"]["previews"] = r["metrics"]["previews"]
-    print_table(stage_name, [r["cfg"] for r in results], results, fixed_note)
+    if verbose:
+        print_table(stage_name, [r["cfg"] for r in results], results, fixed_note)
     return results
+
+
+# ===========================================================================
+# Library-friendly API (Sprint 2 sampling evaluator wraps these)
+# ===========================================================================
+
+#: Alias so the Sprint 2 sampling evaluator can import a stable name
+select_winning_config = pick_winner
+
+
+def run_ablation(model, tok, bl_decoder, eos_id, vocab_size,
+                 prompts=None, *, verbose=False):
+    """Run the 3-stage sampling ablation end-to-end against a loaded model.
+
+    Parameters
+    ----------
+    model : torch.nn.Module (already on device, half-precision, .eval())
+    tok : HF Tokenizer
+    bl_decoder : ByteLevel decoder (from ``tokenizers.decoders``)
+    eos_id, vocab_size : ints
+    prompts : list[str], optional — defaults to the module-level ``PROMPTS``
+    verbose : bool — print stage tables and per-config progress lines
+
+    Returns
+    -------
+    dict with keys ``stage1``, ``stage2``, ``stage3``, ``winners`` where each
+    stage value is a list of ``{cfg, metrics, elapsed}`` results and
+    ``winners`` is a dict of the per-stage winning entries. The overall
+    winner is ``result["winners"]["stage3"]``.
+    """
+    if prompts is None:
+        prompts = PROMPTS
+
+    # Tokenize prompts
+    prompt_ids_list = []
+    for p in prompts:
+        enc = tok.encode(p)
+        prompt_ids_list.append(torch.tensor([enc.ids], dtype=torch.long))
+
+    # Stage 1: temp x rep_pen
+    stage1_configs = [
+        {"temp": t, "rep_pen": r, "top_k": 40, "top_p": 0.95}
+        for t in [0.6, 0.8, 1.0]
+        for r in [1.0, 1.15, 1.3]
+    ]
+    stage1_results = run_stage(
+        "Stage 1: temp x rep_pen", stage1_configs, "top_k=40, top_p=0.95",
+        model, tok, bl_decoder, eos_id, vocab_size, prompt_ids_list, prompts,
+        verbose=verbose,
+    )
+    s1_winner = pick_winner(stage1_results)
+    s1_cfg = s1_winner["cfg"]
+
+    # Stage 2: top_p
+    stage2_configs = [
+        {"temp": s1_cfg["temp"], "rep_pen": s1_cfg["rep_pen"],
+         "top_k": 40, "top_p": top_p}
+        for top_p in [0.85, 0.95, 1.0]
+    ]
+    stage2_results = run_stage(
+        "Stage 2: top_p refinement", stage2_configs,
+        f"temp={s1_cfg['temp']:.2f}, rep_pen={s1_cfg['rep_pen']:.2f}, top_k=40",
+        model, tok, bl_decoder, eos_id, vocab_size, prompt_ids_list, prompts,
+        verbose=verbose,
+    )
+    s2_winner = pick_winner(stage2_results)
+    s2_cfg = s2_winner["cfg"]
+
+    # Stage 3: top_k verification
+    stage3_configs = [
+        {"temp": s2_cfg["temp"], "rep_pen": s2_cfg["rep_pen"],
+         "top_p": s2_cfg["top_p"], "top_k": top_k}
+        for top_k in [0, 40, 100]
+    ]
+    stage3_results = run_stage(
+        "Stage 3: top_k verification", stage3_configs,
+        f"temp={s2_cfg['temp']:.2f}, rep_pen={s2_cfg['rep_pen']:.2f}, "
+        f"top_p={s2_cfg['top_p']:.2f}",
+        model, tok, bl_decoder, eos_id, vocab_size, prompt_ids_list, prompts,
+        verbose=verbose,
+    )
+    s3_winner = pick_winner(stage3_results)
+
+    return {
+        "stage1": stage1_results,
+        "stage2": stage2_results,
+        "stage3": stage3_results,
+        "winners": {
+            "stage1": s1_winner,
+            "stage2": s2_winner,
+            "stage3": s3_winner,
+        },
+        "prompts": prompts,
+    }
 
 
 def main():
