@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-probe-B/step_200.pt",
+  "checkpoint_name": "sprint1-probe-B-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-06T21:49:31Z",
+  "eval_duration_s": 30.9,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.2163,
+    "gpt_small_val": 3.0359,
+    "stem_crawl_val": 3.622,
+    "dolma_val": 3.2377,
+    "_raw_ce": {
+      "wikitext_val": 5.5303,
+      "gpt_small_val": 7.5756,
+      "stem_crawl_val": 9.0381,
+      "dolma_val": 8.0792
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.3,
+      "top_p": 0.85,
+      "top_k": 40
+    },
+    "distinct_2": 0.9881,
+    "self_ppl": 11.222,
+    "avg_length": 33.5,
+    "sample_preview": "The history of the Roman Empire , which had been transferred to have played in 2005 . In addition , ",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.9791,
+        "self_ppl": 11.164
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.85,
+        "top_k": 40,
+        "distinct_2": 0.9881,
+        "self_ppl": 11.222
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.85,
+        "top_k": 40,
+        "distinct_2": 0.9881,
+        "self_ppl": 11.222
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49212.7,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 58212.7,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 63986.2,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:a4769e0300b4f36c",
+    "samples_preview": [
+      "The history of the Roman Empire began with the Somerset . The city was built in New York City , and was a major league to their first @-@ 000 men , and the foll",
+      "In the field of particle physics, the Standard Model describes the first game . On March 2 , the second single was a third round of the top of the third @-@ tim",
+      "To prove that the square root of 2 is irrational, we assume , and a small than it was used for a small numbers . For example of the first , when the most import"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      2.235,
+      2.164,
+      2.257,
+      2.181,
+      2.102,
+      1.964,
+      1.538,
+      1.455,
+      1.377,
+      1.314,
+      1.246,
+      1.174,
+      1.113,
+      0.957
+    ],
+    "layer_rms_norm": [
+      0.142,
+      0.172,
+      0.191,
+      0.205,
+      0.219,
+      0.232,
+      0.248,
+      0.254,
+      0.26,
+      0.268,
+      0.276,
+      0.284,
+      0.292,
+      0.318
+    ],
+    "mean_layer_kurtosis": 1.648,
+    "mean_layer_rms_norm": 0.24,
+    "max_layer_kurtosis": 2.257,
+    "max_layer_rms_norm": 0.318,
+    "_split_used": "wikitext_val"
+  }
+}

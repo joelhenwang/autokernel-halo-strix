@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-run2/step_936.pt",
+  "checkpoint_name": "sprint1-run2-step-936",
+  "step": 936,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-06T23:15:37Z",
+  "eval_duration_s": 43.12,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 1.893,
+    "gpt_small_val": 2.8327,
+    "stem_crawl_val": 3.4314,
+    "dolma_val": 3.0883,
+    "_raw_ce": {
+      "wikitext_val": 4.7236,
+      "gpt_small_val": 7.0686,
+      "stem_crawl_val": 8.5625,
+      "dolma_val": 7.7064
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.8,
+      "repetition_penalty": 1.0,
+      "top_p": 0.85,
+      "top_k": 40
+    },
+    "distinct_2": 0.8865,
+    "self_ppl": 7.329,
+    "avg_length": 53.5,
+    "sample_preview": "The history of the Roman Empire was an important role in the development of the East and Roman Empir",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.8721,
+        "self_ppl": 7.742
+      },
+      "stage2_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.85,
+        "top_k": 40,
+        "distinct_2": 0.8865,
+        "self_ppl": 7.329
+      },
+      "stage3_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.85,
+        "top_k": 40,
+        "distinct_2": 0.8865,
+        "self_ppl": 7.329
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49045.7,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 58129.6,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 63564.8,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:ae95e3795034f0bc",
+    "samples_preview": [
+      "The history of the Roman Empire began with its new period in 968 , and was a second reign of over the Kingdom of major military influence . It is known by histo",
+      "In the field of particle physics, the Standard Model describes the first @-@ dimensional model of the mathematical spectrum , and quantum mechanics . In this ca",
+      "To prove that the square root of 2 is irrational, we assume , and is not an essential element in terms of the majority . For example , the case , this case , it"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint1-run2/step_500.pt",
+      "prior_hash": "sha256:9a1ea73e56b3f367",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with its new period in 968 , and was a second reign of over the Kingdom of major military influence . It is known by histo",
+          "prior": "The history of the Roman Empire began with a new period in which was seen as an important element of the world 's most famous monastic history , the early in th"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the first @-@ dimensional model of the mathematical spectrum , and quantum mechanics . In this ca",
+          "prior": "In the field of particle physics, the Standard Model describes the first @-@ dimensional @-@ scale . In this time , the third @-@ way is known from a \" the Sun "
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume , and is not an essential element in terms of the majority . For example , the case , this case , it",
+          "prior": "To prove that the square root of 2 is irrational, we assume , and one of the first being in terms of the majority of the most part of the state 's history . \n<|"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      24.202,
+      30.822,
+      39.267,
+      38.186,
+      38.165,
+      35.637,
+      19.453,
+      18.147,
+      16.737,
+      15.502,
+      14.264,
+      13.505,
+      12.679,
+      9.602
+    ],
+    "layer_rms_norm": [
+      1.985,
+      2.345,
+      2.698,
+      2.944,
+      3.228,
+      3.504,
+      4.188,
+      4.309,
+      4.441,
+      4.582,
+      4.731,
+      4.898,
+      5.069,
+      5.606
+    ],
+    "mean_layer_kurtosis": 23.298,
+    "mean_layer_rms_norm": 3.895,
+    "max_layer_kurtosis": 39.267,
+    "max_layer_rms_norm": 5.606,
+    "_split_used": "wikitext_val"
+  }
+}

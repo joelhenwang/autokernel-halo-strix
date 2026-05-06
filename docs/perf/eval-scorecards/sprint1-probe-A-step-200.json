@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-probe-A/step_200.pt",
+  "checkpoint_name": "sprint1-probe-A-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-06T21:32:35Z",
+  "eval_duration_s": 26.78,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.2376,
+    "gpt_small_val": 3.0719,
+    "stem_crawl_val": 3.6585,
+    "dolma_val": 3.2794,
+    "_raw_ce": {
+      "wikitext_val": 5.5835,
+      "gpt_small_val": 7.6653,
+      "stem_crawl_val": 9.1292,
+      "dolma_val": 8.1832
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.3,
+      "top_p": 0.95,
+      "top_k": 0
+    },
+    "distinct_2": 1.0,
+    "self_ppl": 11.97,
+    "avg_length": 12.3,
+    "sample_preview": "The history of the Roman Empire , and in Japan .  <|endoftext|>",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 1.0,
+        "self_ppl": 9.055
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 1.0,
+        "self_ppl": 9.055
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.95,
+        "top_k": 0,
+        "distinct_2": 1.0,
+        "self_ppl": 11.97
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49862.7,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 58265.0,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 64211.1,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:41558dbab079f1ba",
+    "samples_preview": [
+      "The history of the Roman Empire began with local community . The British and the National Park was in July 18th century , and had been launched on the state . \n",
+      "In the field of particle physics, the Standard Model describes the first @-@ level . The highway was established on December 2015 , and to be built by the 18 , ",
+      "To prove that the square root of 2 is irrational, we assume , and one of the body of the first half of the long @-@ 000 . \n<|endoftext|>"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      2.247,
+      2.453,
+      2.487,
+      2.387,
+      2.319,
+      2.251,
+      2.009,
+      1.948,
+      1.876,
+      1.801,
+      1.735,
+      1.677,
+      1.615,
+      1.388
+    ],
+    "layer_rms_norm": [
+      0.075,
+      0.092,
+      0.102,
+      0.109,
+      0.116,
+      0.122,
+      0.13,
+      0.133,
+      0.137,
+      0.141,
+      0.145,
+      0.149,
+      0.153,
+      0.165
+    ],
+    "mean_layer_kurtosis": 2.014,
+    "mean_layer_rms_norm": 0.126,
+    "max_layer_kurtosis": 2.487,
+    "max_layer_rms_norm": 0.165,
+    "_split_used": "wikitext_val"
+  }
+}

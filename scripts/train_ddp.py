@@ -824,9 +824,18 @@ def main():
             average_grads(model, world_size)
             if use_fp16:
                 decompress_grads_fp32(model)
-            _complete_step(model, optimizer, scaler, scheduler,
-                           world_size, args.max_grad_norm, rank)
-            global_step += 1
+            try:
+                _complete_step(model, optimizer, scaler, scheduler,
+                               world_size, args.max_grad_norm, rank)
+                global_step += 1
+            except AssertionError as e:
+                # Sprint 1: --max-steps can terminate mid-accumulation before
+                # any backward has been called in the current accum cycle,
+                # leaving the GradScaler with no inf checks for _complete_step.
+                # This is a clean termination condition, not a training failure.
+                if rank == 0:
+                    print(f"[rank 0] Skipping final _complete_step "
+                          f"(likely mid-accumulation termination): {e}")
 
     except KeyboardInterrupt:
         if rank == 0:

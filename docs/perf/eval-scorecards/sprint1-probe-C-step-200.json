@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-probe-C/step_200.pt",
+  "checkpoint_name": "sprint1-probe-C-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-06T22:06:31Z",
+  "eval_duration_s": 38.34,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.2078,
+    "gpt_small_val": 3.0352,
+    "stem_crawl_val": 3.5596,
+    "dolma_val": 3.2339,
+    "_raw_ce": {
+      "wikitext_val": 5.5093,
+      "gpt_small_val": 7.5739,
+      "stem_crawl_val": 8.8824,
+      "dolma_val": 8.0698
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "distinct_2": 0.8803,
+    "self_ppl": 10.783,
+    "avg_length": 38.2,
+    "sample_preview": "The history of the Roman Empire , an American League . There was first , the first known as the Unit",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.5882,
+        "self_ppl": 5.439
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.7304,
+        "self_ppl": 7.825
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "distinct_2": 0.8803,
+        "self_ppl": 10.783
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49411.5,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 57996.7,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 63783.2,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:93d06118543df095",
+    "samples_preview": [
+      "The history of the Roman Empire began with local community and in their parents , including the United States . \n<|endoftext|>",
+      "In the field of particle physics, the Standard Model describes the first of a result , and the state 's position as a major action to be built by the \" . In 201",
+      "To prove that the square root of 2 is irrational, we assume , and one of the body of the outer side of the world . The main species may have been found to be th"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      1.701,
+      1.561,
+      1.539,
+      1.502,
+      1.441,
+      1.312,
+      1.021,
+      0.968,
+      0.904,
+      0.845,
+      0.783,
+      0.731,
+      0.671,
+      0.514
+    ],
+    "layer_rms_norm": [
+      0.34,
+      0.408,
+      0.455,
+      0.493,
+      0.528,
+      0.562,
+      0.613,
+      0.626,
+      0.643,
+      0.662,
+      0.684,
+      0.706,
+      0.73,
+      0.827
+    ],
+    "mean_layer_kurtosis": 1.107,
+    "mean_layer_rms_norm": 0.591,
+    "max_layer_kurtosis": 1.701,
+    "max_layer_rms_norm": 0.827,
+    "_split_used": "wikitext_val"
+  }
+}
