@@ -48,3 +48,9 @@ tags: [%index, %knowledge]
 | [ple_ablation_results.md](architectures/ple_ablation_results.md) | PLE Path A wins, MatFormer free, B/AB no benefit |
 | [parcae_stable_looped_models.md](architectures/parcae_stable_looped_models.md) | Parcae (Together AI, 2026): stable looped transformers, 2x param efficiency, MuonAdamW recipe |
 | [looped_model_design_lessons.md](architectures/looped_model_design_lessons.md) | 13 lessons from OUROBOROS->JORMUNGANDR: momentum risk, staged activation, L2 estimates |
+
+## research/
+
+| File | Description |
+|------|-------------|
+| [../docs/research/small-lm-research-2026-05-06.md](../docs/research/small-lm-research-2026-05-06.md) | Deep-dive synthesis of efficient pretraining / CPT / post-training / new architectures, with Odin-specific action queue |

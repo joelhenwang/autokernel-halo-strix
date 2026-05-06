@@ -611,6 +611,28 @@ Cadence: checkpoint every 500 steps → ~9 intermediate saves
 
 Monitor: `bash run_remote.sh "tail -3 checkpoints/odin-flat-stem-crawl-ddp/rank0.log"`
 
+### Research deep-dive (2026-05-06)
+
+Full synthesis in `docs/research/small-lm-research-2026-05-06.md`.
+
+**TL;DR top-5 recommendations:**
+1. Adopt 3-stage pretraining recipe (stable → quality-upsample → decay)
+2. Add intra-document masking to trainer (~1 hr; stability win)
+3. Remove weight decay from embedding layers (~5 min; OLMo 2 finding)
+4. Build minimal SFT + ORPO/APO post-training pipeline (~2 days; unlocks instruct eval)
+5. Switch from cosine to WSD scheduler with `--min-lr-ratio 0.1`
+
+**Biggest gap:** Zero post-training infrastructure. Comprehensive survey in
+`knowledge/training/instruct_alignment_techniques_2025_2026.md` is unused.
+
+**Second biggest gap:** Single-metric (loss/BPB) evaluation. Missing per-domain
+BPB, capability probes (BLiMP), sample-pack regression, quantized BPB.
+
+**New external material integrated:**
+- SmolLM3 blueprint (July 2025 HuggingFace): 3-stage training, intra-doc masking,
+  no-WD-on-embeddings, APO + model merging recipe
+- APO (arXiv:2408.06266): more stable DPO variant adopted by SmolLM3
+
 ---
 
 
