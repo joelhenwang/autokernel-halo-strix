@@ -5,67 +5,78 @@
 
 ---
 
-## Sprint 1 Phase 3: Run 1 Free-Wins Validation (2026-05-06)
+## Sprint 1 Phase 3: Run 1 + Run 1b Free-Wins Validation (2026-05-06)
 
-**Status:** Run 1 + matched baseline both COMPLETE. Free wins regressed
-held-out BPB at 1-epoch wikitext; proceeding to Phase 4 LR probe with
-adjusted strategy.
+**Status:** Diagnosis confirmed. Free wins' LR split hurt; even without
+split, BPB is neutral-to-slight-regress at 1-epoch wikitext. Decision:
+move to Phase 4 focused on NorMuon (the real Sprint 1 lever).
 
-### Direct A/B comparison (block=512, 1 epoch, 936 opt steps)
+### Three-way A/B (block=512, 1 epoch, 936 opt steps, matched config)
 
-| Metric | Run 1 (free wins) | Baseline (AdamW) | Delta |
+| Metric | Run 1 (split 3.36x) | Run 1b (no split) | Baseline (AdamW) |
 |---|---:|---:|---:|
-| Final train loss | 4.7907 | 4.7975 | −0.14% (Run 1 better) |
-| **wikitext_val BPB** | 1.9835 | **1.9214** | **+3.2% (Run 1 WORSE)** |
-| gpt_small_val BPB | 2.9374 | 2.8634 | +2.6% |
-| stem_crawl_val BPB | 3.6401 | 3.5361 | +2.9% |
-| dolma_val BPB | 3.2646 | 3.1094 | +5.0% |
-| avg BPB | 2.9564 | 2.861 | +3.3% |
-| Throughput | 39,045 tok/s | 39,538 tok/s | −1.2% |
-| Memory | 10.3 GB | 10.3 GB | 0% |
-| Wall time | 3143s | 3104s | +1.3% |
+| Final train loss | 4.7907 | **4.6295** | 4.7975 |
+| wikitext_val BPB | 1.9835 | 1.9253 | **1.9214** |
+| gpt_small_val BPB | 2.9374 | 2.8754 | **2.8634** |
+| stem_crawl_val BPB | 3.6401 | 3.541 | **3.5361** |
+| dolma_val BPB | 3.2646 | 3.1666 | **3.1094** |
+| avg BPB | 2.9564 | 2.877 | **2.861** |
+| Throughput | 39,045 | 39,104 | 39,538 |
 
-**Observation:** training loss parity, generalization regression.
-Held-out BPB diverges from training loss: Run 1 fits training set
-comparably but generalizes worse on ALL 4 validation slices.
+Config deltas:
+  Baseline:    no Sprint 1 features, single-group AdamW lr=8e-4 wd=0.1
+  Run 1:       intra-doc-mask + IMU-1 grouping lr_2d=8e-4 lr_1d=3e-4 + LN scaling
+  Run 1b:      intra-doc-mask + IMU-1 grouping lr_2d=8e-4 lr_1d=8e-4 + LN scaling
 
-**Diagnosis hypothesis:** `lr_1d=3e-4` (3.36× below `lr_2d=8e-4` per
-IMU-1 recipe) starved the 1D group (embeddings, LN gammas, scalar
-gates, lm_head). The IMU-1 paper's 3.36× ratio was tuned at 430M;
-our 122M under-learns 1D params with such an aggressive split.
+### Findings
 
-Secondary contributors (to bisect in Phase 4 LR probe):
-- LayerNorm scaling init (1/sqrt(layer_idx+1)) may under-scale deep layers
-- `no-WD-on-embeddings` may cause embedding drift without regularization
-- intra-doc-mask on wikitext-103 may not help (wikitext docs are short
-  and fairly uniform; the masking benefit is paragraph-level coherence
-  on corpora like Dolma with long multi-topic docs)
+1. **LR split was the Run 1 regression culprit.** Dropping lr_1d to 3e-4
+   starved 1D group (embed/norms/head); Run 1b with unified lr=8e-4
+   recovers parity and then some.
 
-**Configs (for reproducibility):**
-  Run 1:       --intra-doc-mask --imu1-groups --lr-2d 8e-4 --lr-1d 3e-4 --no-muon
-  Baseline:    --no-intra-doc-mask --no-muon  (default AdamW fused, single lr=8e-4)
+2. **Train loss != generalization.** Run 1b achieves −3.5% training
+   loss vs baseline but scores +0.2-1.8% WORSE BPB on all 4 held-out
+   domains. Classic overfit signature: intra-doc-mask + LN scaling
+   + no-WD-on-embed help the model fit the training stream but don't
+   improve tail-slice BPB at this scale.
 
-Scorecards:
-  docs/perf/eval-scorecards/sprint1-run1-step-500.json
-  docs/perf/eval-scorecards/sprint1-run1-step-936.json
-  docs/perf/eval-scorecards/sprint1-baseline-block512-step-500.json
-  docs/perf/eval-scorecards/sprint1-baseline-block512-step-936.json
+3. **At 1-epoch wikitext (122M tokens) the free wins don't pay out.**
+   The regularization signal requires more data / epochs to materialize.
+   For Sprint 3's dolma-10B (57x tokens) the story may differ; for now,
+   don't rely on free wins as the loss-improvement driver.
 
-### Plan for Phase 4 LR probe (adjusted)
+4. **Throughput is essentially free for all three configs** (39-39.5K
+   tok/s = <2% spread). Free wins and IMU-1 grouping have no measurable
+   compute cost.
 
-Rather than sweeping IMU-1's absolute LRs (0.015-0.030) which are 20-40×
-our AdamW scale, sweep the (lr_2d, lr_1d) pair AROUND our baseline:
+### Decision for Phase 4
 
-  Config 1: lr_2d=8e-4, lr_1d=8e-4  (no split; tests if split was the bug)
-  Config 2: lr_2d=8e-4, lr_1d=5e-4  (milder split)
-  Config 3: lr_2d=1.6e-3, lr_1d=5e-4  (NorMuon-sized lr_2d with mild split)
+Original plan: 3-config LR sweep for NorMuon at IMU-1's absolute LRs
+(0.015-0.030). Revised plan: sweep lr_2d at our AdamW-scale LRs since
+NorMuon's effective step size per our param scale is different from
+IMU-1's 430M setup.
 
-All three include NorMuon on the 2D group; free wins still on.
-200 steps each, split-parallel on Machines A + B.
+Probe strategy:
+  Baseline reference: Baseline block=512 final loss 4.7975, BPB 1.9214
+  Run 1b reference:   lower training loss but flat BPB
 
-Success criterion at Phase 4 gate: at least one config produces
-wiki_val BPB ≤ 1.92 at step 200 (matches or beats AdamW baseline's
-step-200 BPB tracking).
+  Config A: lr_2d=8e-4 lr_1d=8e-4 (NorMuon at AdamW-baseline LR)
+  Config B: lr_2d=2e-3 lr_1d=8e-4 (2.5x higher lr_2d for NorMuon)
+  Config C: lr_2d=5e-3 lr_1d=8e-4 (6x higher lr_2d)
+
+All include free wins (intra-doc-mask + LN scaling + no-WD-on-embed).
+200 steps each. Winner = lowest mean wiki_val BPB at step 200 OR
+lowest step-200 training loss (both measured via auto-eval).
+
+Gate: >= 1 NorMuon config beats baseline wikitext_val BPB of 1.921.
+If no NorMuon config beats baseline, Sprint 1's gate fails and we
+fall back to "ship free wins + IMU-1 grouping without split as the
+new default" rather than NorMuon.
+
+Scorecards committed:
+  sprint1-run1-step-{500,936}.json
+  sprint1-run1b-step-{500,936}.json
+  sprint1-baseline-block512-step-{500,936}.json
 
 ---
 

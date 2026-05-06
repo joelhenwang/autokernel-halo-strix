@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-run1b/step_500.pt",
+  "checkpoint_name": "sprint1-run1b-step-500",
+  "step": 500,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-06T20:21:55Z",
+  "eval_duration_s": 116.93,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.0434,
+    "gpt_small_val": 2.9187,
+    "stem_crawl_val": 3.5667,
+    "dolma_val": 3.1756,
+    "_raw_ce": {
+      "wikitext_val": 5.0991,
+      "gpt_small_val": 7.283,
+      "stem_crawl_val": 8.9001,
+      "dolma_val": 7.9241
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.3,
+      "top_p": 0.95,
+      "top_k": 40
+    },
+    "distinct_2": 1.0,
+    "self_ppl": 7.711,
+    "avg_length": 14.7,
+    "sample_preview": "The history of the Roman Empire , and in England . There were divided into three centuries as a cent",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 1.0,
+        "self_ppl": 7.711
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 1.0,
+        "self_ppl": 7.711
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 1.0,
+        "self_ppl": 7.711
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 11730.5,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 11796.4,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 19602.4,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:52c39553a42ba85d",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new period in 1899 , and was considered to serve as part of its most famous for a number of the French . In additio",
+      "In the field of particle physics, the Standard Model describes the first time . The study by the first test was also published by a number of the United States ",
+      "To prove that the square root of 2 is irrational, we assume , and if it may have been used for a simple if they are at risk of which may be a result in the indi"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      20.57,
+      29.031,
+      31.936,
+      32.151,
+      31.387,
+      30.335,
+      22.088,
+      20.953,
+      19.709,
+      18.473,
+      17.488,
+      16.708,
+      16.126,
+      15.47
+    ],
+    "layer_rms_norm": [
+      0.452,
+      0.519,
+      0.553,
+      0.578,
+      0.6,
+      0.625,
+      0.689,
+      0.706,
+      0.722,
+      0.739,
+      0.754,
+      0.767,
+      0.777,
+      0.8
+    ],
+    "mean_layer_kurtosis": 23.03,
+    "mean_layer_rms_norm": 0.663,
+    "max_layer_kurtosis": 32.151,
+    "max_layer_rms_norm": 0.8,
+    "_split_used": "wikitext_val"
+  }
+}

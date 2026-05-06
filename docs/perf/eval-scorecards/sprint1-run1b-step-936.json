@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-run1b/step_936.pt",
+  "checkpoint_name": "sprint1-run1b-step-936",
+  "step": 936,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-06T20:45:07Z",
+  "eval_duration_s": 44.46,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 1.9253,
+    "gpt_small_val": 2.8754,
+    "stem_crawl_val": 3.541,
+    "dolma_val": 3.1666,
+    "_raw_ce": {
+      "wikitext_val": 4.8043,
+      "gpt_small_val": 7.1751,
+      "stem_crawl_val": 8.836,
+      "dolma_val": 7.9018
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 40
+    },
+    "distinct_2": 0.8384,
+    "self_ppl": 5.281,
+    "avg_length": 37.8,
+    "sample_preview": "The history of the Roman Empire was an important role in the period of the first Kingdom of the Seco",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.8384,
+        "self_ppl": 5.281
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.8384,
+        "self_ppl": 5.281
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.8384,
+        "self_ppl": 5.281
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 48873.4,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 57381.4,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 63047.8,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:815ce32cb366b7a9",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new period in which was a major empire of preoccupied with its early 20th century . By this time , a large numbers ",
+      "In the field of particle physics, the Standard Model describes the first time . The element is very close to be an apparent to a number of the same degree , whi",
+      "To prove that the square root of 2 is irrational, we assume , and is made to be a letter @-@ 000 . For example , the case , this may choose to the basis of the "
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint1-run1b/step_500.pt",
+      "prior_hash": "sha256:52c39553a42ba85d",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with a new period in which was a major empire of preoccupied with its early 20th century . By this time , a large numbers ",
+          "prior": "The history of the Roman Empire began with a new period in 1899 , and was considered to serve as part of its most famous for a number of the French . In additio"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the first time . The element is very close to be an apparent to a number of the same degree , whi",
+          "prior": "In the field of particle physics, the Standard Model describes the first time . The study by the first test was also published by a number of the United States "
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume , and is made to be a letter @-@ 000 . For example , the case , this may choose to the basis of the ",
+          "prior": "To prove that the square root of 2 is irrational, we assume , and if it may have been used for a simple if they are at risk of which may be a result in the indi"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      44.892,
+      71.178,
+      82.018,
+      85.197,
+      85.679,
+      83.903,
+      60.643,
+      57.11,
+      53.182,
+      49.35,
+      46.196,
+      43.57,
+      41.663,
+      39.066
+    ],
+    "layer_rms_norm": [
+      0.453,
+      0.537,
+      0.579,
+      0.604,
+      0.627,
+      0.654,
+      0.718,
+      0.736,
+      0.754,
+      0.773,
+      0.792,
+      0.808,
+      0.821,
+      0.852
+    ],
+    "mean_layer_kurtosis": 60.261,
+    "mean_layer_rms_norm": 0.693,
+    "max_layer_kurtosis": 85.679,
+    "max_layer_rms_norm": 0.852,
+    "_split_used": "wikitext_val"
+  }
+}
