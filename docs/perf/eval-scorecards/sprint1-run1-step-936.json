@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-run1/step_936.pt",
+  "checkpoint_name": "sprint1-run1-step-936",
+  "step": 936,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-06T18:08:59Z",
+  "eval_duration_s": 42.25,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 1.9835,
+    "gpt_small_val": 2.9374,
+    "stem_crawl_val": 3.6401,
+    "dolma_val": 3.2646,
+    "_raw_ce": {
+      "wikitext_val": 4.9495,
+      "gpt_small_val": 7.3297,
+      "stem_crawl_val": 9.0831,
+      "dolma_val": 8.1462
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.3,
+      "top_p": 0.85,
+      "top_k": 40
+    },
+    "distinct_2": 1.0,
+    "self_ppl": 13.171,
+    "avg_length": 43.2,
+    "sample_preview": "The history of the Roman Empire was an important role in England , and the first English Civil War .",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.9787,
+        "self_ppl": 11.361
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.85,
+        "top_k": 40,
+        "distinct_2": 1.0,
+        "self_ppl": 13.171
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.3,
+        "top_p": 0.85,
+        "top_k": 40,
+        "distinct_2": 1.0,
+        "self_ppl": 13.171
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49559.5,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 57924.3,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 63392.0,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:51a1f07fdfd3579a",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new period in 1668 , and was first in 1885 . In 1775 , the Roman Catholic Church , a member of a member of the Arch",
+      "In the field of particle physics, the Standard Model describes the first time . The element is a new function of the current ( or \" ) , and is made from the ori",
+      "To prove that the square root of 2 is irrational, we assume , and whether it is very strong enough for a lot of our way I have any evidence to do . \n<|endoftext"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint1-run1/step_500.pt",
+      "prior_hash": "sha256:2244759596d55df2",
+      "diff_count": 19,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with a new period in 1668 , and was first in 1885 . In 1775 , the Roman Catholic Church , a member of a member of the Arch",
+          "prior": "The history of the Roman Empire began with the English War in 1859 , and was considered to serve as part of the most famous for a number of the French Revolutio"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the first time . The element is a new function of the current ( or \" ) , and is made from the ori",
+          "prior": "In the field of particle physics, the Standard Model describes the first game . The original \" is used as a game that has a number of the game , which is also t"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume , and whether it is very strong enough for a lot of our way I have any evidence to do . \n<|endoftext",
+          "prior": "To prove that the square root of 2 is irrational, we assume , and whether it may have been used for a small numbers . For example , the first , this case , but "
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      1.84,
+      4.304,
+      8.139,
+      9.434,
+      10.299,
+      10.708,
+      7.11,
+      7.002,
+      6.593,
+      6.292,
+      6.098,
+      5.777,
+      5.396,
+      4.773
+    ],
+    "layer_rms_norm": [
+      0.139,
+      0.173,
+      0.197,
+      0.213,
+      0.229,
+      0.245,
+      0.285,
+      0.297,
+      0.31,
+      0.323,
+      0.336,
+      0.349,
+      0.361,
+      0.4
+    ],
+    "mean_layer_kurtosis": 6.697,
+    "mean_layer_rms_norm": 0.276,
+    "max_layer_kurtosis": 10.708,
+    "max_layer_rms_norm": 0.4,
+    "_split_used": "wikitext_val"
+  }
+}

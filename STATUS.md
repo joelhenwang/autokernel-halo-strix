@@ -5,6 +5,93 @@
 
 ---
 
+## Sprint 1 Phase 3: Run 1 Free-Wins Validation (2026-05-06)
+
+**Status:** Run 1 COMPLETE. Proper block=512 AdamW baseline running now.
+
+Run 1 config:
+  Model: OdinFlat (121.7M params), DDP over TB4
+  Dataset: wikitext-103-odin32k (122M tokens, 1 epoch)
+  Block: 512, batch=16, accum=8, eff_batch=256
+  LR: lr_2d=8e-4, lr_1d=3e-4 (IMU-1 two-group)
+  Features: intra-doc-mask ON, IMU-1 groups ON, LN scaling ON
+            (NorMuon, value-residuals, head-gating all OFF)
+  Optimizer steps: 936 (1 epoch at block=512; baseline was 1869 at block=256)
+
+Run 1 results:
+  Final loss:    4.7907
+  Throughput:    39,045 tok/s aggregate (0.17% cost vs 39,110 AdamW baseline)
+  Memory:        10.3 GB/node
+  Stability:     zero NaN, max grad norm < 2.0 throughout
+  Wall time:     52 min
+  Scorecard:     docs/perf/eval-scorecards/sprint1-run1-step-936.json
+    wikitext_val BPB:    1.9835
+    gpt_small_val BPB:   2.9374
+    stem_crawl_val BPB:  3.6401
+    dolma_val BPB:       3.2646
+    avg_bpb:             2.9564
+
+**Gate-decision concern:** Sprint 1 spec gate was "loss ≤ 4.30 (−3.8% vs
+4.47 baseline)". But the published 4.47 came from a block=256 / 1869-step
+training; Run 1 is block=512 / 936-step. This is half the optimizer
+updates for the same token budget. Comparison is apples-to-oranges.
+
+**Decision:** Launch matched-config AdamW block=512 baseline to
+establish proper Run 1 reference. Using the new baseline:
+  - If Run 1 free-wins ≤ baseline loss: free wins work → proceed to
+    Phase 4 LR probe + Phase 5 full recipe
+  - If Run 1 worse than baseline: investigate which free-win is
+    regressing (bisect: disable intra-doc-mask, then LN scaling)
+
+Also noted: when `--auto-eval` fires during a live DDP training run,
+the inference_profile.tok_s measurement is corrupted (GPU contention).
+Scorecards from auto-eval-during-training show tok_s_512 ≈ 12K instead
+of normal 58K. BPB values remain accurate. Document this in Sprint 2
+retrospective; future iterations should defer auto-eval to post-run
+or use dedicated eval machine.
+
+---
+
+## Sprint 1 Phase 2: NorMuon + Architectural Additions (2026-05-06)
+
+Commit: 75cd918
+
+Delivers IMU-1 Phase 2 features:
+  - halo_training/normuon.py — NorMuon optimizer (Muon + neuron-wise norm + Cautious WD)
+  - models/components/attention.py — value residual (v_res_scale) + per-head gating
+  - models/odin_flat.py — use_value_residuals, use_head_gating flags + v_prev threading
+  - scripts/train_ddp.py — three-flag model configuration
+
+Tests: 15/15 Phase 1 + 15/15 Phase 2 + 22/22 Sprint 2 = 52 green.
+
+Integration: 50-step DDP smoke with ALL features ON:
+  NorMuon(2D, n=52.5M, lr=0.005) + AdamW(1D, n=69.2M, lr=0.001)
+  use_intra_doc_mask + use_value_residuals + use_head_gating = ON
+  loss=9.25 (step 50 pre-warmup), tok/s=26,274, mem=10.1 GB
+
+NorMuon throughput cost ~34% at step 50 (pre-warmup); will measure
+steady-state in Phase 4 LR probe.
+
+---
+
+## Sprint 1 Phase 1: Free-Wins Infrastructure (2026-05-06)
+
+Commit: afd7dcb
+
+Delivers IMU-1 Phase 1 features:
+  - doc_ids in PreTokenizedDataset / BabyLMDataset (3-tuple return)
+  - split_params_2d_vs_1d + build_imu1_optimizer (AdamW two-group)
+  - LayerNorm scaling init (1/sqrt(layer_idx+1))
+  - Intra-document attention mask in NoPECodaAttention
+  - doc_ids plumbing through trainer/smoke/evaluate/streaming/train_ddp
+  - 8 new CLI flags (--intra-doc-mask, --imu1-groups, --lr-2d, --lr-1d,
+    --normuon, --value-residuals, --head-gating)
+
+Tests: 15 unit tests (scripts/test_sprint1_phase1.py); smoke test passes
+end-to-end with all flags; DDP 30-step smoke validates full integration.
+
+---
+
 ## Sprint 2: Evaluation Scorecard Infrastructure (2026-05-06)
 
 Per-checkpoint multi-dimensional scorecard shipped. Gate C → B CLEARED.
