@@ -115,7 +115,11 @@ def run_smoke_test(
             data_iter = iter(dataloader)
             batch = next(data_iter)
 
-        input_ids, targets = batch
+        # Sprint 1: datasets may yield 2-tuple (legacy) or 3-tuple with doc_ids
+        if len(batch) == 3:
+            input_ids, targets, _doc_ids = batch
+        else:
+            input_ids, targets = batch
         input_ids = input_ids.to(device)
         targets = targets.to(device)
 

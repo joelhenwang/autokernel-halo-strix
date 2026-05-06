@@ -1,10 +1,152 @@
 """Optimizer factory with DeepSpeed CPUAdam and COOKBOOK.md param groups."""
 
 import math
-from typing import List, Optional, Type
+from typing import List, Optional, Tuple, Type
 
 import torch
 import torch.nn as nn
+
+
+# ---------------------------------------------------------------------------
+# Sprint 1 (2026-05-06) — IMU-1 parameter grouping
+# ---------------------------------------------------------------------------
+#
+# Every parameter lands in exactly one of two groups:
+#
+#   Group A (2D weights):
+#     - Linear.weight (ndim >= 2) except embed/lm_head tied tensors
+#     - FactorizedEmbedding.projection.weight (post-embedding up-proj)
+#     -> NorMuon optimizer, lr_2d (default 0.0235), WD 0.1
+#
+#   Group B (1D / embedding / output head):
+#     - biases, LayerNorm gammas, scalar gates (*_scale, head_gate, v_res_scale)
+#     - FactorizedEmbedding.embed.weight (raw embedding table)
+#     - lm_head.* (tied to embed in FactorizedLMHead; counted once via id())
+#     -> AdamW, lr_1d (default 0.007), WD 0.0
+#
+# The IMU-1 paper validates this split for 430M models. We adopt it at 122M
+# on the hypothesis that scale-attenuation of the ~3.85% loss gain is partial,
+# not total. Sprint 1's Run 2 validates empirically.
+
+
+_1D_NAME_MARKERS = (
+    "_gate",        # head_gate, any scalar gate
+    "_scale",       # v_res_scale, q_scale, k_scale, z_scale, etc.
+    ".bias",        # biases (catches .bias even when sub-module)
+)
+
+
+def split_params_2d_vs_1d(
+    model: nn.Module,
+) -> Tuple[List[Tuple[str, torch.nn.Parameter]], List[Tuple[str, torch.nn.Parameter]]]:
+    """Partition model parameters into IMU-1's (2D-weights, 1D-and-embed) groups.
+
+    Returns a pair of ``[(name, param), ...]`` lists. Tied weights (e.g.
+    FactorizedLMHead tied to FactorizedEmbedding) appear exactly once:
+    the first name encountered in ``named_parameters()`` iteration order,
+    typically the embedding's.
+
+    Classification rules (applied in order):
+      1. Skip parameters with ``requires_grad=False``
+      2. Skip parameters whose id() we've already seen (tied-weight de-dup)
+      3. Group B (1D) if ANY of:
+         - ``p.ndim < 2`` (scalars, vectors — biases, LN gammas)
+         - name starts with ``"tok_embeddings.embed."`` (raw embed table)
+         - name starts with ``"lm_head."`` (only reached for untied heads;
+           FactorizedLMHead ties to embed so lm_head.weight shares id())
+         - name contains any of ``_1D_NAME_MARKERS``
+      4. Otherwise Group A (2D weights -> NorMuon)
+    """
+    group_2d: List[Tuple[str, torch.nn.Parameter]] = []
+    group_1d: List[Tuple[str, torch.nn.Parameter]] = []
+    seen_ids: set = set()
+
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if id(p) in seen_ids:
+            # Tied weight: already counted under its first name
+            continue
+        seen_ids.add(id(p))
+
+        is_1d = (
+            p.ndim < 2
+            or name.startswith("tok_embeddings.embed.")
+            or name.startswith("lm_head.")
+            or any(marker in name for marker in _1D_NAME_MARKERS)
+        )
+        (group_1d if is_1d else group_2d).append((name, p))
+
+    return group_2d, group_1d
+
+
+def build_imu1_optimizer(
+    model: nn.Module,
+    lr_2d: float = 0.0235,
+    lr_1d: float = 0.007,
+    weight_decay_2d: float = 0.1,
+    betas: Tuple[float, float] = (0.9, 0.95),
+    use_normuon: bool = False,
+) -> torch.optim.Optimizer:
+    """Sprint 1 entry point: build a two-group optimizer per IMU-1 recipe.
+
+    With ``use_normuon=False`` (default until Phase 2 ships NorMuon), both
+    groups go to fused AdamW with their respective LRs and WDs. This is the
+    "free wins" configuration — no-WD on embeddings + per-group LRs — that
+    Phase 1 validates independently of NorMuon.
+
+    With ``use_normuon=True`` (Phase 2+), the 2D group is routed to NorMuon
+    and the 1D group stays on AdamW no-WD.
+    """
+    group_2d, group_1d = split_params_2d_vs_1d(model)
+    n_2d = sum(p.numel() for _, p in group_2d)
+    n_1d = sum(p.numel() for _, p in group_1d)
+
+    if use_normuon:
+        # Phase 2+: NorMuon for 2D, AdamW for 1D.
+        # Import is lazy so Phase 1 code doesn't require the module to exist.
+        try:
+            from halo_training.normuon import NorMuon
+        except ImportError as exc:
+            raise RuntimeError(
+                "build_imu1_optimizer(use_normuon=True) requires "
+                "halo_training/normuon.py; this ships in Sprint 1 Phase 2."
+            ) from exc
+        opt = NorMuon(
+            muon_params=[{"params": [p for _, p in group_2d]}],
+            adamw_params=[
+                {"params": [p for _, p in group_1d], "lr": lr_1d, "weight_decay": 0.0},
+            ],
+            lr=lr_2d,
+            weight_decay=weight_decay_2d,
+            betas=betas,
+        )
+        print(f"IMU-1 optimizer: NorMuon(2D, n={n_2d:,}, lr={lr_2d}) "
+              f"+ AdamW(1D, n={n_1d:,}, lr={lr_1d}, wd=0)")
+        return opt
+
+    # Phase 1 default: AdamW for both groups, per-group LR/WD
+    opt = torch.optim.AdamW(
+        [
+            {
+                "params": [p for _, p in group_2d],
+                "lr": lr_2d,
+                "weight_decay": weight_decay_2d,
+            },
+            {
+                "params": [p for _, p in group_1d],
+                "lr": lr_1d,
+                "weight_decay": 0.0,
+            },
+        ],
+        lr=lr_2d,
+        betas=betas,
+        fused=True,
+    )
+    print(f"IMU-1 optimizer (Phase 1): AdamW two-group — "
+          f"2D(n={n_2d:,}, lr={lr_2d}, wd={weight_decay_2d}) + "
+          f"1D(n={n_1d:,}, lr={lr_1d}, wd=0)")
+    return opt
 
 
 def _patch_deepspeed():

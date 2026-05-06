@@ -149,12 +149,20 @@ class NoPECodaAttention(Attention):
 
     def forward(self, x: torch.Tensor,
                 depth_kvs: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
+                doc_mask: Optional[torch.Tensor] = None,
                 ) -> torch.Tensor:
         """No RoPE — pure content attention with QK-Norm.
 
         Args:
             x: (B, T, dim) input hidden states
             depth_kvs: optional MoDA depth KV pairs from prior iterations
+            doc_mask: optional ``[B, T, T]`` bool tensor where True = same
+                document. When provided AND no ``depth_kvs``, attention is
+                additionally masked to prevent cross-document attention
+                (Sprint 1, IMU-1 / SmolLM3 recipe).
+                Ignored when ``depth_kvs`` is active because the MoDA
+                prefix would need a separate "all True" prefix strip, not
+                worth the complexity at this scale.
         """
         B, T, _ = x.shape
         q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
@@ -182,7 +190,18 @@ class NoPECodaAttention(Attention):
             k = torch.cat(depth_k_list + [k], dim=2)
             v = torch.cat(depth_v_list + [v], dim=2)
 
-        if _HAS_HYBRID_ATTN and q.dtype == torch.float16 and not has_depth:
+        # Intra-document masking: intersect causal with doc_mask when provided.
+        # SDPA's fastest path (is_causal=True) doesn't take custom masks, so we
+        # fall through to the explicit-mask path when doc_mask is set.
+        use_explicit_mask = (doc_mask is not None) and not has_depth
+        if use_explicit_mask:
+            # Combine causal with doc boundary into a single bool mask:
+            # [B, 1, T, T] broadcast to heads. True = attend, False = -inf.
+            causal = torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
+            attn_mask = causal.unsqueeze(0) & doc_mask           # [B, T, T]
+            attn_mask = attn_mask.unsqueeze(1)                    # [B, 1, T, T]
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=False)
+        elif _HAS_HYBRID_ATTN and q.dtype == torch.float16 and not has_depth:
             try:
                 y = hybrid_flash_sdpa_attention(
                     q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True

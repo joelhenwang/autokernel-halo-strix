@@ -151,6 +151,32 @@ def compute_bpb(ce_loss: float) -> float:
     return (ce_loss / math.log(2)) / 3.6
 
 
+_DOC_IDS_SUPPORT_CACHE: dict = {}
+
+
+def _model_accepts_doc_ids(model) -> bool:
+    """Return True iff ``model.forward`` accepts a ``doc_ids`` kwarg.
+
+    Sprint 1: only OdinFlat currently accepts it; other halo variants ignore.
+    Cached per-module-type so introspection cost is amortized over training.
+    """
+    import inspect
+
+    core = model.module if hasattr(model, "module") else model
+    core = core._orig_mod if hasattr(core, "_orig_mod") else core
+    key = type(core)
+    cached = _DOC_IDS_SUPPORT_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        sig = inspect.signature(core.forward)
+        supported = "doc_ids" in sig.parameters
+    except (TypeError, ValueError):
+        supported = False
+    _DOC_IDS_SUPPORT_CACHE[key] = supported
+    return supported
+
+
 # ===========================================================================
 # Stability Guard: auto-recovery from NaN/loss spikes
 # ===========================================================================
@@ -393,6 +419,40 @@ def main():
     parser.add_argument("--auto-eval", action="store_true",
                         help="Spawn scripts/eval_checkpoint.py as detached subprocess "
                              "after each checkpoint save (Sprint 2 scorecard).")
+
+    # Sprint 1: IMU-1 foundation-wins flags. Defaults OFF during validation;
+    # Phase 6 flips them to ON after Run 2 gate passes.
+    parser.add_argument("--intra-doc-mask", dest="intra_doc_mask", action="store_true",
+                        help="Sprint 1: mask attention to intra-document boundaries "
+                             "(requires model with use_intra_doc_mask attr, e.g. OdinFlat)")
+    parser.add_argument("--no-intra-doc-mask", dest="intra_doc_mask", action="store_false",
+                        help="Disable intra-document attention masking.")
+    parser.set_defaults(intra_doc_mask=False)
+
+    parser.add_argument("--imu1-groups", dest="imu1_groups", action="store_true",
+                        help="Sprint 1: IMU-1 param grouping (2D -> lr_2d WD 0.1, "
+                             "1D/embed/lm_head -> lr_1d WD 0). Requires --no-muon "
+                             "and default optimizer path.")
+    parser.add_argument("--no-imu1-groups", dest="imu1_groups", action="store_false")
+    parser.set_defaults(imu1_groups=False)
+
+    parser.add_argument("--lr-2d", type=float, default=None,
+                        help="Sprint 1: LR for 2D matrix group (default 0.0235 for NorMuon).")
+    parser.add_argument("--lr-1d", type=float, default=None,
+                        help="Sprint 1: LR for 1D/embed/lm_head group (default 0.007).")
+    parser.add_argument("--normuon", dest="normuon", action="store_true",
+                        help="Sprint 1 Phase 2: use NorMuon optimizer for 2D group "
+                             "(requires halo_training/normuon.py).")
+    parser.add_argument("--no-normuon", dest="normuon", action="store_false")
+    parser.set_defaults(normuon=False)
+    parser.add_argument("--value-residuals", dest="value_residuals", action="store_true",
+                        help="Sprint 1 Phase 2: value residual from GQA layer 6 to 13.")
+    parser.add_argument("--no-value-residuals", dest="value_residuals", action="store_false")
+    parser.set_defaults(value_residuals=False)
+    parser.add_argument("--head-gating", dest="head_gating", action="store_true",
+                        help="Sprint 1 Phase 2: per-head sigmoid gate on attention output.")
+    parser.add_argument("--no-head-gating", dest="head_gating", action="store_false")
+    parser.set_defaults(head_gating=False)
     args = parser.parse_args()
 
     use_async = not args.no_async
@@ -413,6 +473,17 @@ def main():
     sys.path.insert(0, ".")
     model = load_model_from_file(args.model, args.class_name)
     model = model.to(device)
+
+    # Sprint 1: honor --intra-doc-mask by toggling model flag if supported.
+    # OdinFlat exposes `use_intra_doc_mask`; other models simply ignore.
+    if hasattr(model, "use_intra_doc_mask"):
+        model.use_intra_doc_mask = bool(args.intra_doc_mask)
+        if rank == 0:
+            status = "ON" if model.use_intra_doc_mask else "off"
+            print(f"[Sprint 1] intra-document attention masking: {status}")
+    elif args.intra_doc_mask and rank == 0:
+        print(f"[Sprint 1] WARNING: --intra-doc-mask requested but "
+              f"{type(model).__name__} does not expose use_intra_doc_mask; ignoring.")
 
     # autokernel BEFORE checkpoint load (checkpoint has fused QKV keys)
     if args.optimize_kernels:
@@ -476,10 +547,25 @@ def main():
         raw_model = raw_model.module
 
     if args.no_muon:
-        optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr,
-                                       betas=(0.9, 0.95), weight_decay=0.1, fused=True)
-        if rank == 0:
-            print(f"Using AdamW (lr={args.lr}, wd=0.1)")
+        if args.imu1_groups:
+            # Sprint 1: IMU-1 param grouping — 2D matrices vs 1D/embed/head
+            from halo_training.optimizer import build_imu1_optimizer
+            lr_2d = args.lr_2d if args.lr_2d is not None else args.lr
+            lr_1d = args.lr_1d if args.lr_1d is not None else args.lr * 0.3
+            optimizer = build_imu1_optimizer(
+                raw_model,
+                lr_2d=lr_2d,
+                lr_1d=lr_1d,
+                weight_decay_2d=0.1,
+                betas=(0.9, 0.95),
+                use_normuon=args.normuon,
+            )
+            # build_imu1_optimizer prints on rank 0 already; no duplicate log
+        else:
+            optimizer = torch.optim.AdamW(raw_model.parameters(), lr=args.lr,
+                                           betas=(0.9, 0.95), weight_decay=0.1, fused=True)
+            if rank == 0:
+                print(f"Using AdamW (lr={args.lr}, wd=0.1)")
     else:
         optimizer = build_muon_optimizer(raw_model, base_lr=args.lr, muon_lr=args.muon_lr)
     total_steps = len(dataloader) * args.epochs // args.accum_steps
@@ -545,7 +631,14 @@ def main():
             if _rollback_restart:
                 _rollback_restart = False
             sampler.set_epoch(epoch)
-            for batch_idx, (input_ids, targets) in enumerate(dataloader):
+            for batch_idx, batch in enumerate(dataloader):
+                # Dataloader yields (input_ids, targets, doc_ids) post-Sprint-1.
+                # Accept legacy 2-tuples as well, synthesizing zero doc_ids.
+                if len(batch) == 3:
+                    input_ids, targets, doc_ids = batch
+                else:
+                    input_ids, targets = batch
+                    doc_ids = None
                 if deadline and time.time() > deadline:
                     if rank == 0:
                         print(f"Time budget reached at step {global_step}")
@@ -557,12 +650,19 @@ def main():
 
                 input_ids = input_ids.to(device)
                 targets = targets.to(device)
+                if doc_ids is not None:
+                    doc_ids = doc_ids.to(device)
                 is_last_microstep = (batch_idx + 1) % args.accum_steps == 0
 
                 # All microsteps use no_sync — we do manual allreduce
                 with model.no_sync():
                     with torch.amp.autocast("cuda", dtype=torch.float16):
-                        output = model(input_ids, targets=targets)
+                        # Pass doc_ids only if the model accepts it. Backward-
+                        # compatible for models unaware of Sprint 1.
+                        if doc_ids is not None and _model_accepts_doc_ids(model):
+                            output = model(input_ids, targets=targets, doc_ids=doc_ids)
+                        else:
+                            output = model(input_ids, targets=targets)
                         if isinstance(output, torch.Tensor) and output.dim() == 0:
                             loss = output / args.accum_steps
                         elif isinstance(output, dict):

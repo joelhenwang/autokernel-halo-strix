@@ -1,4 +1,13 @@
-"""Data loading for BabyLM and other text datasets."""
+"""Data loading for BabyLM and other text datasets.
+
+Sprint 1 (2026-05-06) extension: every ``__getitem__`` now returns a
+3-tuple ``(input_ids, targets, doc_ids)`` where ``doc_ids`` is
+``cumsum(tokens == EOS)`` over the chunk. Trainers consuming this
+module must accept the 3-tuple shape; the helper ``build_dataloader``
+preserves default collation which handles the new tuple uniformly.
+Downstream models that do NOT want intra-doc masking simply ignore
+``doc_ids``; the overhead of computing it is ~1 microsecond per item.
+"""
 
 import os
 from pathlib import Path
@@ -7,6 +16,13 @@ from typing import Optional, Tuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
+
+
+#: EOS token for the odin-32k tokenizer. The custom 32K BPE trained for this
+#: project uses id=0 for ``<|endoftext|>`` (AGENTS.md "Data" section).
+#: Legacy gpt2 BPE uses 50256. We keep this as a module-level constant rather
+#: than a per-dataset arg because all current training uses odin-32k.
+DEFAULT_EOS_ID = 0
 
 
 class BabyLMDataset(Dataset):
@@ -162,7 +178,7 @@ class BabyLMDataset(Dataset):
             return self._n_chunks
         return len(self.tokens)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if getattr(self, '_uint16', False):
             start = idx * self._stride
             chunk = torch.from_numpy(self._mmap[start:start + self._stride].astype(np.int64))
@@ -170,7 +186,12 @@ class BabyLMDataset(Dataset):
             chunk = self.tokens[idx]
         x = chunk[:-1]
         y = chunk[1:]
-        return x, y
+        # Sprint 1: doc_ids via cumsum over EOS boundaries on the input chunk.
+        # Increments AT the EOS token so the EOS still shares a doc_id with the
+        # preceding text; downstream mask treats the NEW document as starting
+        # one position after the EOS.
+        doc_ids = (x == DEFAULT_EOS_ID).cumsum(dim=0).to(torch.int32)
+        return x, y, doc_ids
 
 
 class PreTokenizedDataset(Dataset):
@@ -189,7 +210,11 @@ class PreTokenizedDataset(Dataset):
     def __getitem__(self, idx):
         start = idx * self.stride
         chunk = torch.from_numpy(self.data[start:start + self.stride].astype(np.int64))
-        return chunk[:-1], chunk[1:]
+        x = chunk[:-1]
+        y = chunk[1:]
+        # Sprint 1: doc_ids via cumsum over EOS boundaries (odin-32k EOS=0).
+        doc_ids = (x == DEFAULT_EOS_ID).cumsum(dim=0).to(torch.int32)
+        return x, y, doc_ids
 
 
 def build_dataloader(
@@ -198,7 +223,12 @@ def build_dataloader(
     num_workers: int = 4,
     shuffle: bool = True,
 ) -> DataLoader:
-    """Create a DataLoader with sensible defaults for training."""
+    """Create a DataLoader with sensible defaults for training.
+
+    Datasets are expected to yield 3-tuples ``(input_ids, targets, doc_ids)``.
+    The default collate_fn stacks each element independently, which handles
+    both 2-tuple and 3-tuple returns transparently.
+    """
     return DataLoader(
         dataset,
         batch_size=batch_size,

@@ -49,8 +49,13 @@ class NoPEGQABlock(nn.Module):
         self.ffn_norm = RMSNorm(d_model)
         self.ffn = SwiGLU(d_model, ffn_inner)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.pre_norm(x))
+    def forward(self, x: torch.Tensor, doc_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Forward with optional intra-document mask.
+
+        Sprint 1: ``doc_mask`` is a [B, T, T] bool tensor (True = same doc).
+        When provided, attention is additionally masked to the doc boundary.
+        """
+        x = x + self.attn(self.pre_norm(x), doc_mask=doc_mask)
         x = x + self.ffn(self.ffn_norm(x))
         return x
 
@@ -91,12 +96,17 @@ class OdinFlatBase(nn.Module):
         use_xsa: bool = True,
         use_softcap: bool = True,
         use_chunked_ce: bool = False,
+        use_intra_doc_mask: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
         self.vocab_size = vocab_size
         self.use_softcap = use_softcap
         self.use_chunked_ce = use_chunked_ce
+        #: Sprint 1: when True, ``forward`` applies intra-document attention
+        #: masking if ``doc_ids`` are passed. Default False for backward
+        #: compatibility; Phase 6 flips default to True after validation.
+        self.use_intra_doc_mask = use_intra_doc_mask
         self.logit_softcap = 30.0 if use_softcap else 0.0
         self.head_dim = d_model // n_heads
 
@@ -140,14 +150,41 @@ class OdinFlatBase(nn.Module):
             elif p.dim() == 1 and "bias" in name:
                 nn.init.zeros_(p)
 
-    def forward(self, input_ids: torch.Tensor, targets: Optional[torch.Tensor] = None):
+        # Sprint 1 (IMU-1): scale each layer's RMSNorm gamma by 1/sqrt(layer_idx+1).
+        # Deeper layers get smaller gamma at init -> prevents runaway amplification
+        # down the residual stream. Init-only change — a loaded checkpoint's
+        # values take precedence, so this does not break backward compatibility.
+        from models._components import RMSNorm
+        for layer_idx, layer in enumerate(self.layers):
+            scale = 1.0 / math.sqrt(layer_idx + 1)
+            for submodule in layer.modules():
+                if isinstance(submodule, RMSNorm):
+                    with torch.no_grad():
+                        submodule.weight.data.mul_(scale)
+
+    def forward(self, input_ids: torch.Tensor,
+                targets: Optional[torch.Tensor] = None,
+                doc_ids: Optional[torch.Tensor] = None):
+        """Forward pass.
+
+        Sprint 1 additions:
+            doc_ids: optional ``[B, T] int32`` document IDs. When provided
+              AND ``self.use_intra_doc_mask`` is True, attention is masked
+              so tokens only attend within their document. Ignored otherwise.
+        """
         B, T = input_ids.shape
         h = self.tok_embeddings(input_ids)
         freqs_cis = torch.polar(self.freqs_cos[:T].float(), self.freqs_sin[:T].float())
 
+        # Build doc_mask once per forward pass (cheap [B, T, T] bool).
+        # Shared across all attention layers in this forward.
+        doc_mask = None
+        if self.use_intra_doc_mask and doc_ids is not None:
+            doc_mask = (doc_ids[:, :, None] == doc_ids[:, None, :])
+
         for layer, is_gqa in zip(self.layers, self._is_gqa):
             if is_gqa:
-                h = layer(h)
+                h = layer(h, doc_mask=doc_mask)
             else:
                 h = layer(h, freqs_cis)
 
