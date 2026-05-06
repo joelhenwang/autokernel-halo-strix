@@ -339,7 +339,7 @@ def main():
     parser.add_argument("--lr", type=float, default=0.0012)
     parser.add_argument("--muon-lr", type=float, default=0.005)
     parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--block-size", type=int, default=256)
+    parser.add_argument("--block-size", type=int, default=512)
     parser.add_argument("--accum-steps", type=int, default=8)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--compile", action="store_true")
@@ -352,7 +352,7 @@ def main():
     parser.add_argument("--no-fp16-compress", action="store_true", help="Disable fp16 grad compression")
     parser.add_argument("--no-muon", action="store_true", help="Use AdamW instead of Muon")
     parser.add_argument("--warmup-steps", type=int, default=300, help="LR warmup steps")
-    parser.add_argument("--num-workers", type=int, default=4, help="DataLoader worker processes")
+    parser.add_argument("--num-workers", type=int, default=12, help="DataLoader worker processes")
     args = parser.parse_args()
 
     use_async = not args.no_async

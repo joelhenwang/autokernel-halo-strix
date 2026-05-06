@@ -1,0 +1,9 @@
+[
+  {"name": "s1_nw04",     "block_size": 256, "batch_size": 16, "accum_steps":  8, "num_workers":  4, "max_steps": 100},
+  {"name": "s1_nw08",     "block_size": 256, "batch_size": 16, "accum_steps":  8, "num_workers":  8, "max_steps": 100},
+  {"name": "s1_nw12",     "block_size": 256, "batch_size": 16, "accum_steps":  8, "num_workers": 12, "max_steps": 100},
+  {"name": "s1_nw14",     "block_size": 256, "batch_size": 16, "accum_steps":  8, "num_workers": 14, "max_steps": 100},
+  {"name": "s3_blk0256",  "block_size":  256, "batch_size": 16, "accum_steps":  8, "num_workers": 12, "max_steps": 100},
+  {"name": "s3_blk0512",  "block_size":  512, "batch_size": 16, "accum_steps":  8, "num_workers": 12, "max_steps": 100},
+  {"name": "s3_blk1024",  "block_size": 1024, "batch_size": 16, "accum_steps":  8, "num_workers": 12, "max_steps": 100}
+]

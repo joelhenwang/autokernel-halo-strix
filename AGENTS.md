@@ -96,6 +96,36 @@ New models: import from `from models.components import X`, never from other mode
 - Logit softcap=30: stability in fp16 looped models.
 - **`max-autotune` crashes with `accum_steps > 1`** (CUDA graph buffer overwrite). Use `max-autotune-no-cudagraphs` for any training with gradient accumulation. Same Triton autotuning benefit, no graph capture attempt.
 
+## DDP training defaults (Strix Halo + TB4)
+
+Empirically tuned via 19-config sweep on 2026-05-06. See `docs/perf/ddp-sweep-2026-05-06.md`.
+
+**Current defaults (measured winners):**
+
+| Knob | Default | Why |
+|---|---|---|
+| `block_size` | **512** | +4% throughput vs 256 (sweet spot; 1024 regresses) |
+| `batch_size` | 16 | GPU saturates near batch=16; batch=32 gains +5% but doubles memory |
+| `accum_steps` | 8 | Effective batch=128 seqs single-node / 256 DDP; accum has marginal throughput effect at single-node but amortizes allreduce in DDP |
+| `num_workers` | **12** | DataLoader is not the bottleneck (4–14 all equivalent); 12 codified for consistency |
+| `warmup_steps` | 300 | Safe for typical 1k–10k step runs |
+| `max_grad_norm` | 1.0 | Standard; tighten to 0.5–0.8 for resumed training |
+
+**Context-dependent overrides (via `launch_ddp.sh` env vars):**
+
+| Scenario | Override |
+|---|---|
+| Max throughput, memory rich | `BATCH=32 ACCUM=8` (+5%, ~10 GB/node) |
+| Longer context | `BLOCK=1024` (−3%, ~17 GB/node) |
+| Smoother gradients | `ACCUM=16` or `32` (larger eff_batch) |
+| Memory-constrained | `BLOCK=256 BATCH=8` (~4 GB/node) |
+| Resumed training | `LR=6e-4 MAX_GRAD_NORM=0.8 WARMUP_STEPS=500` |
+
+**Noise floor:** ±0.4% single-node. Throughput differences <3% are likely noise,
+not signal. Re-measure multi-seed if a knob seems to matter by <5%.
+
+**Measured on:** gfx1151 / ROCm 7.12 / gloo over thunderbolt0. Other backends may differ.
+
 ## CE + chunked-CE stack (2026-05-05)
 
 - `kernel.py` has **online-softmax fused CE** with `softcap`/`z_loss`/`label_smoothing`/`ignore_index` baked in. Call via `kernel.ce_full(logits, targets, mode="tiny"|"fused")`. `mode="tiny"` wins at small batch (prod scale), `mode="fused"` for isolated benchmarks.

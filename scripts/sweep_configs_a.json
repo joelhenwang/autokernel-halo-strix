@@ -1,0 +1,14 @@
+[
+  {"name": "s2_b08_a04",  "block_size": 256, "batch_size":  8, "accum_steps":  4, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b08_a08",  "block_size": 256, "batch_size":  8, "accum_steps":  8, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b08_a16",  "block_size": 256, "batch_size":  8, "accum_steps": 16, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b08_a32",  "block_size": 256, "batch_size":  8, "accum_steps": 32, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b16_a04",  "block_size": 256, "batch_size": 16, "accum_steps":  4, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b16_a08",  "block_size": 256, "batch_size": 16, "accum_steps":  8, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b16_a16",  "block_size": 256, "batch_size": 16, "accum_steps": 16, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b16_a32",  "block_size": 256, "batch_size": 16, "accum_steps": 32, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b32_a04",  "block_size": 256, "batch_size": 32, "accum_steps":  4, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b32_a08",  "block_size": 256, "batch_size": 32, "accum_steps":  8, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b32_a16",  "block_size": 256, "batch_size": 32, "accum_steps": 16, "num_workers": 12, "max_steps": 100},
+  {"name": "s2_b32_a32",  "block_size": 256, "batch_size": 32, "accum_steps": 32, "num_workers": 12, "max_steps": 100}
+]

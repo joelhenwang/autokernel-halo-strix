@@ -477,6 +477,55 @@ surpass due to its implicit regularization.
 Checkpoints at steps 500, 1000, 1500, 1869 saved under
 `checkpoints/odin-halo-wikitext-ddp/` (691 MB each).
 
+---
+
+## DDP Config Sweep (2026-05-06)
+
+Full sweep report: `docs/perf/ddp-sweep-2026-05-06.md`.
+Raw data: `docs/perf/ddp-sweep-{a,b}-2026-05-06.jsonl`.
+
+### Headline findings
+
+| Sweep | Finding |
+|-------|---------|
+| **num_workers** ∈ {4, 8, 12, 14} | **Flat** — 19,585–19,664 tok/s (±0.4%). Dataloader is not the bottleneck. |
+| **batch × accum** (12-config cartesian) | **batch dominates** (+17% from 8→32); accum marginal (+3%). Best: batch=32 (9.8 GB). |
+| **block_size** ∈ {256, 512, 1024} | **block=512 wins +4%** (20,408 vs 19,599 at 256, 19,779 at 1024). |
+
+### Default changes committed
+
+- `launch_ddp.sh`: `BLOCK=256 → 512`, `NUM_WORKERS=4 → 12`
+- `train_ddp.py` argparse: `--block-size` default 256 → 512, `--num-workers` default 4 → 12
+- All other defaults unchanged (batch=16, accum=8, warmup=300, max_grad_norm=1.0)
+
+### Context-dependent overrides documented in AGENTS.md
+
+| Scenario | Override |
+|---|---|
+| Max throughput, memory rich | `BATCH=32 ACCUM=8` |
+| Longer context | `BLOCK=1024` |
+| Smoother gradients | `ACCUM=16` or `32` |
+| Memory-constrained | `BLOCK=256 BATCH=8` |
+| Resumed training | `LR=6e-4 MAX_GRAD_NORM=0.8 WARMUP_STEPS=500` |
+
+### Key artifacts
+
+- `scripts/sweep_runner.py` — reusable single-node sweep harness
+- `scripts/sweep_configs_a.json`, `scripts/sweep_configs_b.json` — config lists
+
+### Methodology
+
+- Parallel sweeps: Machine A (12 configs, 76 min) + Machine B (7 configs, 37 min).
+  Machine A had the batch × accum cartesian (heavier workload per config);
+  Machine B had num_workers + block_size (lighter but slower for block=1024).
+- Single-node measurements (halo_training CLI, not DDP). Does not capture
+  allreduce effects; DDP should see equal-or-greater accum_steps benefit.
+- 100 steps/config with `TORCH_COMPILE_MODE=max-autotune-no-cudagraphs`.
+  Measurement window: steps 30–100 (8 log_interval=10 samples).
+- Model: OdinFlat. Dataset: wikitext-103-odin32k.bin.
+
+---
+
 ### Important: max-autotune vs max-autotune-no-cudagraphs
 
 `max-autotune` crashes during trainer backward pass with gradient accumulation

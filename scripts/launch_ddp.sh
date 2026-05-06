@@ -29,13 +29,13 @@ CLASS="${CLASS:-OdinFlat}"
 DATASET="${DATASET:-datasets/wikitext-103-odin32k.bin}"
 CKPT_DIR="${CKPT_DIR:-checkpoints/odin-flat-wikitext-ddp}"
 EPOCHS="${EPOCHS:-1}"
-BLOCK="${BLOCK:-256}"
+BLOCK="${BLOCK:-512}"              # was 256; sweep 2026-05-06 showed +4% at block=512
 BATCH="${BATCH:-16}"
 ACCUM="${ACCUM:-8}"
 LR="${LR:-8e-4}"
 WARMUP_STEPS="${WARMUP_STEPS:-300}"
 CHECKPOINT_INTERVAL="${CHECKPOINT_INTERVAL:-500}"
-NUM_WORKERS="${NUM_WORKERS:-4}"
+NUM_WORKERS="${NUM_WORKERS:-12}"   # was 4; sweep showed flat across {4,8,12,14}, std on 12
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
 
 mkdir -p "$CKPT_DIR"
