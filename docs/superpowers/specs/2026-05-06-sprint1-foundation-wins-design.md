@@ -20,18 +20,20 @@ recent small-LM literature, adopted with appropriate adaptations for our
 
 ## 2. Roadmap context
 
-Sprint 1 is the first of four tracks in the A → C → B → D quarterly roadmap:
+Sprint 1 is the first of four tracks in the A → C → B → D quarterly roadmap.
+Per the 2026-05-06 re-sequencing decision, execution order is Sprint 2 (C)
+first (for measurement infrastructure), then Sprint 1 (A).
 
-- **Sprint 1 (A):** Foundation wins (this spec)
-- Sprint 2 (C): Evaluation scorecard infrastructure
+- Sprint 2 (C): **Evaluation scorecard infrastructure — COMPLETE** (commits 413b4a6 + 867d979)
+- **Sprint 1 (A): Foundation wins (this spec)** ← you are here
 - Sprint 3 (B): T²-optimal pretraining on dolma-10b (6.9B tokens, ~57× ratio)
 - Sprint 4 (D): Post-training pipeline (SFT → ORPO → optional F-GRPO/Scaf-GRPO)
 
-Sprint 1 delivers the recipe that Sprints 3 and 4 depend on: every downstream
-training run benefits from the ~4-5% loss improvement baked in here.
+Sprint 2 is the measurement harness Sprint 1 validates against. Every
+downstream training run benefits from the ~4-5% loss improvement baked in here.
 
-**Gate to Sprint 2 (A → C):** Sprint 1 success criteria (§6) must be met
-before Sprint 2 begins. If gate fails, re-plan Sprint 1.
+**Gate to Sprint 3 (A → B):** Sprint 1 success criteria (§6) must be met
+before Sprint 3 begins. If gate fails, re-plan Sprint 1.
 
 ## 3. Scope
 
@@ -114,7 +116,7 @@ bug is in NorMuon or architectural additions, not the grouping itself.
 | `halo_training/data.py` | Build `doc_ids` tensor in `PreTokenizedDataset.__getitem__` | +15 |
 | `halo_training/trainer.py` | Thread `doc_ids` through to model; param-group optimizer | +30 |
 | `scripts/train_ddp.py` | Mirror trainer changes + CLI args | +30 |
-| `scripts/launch_ddp.sh` | Add `EXTRA_FLAGS` env var pass-through (1-line flag append on both ranks) | +3 |
+| `scripts/launch_ddp.sh` | No change — `EXTRA_FLAGS` already lands via Sprint 2 (commit 413b4a6) | +0 |
 | `models/_components.py` | RMSNorm init supports depth-scaled γ (layer index hint) | +10 |
 | `models/components/attention.py` | `NoPECodaAttention.forward` adds `v_prev`, `head_gate`, `doc_mask` | +40 |
 | `models/components/conv_blocks.py` | `HyPEShortConvBlock` accepts/ignores threading params | +15 |
@@ -347,10 +349,23 @@ wikitext block=512, 1 epoch, DDP):
 | Criterion | Target | Measured how |
 |-----------|--------|--------------|
 | **Final loss** | ≤ **4.30** (−3.8% vs 4.47 baseline) | Last `[step]` log line in `rank0.log` |
+| **wikitext_val BPB** | ≤ **1.73** (−3.8% vs 1.80 baseline from Sprint 2 scorecard) | Auto-eval scorecard at run completion |
 | **Stability** | Zero NaN steps AND max grad norm < 10 throughout | StabilityGuard counter + grad_norm log |
-| **Throughput cost** | ≤ **7% aggregate tok/s reduction** vs AdamW baseline (~39K → ≥ 36K tok/s) | Steady-state tok/s (steps 200+) |
-| **Memory cost** | ≤ **15% per-node increase** (~6.6 GB → ≤ 7.6 GB) | Per-step `mem=...GB` log |
+| **Throughput cost** | ≤ **7% aggregate tok/s reduction** vs AdamW baseline (~39.8K → ≥ 37K tok/s) | Steady-state tok/s (steps 200+) |
+| **Memory cost** | ≤ **15% per-node increase** (~10.3 GB → ≤ **11.9 GB**) | Per-step `mem=...GB` log |
 | **Fallback works** | `--no-normuon` still trains to AdamW baseline parity | Manual smoke |
+| **Scorecard shipped** | Run 2 scorecard JSON produced and comparable to `odin-flat-wikitext-ddp-step-1869` baseline | Run with `EXTRA_FLAGS='... --auto-eval'` |
+
+**Baseline references (from Sprint 2 retroactive scorecards):**
+- `docs/perf/eval-scorecards/odin-flat-wikitext-ddp-step-1869.json` — OdinFlat 1-epoch AdamW on wikitext
+  - wikitext_val BPB: 1.80
+  - distinct_2: 0.765
+  - tok_s_seq512_bs1: ~59,100
+  - peak_mem_gb_seq512: 0.432
+
+Sprint 1's new Run 2 scorecard should be directly comparable to this baseline.
+Memory **during training** (not inference) is what the `≤ 11.9 GB` budget refers
+to; inference peak_mem (0.43 GB) is a separate measurement.
 
 ### Failure-response table
 

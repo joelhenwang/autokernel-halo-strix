@@ -232,20 +232,25 @@ if args.normuon:
 
 **Rollback:** Remove flags; trainer uses defaults.
 
-### Task 1.9 — `launch_ddp.sh` `EXTRA_FLAGS` support
+### Task 1.9 — `launch_ddp.sh` `EXTRA_FLAGS` support — ALREADY COMPLETE
 
-**File:** `scripts/launch_ddp.sh`
-**Change:** After the final `torchrun` arg list on each rank, append `$EXTRA_FLAGS` (1 line per rank).
+**Status:** Landed in Sprint 2 commit 413b4a6. `scripts/launch_ddp.sh` already
+reads `EXTRA_FLAGS` env var and appends to both torchrun invocations. No work
+needed for Sprint 1.
 
-**Exit criterion:** `EXTRA_FLAGS="--max-steps 10" bash scripts/launch_ddp.sh` runs 10 steps and exits cleanly.
-
-**Test:** None (manual).
-
-**Rollback:** Remove the `$EXTRA_FLAGS` append; backward-compatible (flag absent = no extra args).
+**Verification:** `EXTRA_FLAGS="--max-steps 10" bash scripts/launch_ddp.sh`
+already runs 10 steps and exits cleanly (verified during Sprint 2 Phase 5
+smoke test).
 
 ### Phase 1 exit gate
 
-All 9 tasks complete. All unit tests pass. Smoke test runs to completion with all new flags either absent (matches baseline) or set to `--no-*` (matches baseline).
+All 9 tasks complete (Task 1.9 inherited from Sprint 2). All unit tests pass.
+Smoke test runs to completion with all new flags either absent (matches
+baseline) or set to `--no-*` (matches baseline).
+
+**Test file convention:** All new tests live in `scripts/test_*.py` to match
+the existing repo pattern. The plan originally referenced `tests/*.py`; that
+directory does not exist and we're not creating it.
 
 ---
 
@@ -506,7 +511,7 @@ Each run is ~7 min (200 steps at ~40K tok/s); total ~25 min for three runs plus 
 
 ## Phase 5 — Run 2 validation (~1 hour compute)
 
-### Task 5.1 — Launch Run 2 with full recipe
+### Task 5.1 — Launch Run 2 with full recipe (with --auto-eval)
 
 **Command:**
 ```bash
@@ -516,18 +521,24 @@ bash run_remote.sh "cd ~/Desktop/ai_lab/autokernel-halo-strix && \
   CKPT_DIR=checkpoints/sprint1-run2 \
   EPOCHS=1 \
   EXTRA_FLAGS='--normuon --lr-2d <PROBE_WINNER> --lr-1d 0.007 \
-              --intra-doc-mask --value-residuals --head-gating' \
+              --intra-doc-mask --value-residuals --head-gating --auto-eval' \
   bash scripts/launch_ddp.sh"
 ```
 
+`--auto-eval` (Sprint 2 feature) fires the scorecard in a detached subprocess
+after every checkpoint save. The final step_1869 checkpoint auto-produces a
+scorecard comparable to `docs/perf/eval-scorecards/odin-flat-wikitext-ddp-step-1869.json`.
+
 **Exit criterion:** Run completes 1 epoch.
 
-**Gate (A → C, proceed to Phase 6):**
-- Final loss ≤ 4.30
+**Gate (A → B, proceed to Phase 6):**
+- Final loss ≤ 4.30 (from rank0.log)
+- Run 2 wikitext_val BPB ≤ 1.73 (from auto-eval scorecard, ~3.8% below 1.80 baseline)
 - Zero NaN, max grad norm < 10
-- Throughput ≥ 36K tok/s
-- Memory ≤ 7.6 GB/node
+- Throughput ≥ 37K tok/s
+- Memory ≤ 11.9 GB/node (15% above current 10.3 GB)
 - `--no-normuon` fallback still trains to AdamW baseline parity
+- `docs/perf/eval-scorecards/sprint1-run2-step-1869.json` exists and parseable
 
 **Gate failure response per §6 table in design doc.**
 
@@ -649,8 +660,15 @@ Plan: docs/superpowers/plans/2026-05-06-sprint1-foundation-wins-plan.md
 ## Handoff after Sprint 1
 
 Sprint 1 completion unlocks:
-- **Sprint 2** (Track C): Evaluation scorecard — can use the upgraded checkpoint as its first measurement target
-- **Sprint 3** (Track B): T²-optimal dolma training — uses the Sprint 1 recipe as its default
+- **Sprint 3** (Track B): T²-optimal dolma training uses the Sprint 1 recipe
+  as its default, with `--auto-eval` enabled for per-checkpoint visibility
+  during the ~50-hour run
+- **Sprint 1.5** (conditional): SPECTRA + μP transfer study consumes the
+  scorecard to measure probe vs main-model parity
+
+Sprint 2 (evaluation scorecard) was completed BEFORE Sprint 1 per the
+2026-05-06 re-sequencing decision; Sprint 1 validates its recipe against
+the Sprint 2 scorecard baselines.
 
 The Sprint 1 design doc and this implementation plan become the reference
 for anyone asking "what's in our training stack?" — they capture the full
