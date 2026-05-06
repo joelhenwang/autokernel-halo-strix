@@ -474,16 +474,26 @@ def main():
     model = load_model_from_file(args.model, args.class_name)
     model = model.to(device)
 
-    # Sprint 1: honor --intra-doc-mask by toggling model flag if supported.
-    # OdinFlat exposes `use_intra_doc_mask`; other models simply ignore.
-    if hasattr(model, "use_intra_doc_mask"):
-        model.use_intra_doc_mask = bool(args.intra_doc_mask)
-        if rank == 0:
-            status = "ON" if model.use_intra_doc_mask else "off"
-            print(f"[Sprint 1] intra-document attention masking: {status}")
-    elif args.intra_doc_mask and rank == 0:
-        print(f"[Sprint 1] WARNING: --intra-doc-mask requested but "
-              f"{type(model).__name__} does not expose use_intra_doc_mask; ignoring.")
+    # Sprint 1: honor --intra-doc-mask / --value-residuals / --head-gating by
+    # toggling model flags if supported. OdinFlat exposes all three; other
+    # models simply ignore.
+    sprint1_flag_map = {
+        "use_intra_doc_mask": bool(args.intra_doc_mask),
+        "use_value_residuals": bool(args.value_residuals),
+        "use_head_gating": bool(args.head_gating),
+    }
+    any_supported = False
+    for attr, value in sprint1_flag_map.items():
+        if hasattr(model, attr):
+            setattr(model, attr, value)
+            any_supported = True
+    if rank == 0 and any_supported:
+        flags_state = {k: ("ON" if v else "off") for k, v in sprint1_flag_map.items()
+                       if hasattr(model, k)}
+        print(f"[Sprint 1] feature flags on {type(model).__name__}: {flags_state}")
+    elif rank == 0 and any(sprint1_flag_map.values()):
+        print(f"[Sprint 1] WARNING: feature flags requested but "
+              f"{type(model).__name__} does not expose any; all ignored.")
 
     # autokernel BEFORE checkpoint load (checkpoint has fused QKV keys)
     if args.optimize_kernels:

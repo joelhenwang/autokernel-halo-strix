@@ -205,10 +205,15 @@ class Imu1OptimizerTests(unittest.TestCase):
         self.assertAlmostEqual(g2d["weight_decay"], 0.1)
         self.assertAlmostEqual(g1d["weight_decay"], 0.0)
 
-    def test_normuon_not_ready_raises(self):
-        """Phase 1: normuon.py does not exist yet; use_normuon=True raises."""
-        with self.assertRaises(RuntimeError):
-            build_imu1_optimizer(self.model, use_normuon=True)
+    def test_normuon_path_returns_optimizer(self):
+        """Phase 2+: use_normuon=True returns a NorMuon optimizer."""
+        from halo_training.normuon import NorMuon
+
+        opt = build_imu1_optimizer(
+            self.model, lr_2d=0.01, lr_1d=0.003, use_normuon=True,
+        )
+        self.assertIsInstance(opt, NorMuon)
+        self.assertEqual(len(opt.param_groups), 2)
 
 
 # ---------------------------------------------------------------------------

@@ -140,29 +140,64 @@ class NoPECodaAttention(Attention):
     exploding logits without the positional anchor that RoPE provides.
 
     Supports XSA (exclusive self-attention) and MoDA depth KVs.
+
+    Sprint 1 (2026-05-06) additions
+    -------------------------------
+    * ``v_res_scale``: scalar nn.Parameter (init 0.0). When a caller passes
+      ``v_prev``, the attention computes ``v = v + v_res_scale * v_prev``.
+      With init 0, behavior matches pre-Sprint-1 until the model learns a
+      non-zero scale. Carries value information from an earlier GQA layer
+      forward through the stack (IMU-1 recipe; paper validates at 430M).
+    * ``head_gate``: per-head nn.Parameter of shape ``[n_heads]`` (init 1.0;
+      ``sigmoid(1.0) ≈ 0.731`` is the effective open fraction at init).
+      Applied as ``attn_out = attn_out * sigmoid(head_gate)`` so the model
+      can learn to partially close individual heads.
+
+    Both additions are always constructed but only have effect when the
+    caller opts in (``v_prev=not None`` enables value residual;
+    ``head_gate_active=True`` enables head gating). This keeps param
+    loading / checkpoint compatibility straightforward — existing
+    checkpoints without these tensors fail strict loading but pass the
+    Sprint 1 loader's ``strict=False`` with init-values.
     """
 
     def __init__(self, dim: int, n_heads: int, n_kv_heads: int,
                  exclusive: bool = False):
         super().__init__(dim, n_heads, n_kv_heads, qk_norm=True)
         self.exclusive = exclusive
+        # Sprint 1: value residual scalar (init 0 so off-by-default behavior
+        # matches pre-Sprint-1 until training learns to use v_prev)
+        self.v_res_scale = nn.Parameter(torch.zeros(1))
+        # Sprint 1: per-head gating. Init 1.0 -> sigmoid(1.0) ~ 0.731.
+        self.head_gate = nn.Parameter(torch.ones(n_heads))
 
     def forward(self, x: torch.Tensor,
                 depth_kvs: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
                 doc_mask: Optional[torch.Tensor] = None,
-                ) -> torch.Tensor:
+                v_prev: Optional[torch.Tensor] = None,
+                head_gate_active: bool = False,
+                return_v: bool = False,
+                ):
         """No RoPE — pure content attention with QK-Norm.
 
         Args:
             x: (B, T, dim) input hidden states
             depth_kvs: optional MoDA depth KV pairs from prior iterations
-            doc_mask: optional ``[B, T, T]`` bool tensor where True = same
-                document. When provided AND no ``depth_kvs``, attention is
-                additionally masked to prevent cross-document attention
-                (Sprint 1, IMU-1 / SmolLM3 recipe).
-                Ignored when ``depth_kvs`` is active because the MoDA
-                prefix would need a separate "all True" prefix strip, not
-                worth the complexity at this scale.
+            doc_mask: ``[B, T, T]`` bool, True = same document. Sprint 1.
+            v_prev: ``[B, n_kv_heads, T, head_dim]`` value tensor from a
+                prior GQA layer. When provided, adds
+                ``v_res_scale * v_prev`` into this layer's V before
+                attention. Sprint 1 value-residual.
+            head_gate_active: when True, multiplies attention output by
+                ``sigmoid(head_gate).view(1, n_heads, 1, 1)``. Sprint 1.
+            return_v: when True, also returns the pre-residual V tensor
+                (so the next GQA layer can use it as v_prev). Default
+                False preserves the pre-Sprint-1 1-output calling convention.
+
+        Returns:
+            out: (B, T, dim) attention output
+            If ``return_v=True``, returns ``(out, v_raw)`` where v_raw is
+            the pre-residual [B, n_kv_heads, T, head_dim] V tensor.
         """
         B, T, _ = x.shape
         q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
@@ -170,6 +205,13 @@ class NoPECodaAttention(Attention):
         v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
 
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+
+        # Sprint 1: save pre-residual V so downstream can consume it as v_prev
+        v_raw = v
+
+        # Sprint 1 value residual: mix v_prev into v under learned scale
+        if v_prev is not None:
+            v = v + self.v_res_scale * v_prev
 
         q = F.normalize(q, dim=-1) * self.q_scale
         k = F.normalize(k, dim=-1) * self.k_scale
@@ -195,8 +237,6 @@ class NoPECodaAttention(Attention):
         # fall through to the explicit-mask path when doc_mask is set.
         use_explicit_mask = (doc_mask is not None) and not has_depth
         if use_explicit_mask:
-            # Combine causal with doc boundary into a single bool mask:
-            # [B, 1, T, T] broadcast to heads. True = attend, False = -inf.
             causal = torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
             attn_mask = causal.unsqueeze(0) & doc_mask           # [B, T, T]
             attn_mask = attn_mask.unsqueeze(1)                    # [B, 1, T, T]
@@ -211,10 +251,19 @@ class NoPECodaAttention(Attention):
         else:
             y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
 
+        # Sprint 1: per-head gating before the wo projection.
+        if head_gate_active:
+            # y shape: [B, n_heads, T, head_dim]. sigmoid(gate) shape: [n_heads]
+            gate = torch.sigmoid(self.head_gate).view(1, self.n_heads, 1, 1).to(y.dtype)
+            y = y * gate
+
         if self.exclusive:
             v_seq = v[:, :, -T:, :]
             dot = (y * v_seq).sum(dim=-1, keepdim=True)
             v_norm_sq = (v_seq * v_seq).sum(dim=-1, keepdim=True).clamp(min=1e-8)
             y = y - (dot / v_norm_sq) * v_seq
 
-        return self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
+        out = self.wo(y.transpose(1, 2).contiguous().view(B, T, -1))
+        if return_v:
+            return out, v_raw
+        return out

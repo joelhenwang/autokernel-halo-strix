@@ -37,6 +37,11 @@ class NoPEGQABlock(nn.Module):
 
     Content-only attention (NoPECodaAttention) with XSA + SwiGLU FFN.
     No MoDA depth KVs — flat model has no prior-iteration state.
+
+    Sprint 1: forward() accepts ``v_prev`` / ``head_gate_active`` /
+    ``return_v`` kwargs. When ``return_v=True`` the block returns
+    ``(x_out, v_raw)`` so the outer OdinFlatBase can thread the raw V
+    tensor to the next GQA layer as its ``v_prev``.
     """
 
     def __init__(self, d_model: int, ffn_inner: int,
@@ -49,13 +54,31 @@ class NoPEGQABlock(nn.Module):
         self.ffn_norm = RMSNorm(d_model)
         self.ffn = SwiGLU(d_model, ffn_inner)
 
-    def forward(self, x: torch.Tensor, doc_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Forward with optional intra-document mask.
+    def forward(self, x: torch.Tensor,
+                doc_mask: Optional[torch.Tensor] = None,
+                v_prev: Optional[torch.Tensor] = None,
+                head_gate_active: bool = False,
+                return_v: bool = False,
+                ):
+        """Forward with optional intra-doc mask, value residual, per-head gating.
 
-        Sprint 1: ``doc_mask`` is a [B, T, T] bool tensor (True = same doc).
-        When provided, attention is additionally masked to the doc boundary.
+        When ``return_v=True``, returns ``(x, v_raw)`` where v_raw is the
+        pre-residual V tensor from NoPECodaAttention, suitable to pass as
+        ``v_prev`` into the next GQA layer. Otherwise returns just ``x``.
         """
-        x = x + self.attn(self.pre_norm(x), doc_mask=doc_mask)
+        attn_out = self.attn(
+            self.pre_norm(x),
+            doc_mask=doc_mask,
+            v_prev=v_prev,
+            head_gate_active=head_gate_active,
+            return_v=return_v,
+        )
+        if return_v:
+            y, v_raw = attn_out
+            x = x + y
+            x = x + self.ffn(self.ffn_norm(x))
+            return x, v_raw
+        x = x + attn_out
         x = x + self.ffn(self.ffn_norm(x))
         return x
 
@@ -97,6 +120,8 @@ class OdinFlatBase(nn.Module):
         use_softcap: bool = True,
         use_chunked_ce: bool = False,
         use_intra_doc_mask: bool = False,
+        use_value_residuals: bool = False,
+        use_head_gating: bool = False,
     ):
         super().__init__()
         self.d_model = d_model
@@ -107,6 +132,13 @@ class OdinFlatBase(nn.Module):
         #: masking if ``doc_ids`` are passed. Default False for backward
         #: compatibility; Phase 6 flips default to True after validation.
         self.use_intra_doc_mask = use_intra_doc_mask
+        #: Sprint 1: when True, each GQA layer threads its pre-residual V
+        #: into the next GQA layer as ``v_prev``, blended via each layer's
+        #: learned ``v_res_scale`` (init 0.0).
+        self.use_value_residuals = use_value_residuals
+        #: Sprint 1: when True, each GQA layer gates its attention output
+        #: via ``sigmoid(head_gate)`` (per-head learned scalar).
+        self.use_head_gating = use_head_gating
         self.logit_softcap = 30.0 if use_softcap else 0.0
         self.head_dim = d_model // n_heads
 
@@ -171,6 +203,14 @@ class OdinFlatBase(nn.Module):
             doc_ids: optional ``[B, T] int32`` document IDs. When provided
               AND ``self.use_intra_doc_mask`` is True, attention is masked
               so tokens only attend within their document. Ignored otherwise.
+
+            Value residuals: when ``self.use_value_residuals`` is True,
+              each GQA layer threads its pre-residual V tensor to the next
+              GQA layer as ``v_prev``. For the 14-layer OdinFlat with GQA
+              at positions (6, 13), this means layer 6's V reaches layer 13.
+
+            Head gating: when ``self.use_head_gating`` is True, each GQA
+              layer applies ``sigmoid(head_gate)`` to its attention output.
         """
         B, T = input_ids.shape
         h = self.tok_embeddings(input_ids)
@@ -182,9 +222,28 @@ class OdinFlatBase(nn.Module):
         if self.use_intra_doc_mask and doc_ids is not None:
             doc_mask = (doc_ids[:, :, None] == doc_ids[:, None, :])
 
+        # Sprint 1: value residual state — V from the most recent GQA layer
+        # rolled forward. Only active when use_value_residuals is set.
+        v_prev = None
+
         for layer, is_gqa in zip(self.layers, self._is_gqa):
             if is_gqa:
-                h = layer(h, doc_mask=doc_mask)
+                if self.use_value_residuals:
+                    h, v_prev = layer(
+                        h,
+                        doc_mask=doc_mask,
+                        v_prev=v_prev,
+                        head_gate_active=self.use_head_gating,
+                        return_v=True,
+                    )
+                else:
+                    h = layer(
+                        h,
+                        doc_mask=doc_mask,
+                        v_prev=None,
+                        head_gate_active=self.use_head_gating,
+                        return_v=False,
+                    )
             else:
                 h = layer(h, freqs_cis)
 
