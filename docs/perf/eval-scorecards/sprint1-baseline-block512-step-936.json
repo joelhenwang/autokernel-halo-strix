@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-baseline-block512/step_936.pt",
+  "checkpoint_name": "sprint1-baseline-block512-step-936",
+  "step": 936,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-06T19:11:06Z",
+  "eval_duration_s": 30.95,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 1.9214,
+    "gpt_small_val": 2.8634,
+    "stem_crawl_val": 3.5361,
+    "dolma_val": 3.1094,
+    "_raw_ce": {
+      "wikitext_val": 4.7945,
+      "gpt_small_val": 7.1451,
+      "stem_crawl_val": 8.8238,
+      "dolma_val": 7.759
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "distinct_2": 0.9806,
+    "self_ppl": 6.356,
+    "avg_length": 12.8,
+    "sample_preview": "The history of the Roman Empire , by the British Revolution .  <|endoftext|>",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.8461,
+        "self_ppl": 3.257
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.8704,
+        "self_ppl": 4.745
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "distinct_2": 0.9806,
+        "self_ppl": 6.356
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49257.5,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 57942.2,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 63274.6,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:eeec5c73b6e4f4d6",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new major international battle and the British Empire . The Battle of its early 20th century , it was the English C",
+      "In the field of particle physics, the Standard Model describes the first time . \n<|endoftext|>",
+      "To prove that the square root of 2 is irrational, we assume , and there are on the same world . \n<|endoftext|>"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint1-baseline-block512/step_500.pt",
+      "prior_hash": "sha256:c7347edf3732f2a6",
+      "diff_count": 19,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with a new major international battle and the British Empire . The Battle of its early 20th century , it was the English C",
+          "prior": "The history of the Roman Empire began with the English War in their first time . In December he had served as a result of France , after he began his early year"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the first time . \n<|endoftext|>",
+          "prior": "In the field of particle physics, the Standard Model describes the UFA ) of the user @-@ level of its own . The game 's , allowing players to the game was award"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume , and there are on the same world . \n<|endoftext|>",
+          "prior": "To prove that the square root of 2 is irrational, we assume it . In those on the same time , a small numbers have been identified as much of an independent . \n<"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      1.393,
+      1.778,
+      1.908,
+      1.976,
+      1.974,
+      2.033,
+      1.079,
+      0.969,
+      0.883,
+      0.819,
+      0.785,
+      0.767,
+      0.756,
+      0.781
+    ],
+    "layer_rms_norm": [
+      0.426,
+      0.469,
+      0.492,
+      0.509,
+      0.527,
+      0.544,
+      0.643,
+      0.66,
+      0.678,
+      0.697,
+      0.715,
+      0.731,
+      0.743,
+      0.754
+    ],
+    "mean_layer_kurtosis": 1.279,
+    "mean_layer_rms_norm": 0.613,
+    "max_layer_kurtosis": 2.033,
+    "max_layer_rms_norm": 0.754,
+    "_split_used": "wikitext_val"
+  }
+}

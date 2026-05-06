@@ -7,48 +7,65 @@
 
 ## Sprint 1 Phase 3: Run 1 Free-Wins Validation (2026-05-06)
 
-**Status:** Run 1 COMPLETE. Proper block=512 AdamW baseline running now.
+**Status:** Run 1 + matched baseline both COMPLETE. Free wins regressed
+held-out BPB at 1-epoch wikitext; proceeding to Phase 4 LR probe with
+adjusted strategy.
 
-Run 1 config:
-  Model: OdinFlat (121.7M params), DDP over TB4
-  Dataset: wikitext-103-odin32k (122M tokens, 1 epoch)
-  Block: 512, batch=16, accum=8, eff_batch=256
-  LR: lr_2d=8e-4, lr_1d=3e-4 (IMU-1 two-group)
-  Features: intra-doc-mask ON, IMU-1 groups ON, LN scaling ON
-            (NorMuon, value-residuals, head-gating all OFF)
-  Optimizer steps: 936 (1 epoch at block=512; baseline was 1869 at block=256)
+### Direct A/B comparison (block=512, 1 epoch, 936 opt steps)
 
-Run 1 results:
-  Final loss:    4.7907
-  Throughput:    39,045 tok/s aggregate (0.17% cost vs 39,110 AdamW baseline)
-  Memory:        10.3 GB/node
-  Stability:     zero NaN, max grad norm < 2.0 throughout
-  Wall time:     52 min
-  Scorecard:     docs/perf/eval-scorecards/sprint1-run1-step-936.json
-    wikitext_val BPB:    1.9835
-    gpt_small_val BPB:   2.9374
-    stem_crawl_val BPB:  3.6401
-    dolma_val BPB:       3.2646
-    avg_bpb:             2.9564
+| Metric | Run 1 (free wins) | Baseline (AdamW) | Delta |
+|---|---:|---:|---:|
+| Final train loss | 4.7907 | 4.7975 | −0.14% (Run 1 better) |
+| **wikitext_val BPB** | 1.9835 | **1.9214** | **+3.2% (Run 1 WORSE)** |
+| gpt_small_val BPB | 2.9374 | 2.8634 | +2.6% |
+| stem_crawl_val BPB | 3.6401 | 3.5361 | +2.9% |
+| dolma_val BPB | 3.2646 | 3.1094 | +5.0% |
+| avg BPB | 2.9564 | 2.861 | +3.3% |
+| Throughput | 39,045 tok/s | 39,538 tok/s | −1.2% |
+| Memory | 10.3 GB | 10.3 GB | 0% |
+| Wall time | 3143s | 3104s | +1.3% |
 
-**Gate-decision concern:** Sprint 1 spec gate was "loss ≤ 4.30 (−3.8% vs
-4.47 baseline)". But the published 4.47 came from a block=256 / 1869-step
-training; Run 1 is block=512 / 936-step. This is half the optimizer
-updates for the same token budget. Comparison is apples-to-oranges.
+**Observation:** training loss parity, generalization regression.
+Held-out BPB diverges from training loss: Run 1 fits training set
+comparably but generalizes worse on ALL 4 validation slices.
 
-**Decision:** Launch matched-config AdamW block=512 baseline to
-establish proper Run 1 reference. Using the new baseline:
-  - If Run 1 free-wins ≤ baseline loss: free wins work → proceed to
-    Phase 4 LR probe + Phase 5 full recipe
-  - If Run 1 worse than baseline: investigate which free-win is
-    regressing (bisect: disable intra-doc-mask, then LN scaling)
+**Diagnosis hypothesis:** `lr_1d=3e-4` (3.36× below `lr_2d=8e-4` per
+IMU-1 recipe) starved the 1D group (embeddings, LN gammas, scalar
+gates, lm_head). The IMU-1 paper's 3.36× ratio was tuned at 430M;
+our 122M under-learns 1D params with such an aggressive split.
 
-Also noted: when `--auto-eval` fires during a live DDP training run,
-the inference_profile.tok_s measurement is corrupted (GPU contention).
-Scorecards from auto-eval-during-training show tok_s_512 ≈ 12K instead
-of normal 58K. BPB values remain accurate. Document this in Sprint 2
-retrospective; future iterations should defer auto-eval to post-run
-or use dedicated eval machine.
+Secondary contributors (to bisect in Phase 4 LR probe):
+- LayerNorm scaling init (1/sqrt(layer_idx+1)) may under-scale deep layers
+- `no-WD-on-embeddings` may cause embedding drift without regularization
+- intra-doc-mask on wikitext-103 may not help (wikitext docs are short
+  and fairly uniform; the masking benefit is paragraph-level coherence
+  on corpora like Dolma with long multi-topic docs)
+
+**Configs (for reproducibility):**
+  Run 1:       --intra-doc-mask --imu1-groups --lr-2d 8e-4 --lr-1d 3e-4 --no-muon
+  Baseline:    --no-intra-doc-mask --no-muon  (default AdamW fused, single lr=8e-4)
+
+Scorecards:
+  docs/perf/eval-scorecards/sprint1-run1-step-500.json
+  docs/perf/eval-scorecards/sprint1-run1-step-936.json
+  docs/perf/eval-scorecards/sprint1-baseline-block512-step-500.json
+  docs/perf/eval-scorecards/sprint1-baseline-block512-step-936.json
+
+### Plan for Phase 4 LR probe (adjusted)
+
+Rather than sweeping IMU-1's absolute LRs (0.015-0.030) which are 20-40×
+our AdamW scale, sweep the (lr_2d, lr_1d) pair AROUND our baseline:
+
+  Config 1: lr_2d=8e-4, lr_1d=8e-4  (no split; tests if split was the bug)
+  Config 2: lr_2d=8e-4, lr_1d=5e-4  (milder split)
+  Config 3: lr_2d=1.6e-3, lr_1d=5e-4  (NorMuon-sized lr_2d with mild split)
+
+All three include NorMuon on the 2D group; free wins still on.
+200 steps each, split-parallel on Machines A + B.
+
+Success criterion at Phase 4 gate: at least one config produces
+wiki_val BPB ≤ 1.92 at step 200 (matches or beats AdamW baseline's
+step-200 BPB tracking).
 
 ---
 
