@@ -53,4 +53,5 @@ tags: [%index, %knowledge]
 
 | File | Description |
 |------|-------------|
-| [../docs/research/small-lm-research-2026-05-06.md](../docs/research/small-lm-research-2026-05-06.md) | Deep-dive synthesis of efficient pretraining / CPT / post-training / new architectures, with Odin-specific action queue |
+| [../docs/research/small-lm-research-2026-05-06.md](../docs/research/small-lm-research-2026-05-06.md) | Focused synthesis: SmolLM3 recipe + APO + Odin-specific action queue |
+| [../docs/research/broad-research-synthesis-2026-05-06.md](../docs/research/broad-research-synthesis-2026-05-06.md) | **Broad synthesis: 240+ recent papers across pretraining / CPT / RLVR / optimizers / new architectures, 20-item ranked action queue, bets list** |

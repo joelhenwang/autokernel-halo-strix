@@ -613,14 +613,22 @@ Monitor: `bash run_remote.sh "tail -3 checkpoints/odin-flat-stem-crawl-ddp/rank0
 
 ### Research deep-dive (2026-05-06)
 
-Full synthesis in `docs/research/small-lm-research-2026-05-06.md`.
+Two synthesis documents:
+1. `docs/research/small-lm-research-2026-05-06.md` — focused (SmolLM3 + APO recipe)
+2. `docs/research/broad-research-synthesis-2026-05-06.md` — **broad** (240+ papers,
+   2025-01 → 2026-04, `hf papers` search corpus)
 
-**TL;DR top-5 recommendations:**
-1. Adopt 3-stage pretraining recipe (stable → quality-upsample → decay)
-2. Add intra-document masking to trainer (~1 hr; stability win)
-3. Remove weight decay from embedding layers (~5 min; OLMo 2 finding)
-4. Build minimal SFT + ORPO/APO post-training pipeline (~2 days; unlocks instruct eval)
-5. Switch from cosine to WSD scheduler with `--min-lr-ratio 0.1`
+**Top-5 recommendations (from broad synthesis):**
+1. **NorMuon + Cautious Weight Decay** optimizer replacement (−3.85% loss vs AdamW, IMU-1 validated at 430M)
+2. **Add value residuals + LayerNorm scaling + per-head gating** to OdinFlat blocks (IMU-1 recipe, additive gains)
+3. **Intra-document attention masking + remove WD from embeddings** (free stability wins)
+4. **Build minimal SFT + ORPO/APO + F-GRPO RLVR pipeline** (currently ZERO post-training infra)
+5. **T²-optimal retraining on dolma-10b-odin32k** (6.9B tokens = 57× ratio, justifies overtraining per T² scaling laws)
+
+**Most surprising new finding:** T² scaling (arXiv:2604.01411) shows that when
+inference cost is included, optimal pretraining is **deep into the overtraining
+regime**, beyond where Chinchilla suggests. Our ~7× ratio for OdinFlat is
+deeply under-trained by this measure.
 
 **Biggest gap:** Zero post-training infrastructure. Comprehensive survey in
 `knowledge/training/instruct_alignment_techniques_2025_2026.md` is unused.
@@ -628,10 +636,9 @@ Full synthesis in `docs/research/small-lm-research-2026-05-06.md`.
 **Second biggest gap:** Single-metric (loss/BPB) evaluation. Missing per-domain
 BPB, capability probes (BLiMP), sample-pack regression, quantized BPB.
 
-**New external material integrated:**
-- SmolLM3 blueprint (July 2025 HuggingFace): 3-stage training, intra-doc masking,
-  no-WD-on-embeddings, APO + model merging recipe
-- APO (arXiv:2408.06266): more stable DPO variant adopted by SmolLM3
+**GRPO family worth noting:** F-GRPO (Focal-loss), Scaf-GRPO (scaffolding),
+GRPO-SG (sharpness), f-GRPO (divergence-based), Apriel-Reasoner (difficulty-
+aware length penalty). All released 2025-10 through 2026-04.
 
 ---
 
