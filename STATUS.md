@@ -5,6 +5,106 @@
 
 ---
 
+## Sprint 1.1: NorMuon Throughput Optimization (2026-05-07, design approved)
+
+**Status:** Design approved and committed (`ba71b45`). Implementation pending.
+
+Sprint 1 full recipe (Run 2, commit 511d675) delivers real quality gains:
+  Final loss 4.4736 (−6.8% vs AdamW baseline 4.7975)
+  wikitext_val BPB 1.893 (−1.5% vs baseline 1.9214)
+  BPB improvement on ALL 4 held-out domains
+but at **17.8% throughput cost** (32,478 tok/s vs 39,538 baseline), failing
+the original ≤7% gate.
+
+Sprint 1.1 is a focused sub-sprint to reduce that cost while preserving
+quality within 1% (loss ≤ 4.518, wiki_val BPB ≤ 1.912).
+
+Spec: `docs/superpowers/specs/2026-05-07-sprint1.1-normuon-throughput-design.md`
+
+Approach: five-phase measurement-driven descent
+  Phase A   Profile NorMuon step (3 configs) to attribute the 12-16% cost
+  Phase A.5 torch.compile graph-break analysis + NS micro-benchmark
+  Phase B   Quick-win ablations (fp16 NS, size-gated neuron-norm, no-cautious-WD, best combo)
+  Phase C   Structural (batched NS across same-shape params + reduced iterations)
+  Phase D   Custom HIP Newton-Schulz kernel (conditional, only if C insufficient)
+  Phase E   Final Run 2b validation at best config
+
+Each phase has explicit throughput + quality gates. If target hit early
+(≤7% cost), stop descending. If quality regresses, revert offending knob.
+
+Key knowledge-base additions:
+  knowledge/training/normuon_throughput_gfx1151.md (NEW)
+  knowledge/training/imu1_recipe_2026.md (updated w/ empirical findings)
+  knowledge/INDEX.md (updated)
+
+---
+
+## Sprint 1 Phase 5: Run 2 Full Recipe (2026-05-06)
+
+**Status:** COMPLETE. Quality gate PASS, throughput gate FAIL → Sprint 1.1 follows.
+
+Configuration:
+  --intra-doc-mask --imu1-groups --normuon --lr-2d 5e-3 --lr-1d 8e-4
+  --value-residuals --head-gating --no-muon --auto-eval
+
+Results (step 936, 1 epoch wikitext):
+  Final train loss:  4.4736   (−6.8% vs baseline 4.7975)  ✅ PASS
+  wikitext_val BPB:  1.893    (−1.5% vs baseline 1.9214)  ⚠️ beats baseline, misses spec's −3.8% target of 1.73
+  gpt_small_val BPB: 2.8327   (−1.1%)
+  stem_crawl_val BPB: 3.4314  (−3.0%)
+  dolma_val BPB:     3.0883   (−0.7%)
+  avg BPB:           2.810    (−1.8%)
+  Throughput:        32,478 tok/s  (17.8% cost)           ❌ FAIL spec's ≤7% gate
+  Memory:            10.1 GB  (−1.9%)                      ✅ PASS
+  Wall time:         63 min
+  Stability:         zero NaN, max grad norm < 2           ✅ PASS
+  Fallback:          --no-normuon path still works         ✅ PASS
+
+Gate evaluation: 4/6 criteria pass, 1 partial (BPB beats baseline but
+doesn't hit the −3.8% target), 1 fail (throughput). Quality gains are
+real and substantial; the failure mode is NorMuon's PyTorch-op NS being
+expensive on gfx1151 (13-16% pure-NorMuon cost; +2 pp for value residuals
+and head gating combined).
+
+Decision: launch Sprint 1.1 (NorMuon throughput optimization sub-sprint)
+before flipping any defaults in the CLI. Ship Sprint 1 + 1.1 together.
+
+Scorecards:
+  docs/perf/eval-scorecards/sprint1-run2-step-500.json
+  docs/perf/eval-scorecards/sprint1-run2-step-936.json
+
+---
+
+## Sprint 1 Phase 4: NorMuon LR Probe (2026-05-06)
+
+**Status:** COMPLETE. Winning config: lr_2d=5e-3, lr_1d=8e-4 (Probe C).
+
+Three 200-step DDP probes with NorMuon + free wins, swept lr_2d:
+
+| Config | lr_2d | lr_1d | step 200 loss | step 200 wiki_bpb | tok/s | cost% |
+|--------|------:|------:|--------------:|------------------:|------:|------:|
+| Baseline (AdamW) | 8e-4 | 8e-4 | 5.9045 | — | 39,925 | 0% |
+| Run 1b (AdamW+fw) | 8e-4 | 8e-4 | 5.8477 | — | 39,535 | 1.0% |
+| Probe A (NorMuon) | 8e-4 | 8e-4 | 5.6733 | 2.2376 | 34,363 | 13.1% |
+| Probe B (NorMuon) | 2e-3 | 8e-4 | 5.5967 | 2.2163 | 34,596 | 12.5% |
+| **Probe C (NorMuon)** | **5e-3** | 8e-4 | **5.5617** | **2.2078** | 33,234 | 15.9% |
+
+Probe C wins on all 4 BPB domains + training loss. Higher lr_2d gives
+NorMuon more "room to move" relative to AdamW's more conservative update
+magnitude. Downside: throughput drops further at higher lr because
+larger updates trigger more cautious-WD sign flips.
+
+Used Probe C config for Phase 5 Run 2.
+
+Also fixed a pre-existing bug: `scripts/train_ddp.py` `_complete_step`
+raised `AssertionError: No inf checks were recorded` when `--max-steps`
+terminated mid-accumulation. Wrapped in try/except with clean warning.
+
+Scorecards:
+  docs/perf/eval-scorecards/sprint1-probe-{A,B,C}-step-200.json
+
+---
+
 ## Sprint 1 Phase 3: Run 1 + Run 1b Free-Wins Validation (2026-05-06)
 
 **Status:** Diagnosis confirmed. Free wins' LR split hurt; even without

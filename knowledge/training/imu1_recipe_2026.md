@@ -165,16 +165,40 @@ From `knowledge/training/muon_optimizer_results.md`:
 - We measured Muon as NOT worth the throughput hit for pretraining
 
 IMU-1 finding changes this:
-- **NorMuon has only ~3% step overhead, not 3.5×** — the speed gap closes dramatically
+- **NorMuon has only ~3% step overhead, not 3.5×** — the speed gap closes dramatically (**paper claim at 430M + Triton**)
 - Net effect: NorMuon is faster in wall-clock AND gives better loss
 
 The change: (1) neuron-wise normalization (NorMuon vs plain Muon), (2) Triton
 kernel (Dion), (3) Polar Express constants for Newton-Schulz. Together these
 turn Muon from "slow but good" into "fast and good."
 
+## Empirical results at our scale (Sprint 1 Phase 3, 2026-05-06)
+
+Trained OdinFlat (121.7M) on wikitext-103 with NorMuon + all architectural
+additions. Full results: `normuon_throughput_gfx1151.md`.
+
+**Short version:**
+- Quality gain **DID transfer**: Run 2 final loss 4.4736 vs AdamW baseline
+  4.7975 = **−6.8%** improvement; BPB down on all 4 validation domains.
+- Throughput cost was **much larger than the paper's 3%**: we measured
+  ~13-16% for NorMuon alone and 17.8% for the full recipe (NorMuon +
+  value residuals + head gating).
+- Root cause: we run NS via PyTorch ops (not Triton, which doesn't
+  reliably work on gfx1151). Each NS iteration is 3 separate matmul
+  kernel launches, amplified by ~60 2D params × 5 iters = ~900 launches
+  per optimizer step. Plus gfx1151's no-MFMA matmul is slower on the
+  small matrix sizes NS operates on.
+
+Sprint 1.1 (`../../docs/superpowers/specs/2026-05-07-sprint1.1-normuon-throughput-design.md`)
+addresses this with a 5-phase optimization plan: fp16 NS, size-gated
+neuron-norm, batched NS, reduced iterations, optional HIP kernel.
+Expected post-optimization cost: ≤10% with quality preserved within 1%.
+
 ## See also
 
 - `knowledge/training/muon_optimizer_results.md` — earlier Muon investigation
+- `knowledge/training/normuon_throughput_gfx1151.md` — **empirical Sprint 1
+  throughput results (13-16% NorMuon cost) + Sprint 1.1 optimization plan**
 - `knowledge/architectures/small_lm_arch_interventions_2026.md` — architecture
   tricks in the IMU-1 recipe, consolidated with other 2025-2026 findings
 - `docs/research/broad-research-synthesis-2026-05-06.md` Part 2 — optimizer
