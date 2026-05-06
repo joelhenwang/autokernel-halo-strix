@@ -185,6 +185,43 @@ OdinHalo at ~157M effective params → ~24% MFU. Apples-to-apples.
   effective regularization
 - Want to probe emergent depth capabilities (18 effective layers with shared weights)
 
+## Extended training: gpt-training-small (296M tokens, resumed from wikitext)
+
+Ran both models for 1 additional epoch on gpt-training-small, resuming from
+their respective wikitext-trained step_1869 checkpoints. Same DDP / TB4 /
+gloo infrastructure, matched config where possible.
+
+| Metric | OdinFlat | OdinHalo |
+|--------|--------:|--------:|
+| Resume from | wikitext step_1869 (loss 4.47) | wikitext step_1869 (loss 4.71) |
+| Block size | 512 | 512 |
+| Effective batch (sequences) | 512 (16x16x2) | 256 (16x8x2) |
+| Optimizer steps | 1,128 | 2,257 |
+| Warmup | 500 | 500 |
+| Peak LR | 6e-4 | 6e-4 |
+| **Final loss on gpt-small** | **5.0677** | **5.0977** |
+| Final BPB | 2.031 | 2.043 |
+| Aggregate tok/s | 39,164 | 29,898 |
+| Wall time | 2h 5min | 2h 45min |
+| Per-node memory | ~10 GB | 10.8 GB |
+| Checkpoint size | 1.46 GB | 691 MB |
+
+**Loss gap has narrowed dramatically from the wikitext run:**
+
+| Dataset | OdinFlat loss | OdinHalo loss | Gap |
+|---------|-------------:|-------------:|----:|
+| wikitext (1 epoch fresh) | 4.47 | 4.71 | **+0.24** |
+| gpt-small (1 epoch resumed) | 5.07 | 5.10 | **+0.03** |
+
+Gap collapsed from 0.24 → 0.03 (87% reduction) after one additional epoch on
+different data. Consistent with the weight-sharing regularization hypothesis:
+OdinHalo's 3× parameter reuse acts as implicit regularization that pays off more
+at higher total training budgets. At extrapolated Chinchilla-optimal scale
+(~20× tokens/params), OdinHalo may surpass OdinFlat on held-out loss.
+
+Throughput gap unchanged: OdinFlat remains +31% faster on the same hardware.
+For throughput-sensitive workloads, flat is still the pragmatic choice.
+
 ## Inference Sampling Ablation (step_1869 checkpoints)
 
 Ran the 3-stage narrowing sweep `scripts/ablate_odin_flat_sampling.py` on both
