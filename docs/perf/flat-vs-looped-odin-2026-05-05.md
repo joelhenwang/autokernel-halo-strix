@@ -284,11 +284,109 @@ not just its mean. OdinFlat's "unconstrained sampling wins" is the signature
 of a well-trained-for-its-budget model. OdinHalo's "needs all filters on" is
 the signature of a looser distribution that benefits from restriction.
 
+## Inference Sampling Ablation (OdinHalo step_2257, +gpt-small)
+
+Re-ran the same 15-config ablation on OdinHalo's gpt-small-trained checkpoint
+(step_2257, combined wikitext + gpt-small ≈ 419M tokens of exposure).
+
+### Winning configuration for step_2257
+
+| Parameter | Wikitext-only (step_1869) | +gpt-small (step_2257) | Change |
+|-----------|:------:|:------:|:------:|
+| `temperature` | 0.60 | 0.60 | = |
+| `repetition_penalty` | 1.15 | **1.00** | **loosened** |
+| `top_p` | 0.95 | 0.95 | = |
+| `top_k` | 40 | **0** (disabled) | **loosened** |
+| distinct-2 | 0.990 | 0.699 | lower (less constrained, but quality drops) |
+| self-PPL | 14.11 | 11.33 | lower (tighter distribution) |
+
+**OdinHalo converged toward OdinFlat's "unconstrained sampling wins" pattern**
+after gpt-small training. Two filters (`rep_pen` and `top_k`) disabled in the
+winner. This matches the loss narrowing observation — the model's output
+distribution got tighter/more-confident with more data.
+
+### Sample quality at step_2257
+
+Samples show the training budget was still insufficient for robust coherence:
+
+**P1 — "The history of the Roman Empire" (Sample 2, most varied):**
+> "The history of the Roman Empire, and the ancient world. There are two factions
+> that have been a large part of the most popularly large part of the most important
+> part of the great number of the most powerful castles, while the most powerful,
+> the world..."
+
+**P2 — "In the field of physics," (all 3 samples, repetition-dominant):**
+> "In the field of physics, and physics, and physics and science, and physics, and
+> physics, and physics, and science, and mathematics..."
+
+The winning `rep_pen=1.0` is technically optimal by the ablation's scoring rule
+(highest dist2 under PPL filter) but exposes a pathological repetition loop on P2
+that a higher `rep_pen` would have suppressed. At this training budget (~7× below
+Chinchilla-optimal) the model hasn't learned to escape confident local minima
+without external help.
+
+### Summary: sampling as diagnostic
+
+| Scenario | Winning config signature | What it reveals |
+|----------|-------------------------|-----------------|
+| OdinFlat @ wikitext | unconstrained | Well-trained for budget |
+| OdinHalo @ wikitext | all filters on | Looser distribution, weight sharing not yet paying off |
+| OdinHalo @ +gpt-small | partially unconstrained | Distribution tightened; still under-trained |
+
+Prediction: more data would push OdinHalo's winning config toward full
+unconstrained sampling (all filters off) and produce samples with richer
+topic diversity, matching OdinFlat's behavior.
+
+## Extended training: stem-crawl-solo (531M tokens, OdinFlat resumed from gpt-small)
+
+Third training phase launched 2026-05-06: OdinFlat resumed from
+`odin-flat-gpt-small-ddp/step_1128.pt` onto `stem-crawl-solo-odin32k.bin`
+(531M tokens, retokenized from jsonl.zst with `scripts/pretokenize.py`).
+
+Config (using new sweep-derived defaults + resumed-training tuning):
+
+| Parameter | Value | Note |
+|-----------|------:|------|
+| block_size | 512 | New sweep default |
+| batch_size | 16 | Default |
+| accum_steps | 8 | Default (eff_batch=256 seqs × 512 = 131,072 tok/step) |
+| num_workers | 12 | New sweep default |
+| lr | 6e-4 | Resumed-training tuning |
+| warmup_steps | 500 | Resumed-training tuning |
+| max_grad_norm | 0.8 | Resumed-training tuning |
+| total steps | **4,046** | 1 epoch |
+| checkpoint interval | 500 | ~9 intermediate saves |
+
+Early throughput (step 50, during warmup): **37,384 tok/s aggregate**.
+Expected steady-state: ~39–40K tok/s matching prior OdinFlat DDP measurements.
+ETA: ~3.7 hours for 1 full epoch.
+
+### OdinFlat cumulative training budget (end of stem-crawl epoch)
+
+| Phase | Tokens (this phase) | Cumulative |
+|-------|-------------------:|-----------:|
+| Wikitext | 123M | 123M |
+| Gpt-small (resumed) | 296M | 419M |
+| **Stem-crawl-solo (resumed, in progress)** | 531M | **~950M** |
+
+At ~950M cumulative tokens for 122M params, this will push the training budget
+to ~7.8× params-in-tokens — still below Chinchilla-optimal ~20× but significantly
+richer than prior runs. Expected qualitative improvement in generation coherence.
+
 ## Artifacts
 
 - `models/odin_flat.py` — OdinFlat model implementation
-- `scripts/launch_ddp.sh` — one-command DDP launcher over TB4
+- `models/odin_halo.py` — OdinHalo (looped variant)
+- `scripts/launch_ddp.sh` — parameterized DDP launcher (new defaults post-sweep)
+- `scripts/sweep_runner.py` — reusable throughput sweep harness
+- `scripts/ablate_odin_flat_sampling.py` — 3-stage sampling ablation harness
+- `scripts/sample_odin_flat.py` — single-shot generation with `_orig_mod` stripping
+- `scripts/pretokenize.py` — dataset tokenization (used for stem-crawl)
 - `scripts/tcp_test.py` — TB4 connectivity diagnostic
-- `datasets/wikitext-103-odin32k.bin` — pretokenized wikitext-103 (odin-32k vocab)
-- `checkpoints/odin-flat-wikitext-ddp/` — training checkpoints + logs
+- `datasets/wikitext-103-odin32k.bin` — 123M tokens
+- `datasets/gpt-training-small-odin32k.bin` — 296M tokens
+- `datasets/stem-crawl-solo-odin32k.bin` — 531M tokens (new 2026-05-06)
+- `checkpoints/odin-flat-{wikitext,gpt-small,stem-crawl}-ddp/` — OdinFlat trajectory
+- `checkpoints/odin-halo-{wikitext,gpt-small}-ddp/` — OdinHalo trajectory
+- `docs/perf/ddp-sweep-2026-05-06.md` — throughput sweep analysis
 - This report: `docs/perf/flat-vs-looped-odin-2026-05-05.md`

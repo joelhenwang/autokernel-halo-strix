@@ -183,11 +183,3 @@ Already fixed in `models/components/conv_blocks.py` HyPEShortConvBlock. All othe
 | D | `python -m halo_training` | Train with optimized kernels |
 
 `kernel.py` is ONLY file modified during optimization. `bench.py` and `reference.py` are IMMUTABLE.
-
-## graphify
-
-Knowledge graph at `graphify-out/`. Read `GRAPH_REPORT.md` before answering architecture questions. Rebuild after code changes:
-
-```bash
-python -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"
-```

@@ -526,6 +526,94 @@ Raw data: `docs/perf/ddp-sweep-{a,b}-2026-05-06.jsonl`.
 
 ---
 
+## Continued Training Pipeline (2026-05-05 → 2026-05-06)
+
+Both OdinFlat and OdinHalo are on a shared "resume-and-extend" training trajectory,
+each chaining from wikitext → gpt-training-small → stem-crawl-solo via `--resume-from`.
+Each resume loads weights only with a fresh optimizer (brief loss spike during warmup
+that recovers by ~step 500).
+
+### OdinFlat trajectory
+
+| Phase | Dataset | Tokens | Final loss | Wall (DDP) | Checkpoint dir |
+|-------|---------|-------:|-----------:|-----------:|----------------|
+| 1 | wikitext-103-odin32k | 123M × 1 ep | **4.47** (BPB 1.79) | 52 min | `odin-flat-wikitext-ddp/step_1869.pt` |
+| 2 | gpt-training-small-odin32k (resumed) | 296M × 1 ep | **5.07** (BPB 2.03) | 2h 5min | `odin-flat-gpt-small-ddp/step_1128.pt` |
+| 3 | stem-crawl-solo-odin32k (resumed, in progress) | 531M × 1 ep | — | ETA ~3.7 hr | `odin-flat-stem-crawl-ddp/` |
+
+Cumulative tokens seen: **~950M** by end of Phase 3.
+
+### OdinHalo trajectory
+
+| Phase | Dataset | Tokens | Final loss | Wall (DDP) | Checkpoint dir |
+|-------|---------|-------:|-----------:|-----------:|----------------|
+| 1 | wikitext-103-odin32k | 123M × 1 ep | **4.71** (BPB 1.89) | 68 min | `odin-halo-wikitext-ddp/step_1869.pt` |
+| 2 | gpt-training-small-odin32k (resumed) | 296M × 1 ep | **5.10** (BPB 2.04) | 2h 45min | `odin-halo-gpt-small-ddp/step_2257.pt` |
+
+### Key observation: loss gap collapse
+
+| Phase | OdinFlat loss | OdinHalo loss | Gap |
+|-------|-------------:|-------------:|----:|
+| Wikitext (1 epoch fresh) | 4.47 | 4.71 | **+0.24** |
+| Gpt-small (1 epoch resumed) | 5.07 | 5.10 | **+0.03** |
+
+Gap narrowed 87% after one additional epoch. Consistent with the weight-sharing
+regularization hypothesis: OdinHalo's 3× param reuse pays off more as training
+budget grows. At Chinchilla-optimal scale (~20× tokens/params), OdinHalo is
+expected to catch or surpass OdinFlat on held-out loss. At current 1–4×
+params-in-tokens, OdinFlat still wins absolute loss and is +31% faster throughput.
+
+### Dataset availability (all odin-32k tokenized, on both machines)
+
+| Dataset | Tokens | Size | Status |
+|---------|-------:|-----:|--------|
+| `babylm-odin32k.bin` | 17M | 34 MB | Machine A only (smoke tests) |
+| `wikitext-103-odin32k.bin` | 123M | 246 MB | Both machines |
+| `gpt-training-small-odin32k.bin` | 296M | 593 MB | Both machines |
+| **`stem-crawl-solo-odin32k.bin`** | **531M** | **1.06 GB** | **Both machines** (new, tokenized 2026-05-06) |
+| `dolma-10b-odin32k.bin` | 6.9B | 13.7 GB | Machine A only |
+
+Vidar-32k tokenized datasets exist but require retokenization to be used with
+OdinHalo/OdinFlat (odin-32k and vidar-32k are different vocabularies).
+
+### Sampling ablation findings (diagnostic)
+
+Ran `scripts/ablate_odin_flat_sampling.py` on both OdinFlat and OdinHalo final
+checkpoints for each trajectory phase. The winning sampling config tracks
+training progress:
+
+| Model/Phase | temp | rep_pen | top_p | top_k | dist2 | self-PPL |
+|-------------|-----:|--------:|------:|------:|------:|---------:|
+| OdinFlat on wikitext (step_1869) | 0.6 | 1.00 | 1.0 (off) | 0 (off) | 0.765 | 9.84 |
+| OdinHalo on wikitext (step_1869) | 0.6 | 1.15 | 0.95 | 40 | 0.990 | 14.11 |
+| OdinHalo on +gpt-small (step_2257) | 0.6 | 1.00 | 0.95 | 0 (off) | 0.699 | 11.33 |
+
+**Diagnostic pattern:** well-trained models prefer unconstrained sampling
+(no `rep_pen`, no `top_k` filtering); looser distributions benefit from tail
+clipping. OdinHalo's sampling config loosened after gpt-small training
+(`rep_pen: 1.15 → 1.00`, `top_k: 40 → 0`) — signal that the model's
+distribution tightened, consistent with the loss trajectory.
+
+### Active run: OdinFlat on stem-crawl-solo
+
+Launched 2026-05-06 via `launch_ddp.sh` with new sweep-derived defaults (block=512,
+num_workers=12) + resumed-training overrides (lr=6e-4, warmup=500, grad_clip=0.8).
+
+```
+Resume:  checkpoints/odin-flat-gpt-small-ddp/step_1128.pt
+Config:  batch=16 × accum=8 × 2 nodes, block=512
+         eff_batch=256 seqs × 512 tokens = 131,072 tok/step
+Steps:   4,046 (1 epoch over 531M tokens)
+Early:   step 50 loss=5.93, 37,384 tok/s aggregate, 10.3 GB/node
+ETA:     ~3.7 hours total wall time
+Cadence: checkpoint every 500 steps → ~9 intermediate saves
+```
+
+Monitor: `bash run_remote.sh "tail -3 checkpoints/odin-flat-stem-crawl-ddp/rank0.log"`
+
+---
+
+
 ### Important: max-autotune vs max-autotune-no-cudagraphs
 
 `max-autotune` crashes during trainer backward pass with gradient accumulation
