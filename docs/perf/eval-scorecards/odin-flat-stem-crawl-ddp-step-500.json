@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_500.pt",
+  "checkpoint_name": "odin-flat-stem-crawl-ddp-step-500",
+  "step": 500,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681696,
+    "trainable_params": 121681696,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "a",
+  "eval_timestamp": "2026-05-06T15:33:06Z",
+  "eval_duration_s": 67.74,
+  "eval_config": {
+    "max_tokens_per_domain": 20000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.4036,
+    "gpt_small_val": 2.5335,
+    "stem_crawl_val": 2.0112,
+    "dolma_val": 2.2326,
+    "_raw_ce": {
+      "wikitext_val": 5.9979,
+      "gpt_small_val": 6.3219,
+      "stem_crawl_val": 5.0187,
+      "dolma_val": 5.5711
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 20000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 100
+    },
+    "distinct_2": 0.3207,
+    "self_ppl": 4.531,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire was an ancient Greece.  The Roman Empire of Roman Empire.           ",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.2955,
+        "self_ppl": 4.358
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.2955,
+        "self_ppl": 4.358
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 100,
+        "distinct_2": 0.3207,
+        "self_ppl": 4.531
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49861.2,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 58707.6,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 65117.7,
+    "peak_mem_gb_seq1024": 0.537
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:b280acb60c906baa",
+    "samples_preview": [
+      "The history of the Roman Empire began with its first major Romans.\n\nA Roman Empire in Rome was called the Roman Empire. The Roman Empire, there a large numbers:",
+      "In the field of particle physics, the Standard Model describes the first vector.\n\n\nThe initial momentum is an object has a set to create the following: b = p (a",
+      "To prove that the square root of 2 is irrational, we assume it's answer.\n\n    4.\n\n      If a simple:24\u00d710x+1, when dealing with n=0.\n\n\n\n\n\nBy multiplying both si"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_0_fallback.pt",
+      "prior_hash": "sha256:1b7fcecb3dcf8b21",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with its first major Romans.\n\nA Roman Empire in Rome was called the Roman Empire. The Roman Empire, there a large numbers:",
+          "prior": "The history of the Roman Empire began with a new world in their place , and was first time as well known to be traced back into a million years ago . The first "
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the first vector.\n\n\nThe initial momentum is an object has a set to create the following: b = p (a",
+          "prior": "In the field of particle physics, the Standard Model describes the first. \u201cI don\u2019t do not going to go back into a few weeks and make it is so that we can still "
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume it's answer.\n\n    4.\n\n      If a simple:24\u00d710x+1, when dealing with n=0.\n\n\n\n\n\nBy multiplying both si",
+          "prior": "To prove that the square root of 2 is irrational, we assume it's not a way, it becomes more likely to do have no idea in this case, when it may be the current. "
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      4.188,
+      3.789,
+      3.215,
+      2.582,
+      1.952,
+      1.689,
+      1.003,
+      0.835,
+      0.736,
+      0.69,
+      0.653,
+      0.646,
+      0.643,
+      0.599
+    ],
+    "layer_rms_norm": [
+      0.497,
+      0.533,
+      0.576,
+      0.632,
+      0.711,
+      0.839,
+      1.223,
+      1.25,
+      1.275,
+      1.304,
+      1.347,
+      1.394,
+      1.442,
+      1.692
+    ],
+    "mean_layer_kurtosis": 1.659,
+    "mean_layer_rms_norm": 1.051,
+    "max_layer_kurtosis": 4.188,
+    "max_layer_rms_norm": 1.692,
+    "_split_used": "wikitext_val"
+  }
+}

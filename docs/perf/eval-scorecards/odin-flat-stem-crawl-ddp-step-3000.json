@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_3000.pt",
+  "checkpoint_name": "odin-flat-stem-crawl-ddp-step-3000",
+  "step": 3000,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681696,
+    "trainable_params": 121681696,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "a",
+  "eval_timestamp": "2026-05-06T15:39:48Z",
+  "eval_duration_s": 77.44,
+  "eval_config": {
+    "max_tokens_per_domain": 20000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.5321,
+    "gpt_small_val": 2.4868,
+    "stem_crawl_val": 1.7026,
+    "dolma_val": 2.1548,
+    "_raw_ce": {
+      "wikitext_val": 6.3184,
+      "gpt_small_val": 6.2054,
+      "stem_crawl_val": 4.2485,
+      "dolma_val": 5.3771
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 20000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "distinct_2": 0.4482,
+    "self_ppl": 5.665,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire in the Roman Empire?  The Roman Empire of Roman Empire began in the ",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.3039,
+        "self_ppl": 3.492
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.423,
+        "self_ppl": 4.721
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "distinct_2": 0.4482,
+        "self_ppl": 5.665
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49280.7,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 58380.4,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 65342.5,
+    "peak_mem_gb_seq1024": 0.537
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:420704d294d60a33",
+    "samples_preview": [
+      "The history of the Roman Empire began with its political and led to revolt, particularly during the rise of Rome.\n\nWhat was it called the first king?\n\nIt is the",
+      "In the field of particle physics, the Standard Model describes the mass and its energy level. The initial energy is calculated using the mass flux to determine ",
+      "To prove that the square root of 2 is irrational, we assume that this is a rational number.\n\n\nProof: If (x)=1/3(2)(2)\nWe know that the inequality has a contradi"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_2500.pt",
+      "prior_hash": "sha256:e4787ce9e10b9c60",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with its political and led to revolt, particularly during the rise of Rome.\n\nWhat was it called the first king?\n\nIt is the",
+          "prior": "The history of the Roman Empire began with the first major in their territory. In 17th century, the late 19th century. The Roman-states were a key role in the e"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the mass and its energy level. The initial energy is calculated using the mass flux to determine ",
+          "prior": "In the field of particle physics, the Standard Model describes the mass and its initial velocity is:\nv=\u03c12r. The value of the particle's law helps us to calculat"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume that this is a rational number.\n\n\nProof: If (x)=1/3(2)(2)\nWe know that the inequality has a contradi",
+          "prior": "To prove that the square root of 2 is irrational, we assume that limn=0+2.\n\n\nSince x is continuous like 1/3, then . Therefore the equation is not rational. For "
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      80.145,
+      92.553,
+      106.811,
+      149.252,
+      281.743,
+      497.832,
+      56.738,
+      47.418,
+      43.287,
+      38.037,
+      34.196,
+      30.176,
+      27.742,
+      7.734
+    ],
+    "layer_rms_norm": [
+      0.82,
+      0.867,
+      0.924,
+      1.01,
+      1.17,
+      1.416,
+      1.779,
+      1.817,
+      1.841,
+      1.919,
+      2.015,
+      2.124,
+      2.223,
+      2.723
+    ],
+    "mean_layer_kurtosis": 106.69,
+    "mean_layer_rms_norm": 1.618,
+    "max_layer_kurtosis": 497.832,
+    "max_layer_rms_norm": 2.723,
+    "_split_used": "wikitext_val"
+  }
+}

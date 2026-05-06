@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_2000.pt",
+  "checkpoint_name": "odin-flat-stem-crawl-ddp-step-2000",
+  "step": 2000,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681696,
+    "trainable_params": 121681696,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "a",
+  "eval_timestamp": "2026-05-06T15:37:08Z",
+  "eval_duration_s": 78.72,
+  "eval_config": {
+    "max_tokens_per_domain": 20000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.5814,
+    "gpt_small_val": 2.5102,
+    "stem_crawl_val": 1.8018,
+    "dolma_val": 2.2093,
+    "_raw_ce": {
+      "wikitext_val": 6.4416,
+      "gpt_small_val": 6.2638,
+      "stem_crawl_val": 4.4961,
+      "dolma_val": 5.5128
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 20000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "distinct_2": 0.521,
+    "self_ppl": 6.69,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire was by the Roman Revolution. It was the first of the 14th century. T",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.3011,
+        "self_ppl": 3.913
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.3922,
+        "self_ppl": 4.59
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "distinct_2": 0.521,
+        "self_ppl": 6.69
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49590.4,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 59166.2,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 65276.9,
+    "peak_mem_gb_seq1024": 0.537
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:4fad9d1d094e9e9c",
+    "samples_preview": [
+      "The history of the Roman Empire began with the \"Socracies and the Greeks and Roman Empire?\nWhat was a revolution. It was a very large population in the first ci",
+      "In the field of particle physics, the Standard Model describes the mass and a system. For example, we have an object is a number of 1/C-dimensional box that rep",
+      "To prove that the square root of 2 is irrational, we assume it's theorem.\n\nThis equation is a mathematical induction. For example, when we want to solve for x=1"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_1500.pt",
+      "prior_hash": "sha256:ccb0dbe0cc826939",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with the \"Socracies and the Greeks and Roman Empire?\nWhat was a revolution. It was a very large population in the first ci",
+          "prior": "The history of the Roman Empire began with a new world in their territory. In 17th century, this period was influenced by significant role in many ways that a p"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the mass and a system. For example, we have an object is a number of 1/C-dimensional box that rep",
+          "prior": "In the field of particle physics, the Standard Model describes the first law. The laws governing law of momentum was calculated by a system that is applied to m"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume it's theorem.\n\nThis equation is a mathematical induction. For example, when we want to solve for x=1",
+          "prior": "To prove that the square root of 2 is irrational, we assume that limn=limx2+1\n\nSince x(x)=0=3.\n\n\nOne App. One Place for Learning.\nAll the tools & learning mater"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      44.576,
+      48.544,
+      51.563,
+      60.01,
+      87.449,
+      123.351,
+      30.01,
+      27.529,
+      25.993,
+      23.164,
+      20.586,
+      17.927,
+      15.483,
+      6.171
+    ],
+    "layer_rms_norm": [
+      1.045,
+      1.093,
+      1.15,
+      1.23,
+      1.359,
+      1.555,
+      2.205,
+      2.233,
+      2.256,
+      2.326,
+      2.423,
+      2.535,
+      2.645,
+      3.279
+    ],
+    "mean_layer_kurtosis": 41.597,
+    "mean_layer_rms_norm": 1.952,
+    "max_layer_kurtosis": 123.351,
+    "max_layer_rms_norm": 3.279,
+    "_split_used": "wikitext_val"
+  }
+}

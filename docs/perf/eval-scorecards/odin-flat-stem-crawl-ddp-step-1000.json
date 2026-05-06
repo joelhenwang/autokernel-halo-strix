@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_1000.pt",
+  "checkpoint_name": "odin-flat-stem-crawl-ddp-step-1000",
+  "step": 1000,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681696,
+    "trainable_params": 121681696,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "a",
+  "eval_timestamp": "2026-05-06T15:34:27Z",
+  "eval_duration_s": 79.27,
+  "eval_config": {
+    "max_tokens_per_domain": 20000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.5645,
+    "gpt_small_val": 2.5603,
+    "stem_crawl_val": 1.9364,
+    "dolma_val": 2.2527,
+    "_raw_ce": {
+      "wikitext_val": 6.3993,
+      "gpt_small_val": 6.3888,
+      "stem_crawl_val": 4.832,
+      "dolma_val": 5.6212
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 20000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 100
+    },
+    "distinct_2": 0.4818,
+    "self_ppl": 6.853,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire was an ancient Greece. It was a \"The Greek word \"Craft.\"    The Gree",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.4216,
+        "self_ppl": 5.953
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.4216,
+        "self_ppl": 5.953
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 100,
+        "distinct_2": 0.4818,
+        "self_ppl": 6.853
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49469.3,
+    "peak_mem_gb_seq256": 0.38,
+    "tok_s_seq512_bs1": 59070.8,
+    "peak_mem_gb_seq512": 0.432,
+    "tok_s_seq1024_bs1": 64785.6,
+    "peak_mem_gb_seq1024": 0.535
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:b860613ac54c716c",
+    "samples_preview": [
+      "The history of the Roman Empire began with its political and led to the Western Europe.\n\nWhat was the early European revolution? What were some ways did the dev",
+      "In the field of particle physics, the Standard Model describes the mass and energy of light. The initial velocity is calculated as it can be expressed in the qu",
+      "To prove that the square root of 2 is irrational, we assume it's theorem.\n\nwhere r is a prime numbers in the domain of convergence? Here, where b=1=0 and f(x)2 "
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_500.pt",
+      "prior_hash": "sha256:b280acb60c906baa",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with its political and led to the Western Europe.\n\nWhat was the early European revolution? What were some ways did the dev",
+          "prior": "The history of the Roman Empire began with its first major Romans.\n\nA Roman Empire in Rome was called the Roman Empire. The Roman Empire, there a large numbers:"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the mass and energy of light. The initial velocity is calculated as it can be expressed in the qu",
+          "prior": "In the field of particle physics, the Standard Model describes the first vector.\n\n\nThe initial momentum is an object has a set to create the following: b = p (a"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume it's theorem.\n\nwhere r is a prime numbers in the domain of convergence? Here, where b=1=0 and f(x)2 ",
+          "prior": "To prove that the square root of 2 is irrational, we assume it's answer.\n\n    4.\n\n      If a simple:24\u00d710x+1, when dealing with n=0.\n\n\n\n\n\nBy multiplying both si"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      10.5,
+      10.809,
+      10.252,
+      9.101,
+      8.574,
+      9.071,
+      4.531,
+      4.5,
+      4.402,
+      4.232,
+      4.003,
+      3.765,
+      3.423,
+      2.953
+    ],
+    "layer_rms_norm": [
+      0.895,
+      0.938,
+      0.989,
+      1.055,
+      1.155,
+      1.32,
+      1.917,
+      1.94,
+      1.968,
+      2.013,
+      2.091,
+      2.179,
+      2.267,
+      2.817
+    ],
+    "mean_layer_kurtosis": 6.437,
+    "mean_layer_rms_norm": 1.682,
+    "max_layer_kurtosis": 10.809,
+    "max_layer_rms_norm": 2.817,
+    "_split_used": "wikitext_val"
+  }
+}

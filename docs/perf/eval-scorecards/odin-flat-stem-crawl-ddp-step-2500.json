@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_2500.pt",
+  "checkpoint_name": "odin-flat-stem-crawl-ddp-step-2500",
+  "step": 2500,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681696,
+    "trainable_params": 121681696,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "a",
+  "eval_timestamp": "2026-05-06T15:38:28Z",
+  "eval_duration_s": 78.53,
+  "eval_config": {
+    "max_tokens_per_domain": 20000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.5544,
+    "gpt_small_val": 2.5141,
+    "stem_crawl_val": 1.7303,
+    "dolma_val": 2.1826,
+    "_raw_ce": {
+      "wikitext_val": 6.374,
+      "gpt_small_val": 6.2736,
+      "stem_crawl_val": 4.3177,
+      "dolma_val": 5.4463
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 20000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.8,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 100
+    },
+    "distinct_2": 0.5826,
+    "self_ppl": 7.924,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire was an ancient Greece. It was a Roman Empire called the term that is",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.57,
+        "self_ppl": 7.684
+      },
+      "stage2_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.57,
+        "self_ppl": 7.684
+      },
+      "stage3_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 100,
+        "distinct_2": 0.5826,
+        "self_ppl": 7.924
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49808.4,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 58531.7,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 65435.2,
+    "peak_mem_gb_seq1024": 0.537
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:e4787ce9e10b9c60",
+    "samples_preview": [
+      "The history of the Roman Empire began with the first major in their territory. In 17th century, the late 19th century. The Roman-states were a key role in the e",
+      "In the field of particle physics, the Standard Model describes the mass and its initial velocity is:\nv=\u03c12r. The value of the particle's law helps us to calculat",
+      "To prove that the square root of 2 is irrational, we assume that limn=0+2.\n\n\nSince x is continuous like 1/3, then . Therefore the equation is not rational. For "
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/odin-flat-stem-crawl-ddp/step_2000.pt",
+      "prior_hash": "sha256:4fad9d1d094e9e9c",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with the first major in their territory. In 17th century, the late 19th century. The Roman-states were a key role in the e",
+          "prior": "The history of the Roman Empire began with the \"Socracies and the Greeks and Roman Empire?\nWhat was a revolution. It was a very large population in the first ci"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the mass and its initial velocity is:\nv=\u03c12r. The value of the particle's law helps us to calculat",
+          "prior": "In the field of particle physics, the Standard Model describes the mass and a system. For example, we have an object is a number of 1/C-dimensional box that rep"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume that limn=0+2.\n\n\nSince x is continuous like 1/3, then . Therefore the equation is not rational. For ",
+          "prior": "To prove that the square root of 2 is irrational, we assume it's theorem.\n\nThis equation is a mathematical induction. For example, when we want to solve for x=1"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      69.245,
+      77.199,
+      86.351,
+      111.189,
+      186.892,
+      298.201,
+      46.642,
+      40.201,
+      36.73,
+      32.131,
+      28.493,
+      25.024,
+      22.385,
+      7.661
+    ],
+    "layer_rms_norm": [
+      0.943,
+      0.99,
+      1.049,
+      1.131,
+      1.277,
+      1.495,
+      2.001,
+      2.028,
+      2.041,
+      2.111,
+      2.206,
+      2.316,
+      2.418,
+      2.989
+    ],
+    "mean_layer_kurtosis": 76.31,
+    "mean_layer_rms_norm": 1.785,
+    "max_layer_kurtosis": 298.201,
+    "max_layer_rms_norm": 2.989,
+    "_split_used": "wikitext_val"
+  }
+}
