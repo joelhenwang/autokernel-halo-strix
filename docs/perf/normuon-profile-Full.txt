@@ -1,0 +1,79 @@
+/home/joelwang-ai-2/Desktop/ai_lab/autokernel-halo-strix/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py:1367: UserWarning: expandable_segments not supported on this platform (Triggered internally at /__w/rockrel/rockrel/external-builds/pytorch/pytorch/c10/hip/HIPAllocatorConfig.h:40.)
+  return t.to(
+Loading model: models/odin_flat.py::OdinFlat
+OdinFlat: 121.7M params
+[Sprint 1 flags on OdinFlat] {'use_intra_doc_mask': 'ON', 'use_value_residuals': 'ON', 'use_head_gating': 'ON'}
+Compiling model (per-zone for looped model)...
+compile_zones: per-layer torch.compile mode=default (14 layers)
+IMU-1 optimizer: NorMuon(2D, n=52,512,768, lr=0.005) + AdamW(1D, n=69,168,954, lr=0.0008, wd=0)
+PreTokenizedDataset: 122,982,488 tokens -> 239,731 chunks of 512
+[92mSuccessfully preprocessed all matching files.[0m
+
+Profile config: 121.7M params, batch=16, block=512, tokens/step=8192
+Warmup steps: 50   Measured steps: 100
+
+Warming up (50 steps)...
+/home/joelwang-ai-2/Desktop/ai_lab/autokernel-halo-strix/.venv/lib/python3.12/site-packages/torch/profiler/profiler.py:217: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+[W507 01:18:57.169590779 collection.cpp:1148] Warning: ROCTracer produced duplicate flow start: 2 (function operator())
+Warmup done in 70.8s (1415.8 ms/step avg)
+
+Profiling 100 steps...
+Measured: 126.3s  1263.1 ms/step  6,486 tok/s (single-node)
+
+=== TOP OPS BY CUDA_TIME_TOTAL (avg across 100 steps) ===
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               aten::mm         7.98%        9.358s         9.14%       10.721s      99.819us       92.462s        78.13%       92.462s     860.916us        107400  
+                            Optimizer.step#NorMuon.step         0.00%       0.000us         0.00%       0.000us       0.000us       73.870s        62.42%       73.870s     738.701ms           100  
+                            Optimizer.step#NorMuon.step         1.05%        1.227s        11.63%       13.641s     136.413ms       0.000us         0.00%       73.032s     730.323ms           100  
+                                           aten::matmul         0.05%      63.347ms         8.52%        9.989s     112.489us       0.000us         0.00%       66.215s     745.669us         88800  
+Cijk_Alik_Bljk_S_B_Bias_HA_S_SAV_UserArgs_MT8x8x8_SN...         0.00%       0.000us         0.00%       0.000us       0.000us       31.537s        26.65%       31.537s       1.069ms         29500  
+Cijk_Ailk_Bljk_S_B_Bias_HA_S_SAV_UserArgs_MT8x8x8_SN...         0.00%       0.000us         0.00%       0.000us       0.000us       29.106s        24.59%       29.106s     718.657us         40500  
+autograd::engine::evaluate_function: CompiledFunctio...         0.03%      37.900ms         1.56%        1.824s     701.353us       0.000us         0.00%       22.767s       8.756ms          2600  
+                               CompiledFunctionBackward         0.21%     246.839ms         1.51%        1.767s     679.757us       0.000us         0.00%       22.655s       8.713ms          2600  
+## Call CompiledFxGraph f7cmcrggojytlxrpq23dnuwqtvhu...         0.00%       0.000us         0.00%       0.000us       0.000us       15.710s        13.28%       15.710s      13.092ms          1200  
+## Call CompiledFxGraph f7cmcrggojytlxrpq23dnuwqtvhu...         0.20%     239.030ms         0.58%     680.186ms     566.822us       0.000us         0.00%       15.658s      13.048ms          1200  
+Cijk_Ailk_Bjlk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT64x96...         0.00%       0.000us         0.00%       0.000us       0.000us       12.157s        10.27%       12.157s       2.643ms          4600  
+                                       CompiledFunction         0.17%     195.219ms         1.00%        1.176s     452.177us       0.000us         0.00%        7.893s       3.036ms          2600  
+                             Torch-Compiled Region: 0/0         0.08%      91.889ms         1.37%        1.601s       1.334ms     126.687ms         0.11%        7.104s       5.920ms          1200  
+Cijk_Ailk_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT96x96...         0.00%       0.000us         0.00%       0.000us       0.000us        6.439s         5.44%        6.439s       1.150ms          5600  
+                             Torch-Compiled Region: 1/0         0.05%      61.123ms         0.90%        1.056s     880.042us       0.000us         0.00%        6.136s       5.114ms          1200  
+## Call CompiledFxGraph fotd6z4ycpy2tilfnm7z5gyyxizt...         0.00%       0.000us         0.00%       0.000us       0.000us        5.617s         4.75%        5.617s       4.680ms          1200  
+                             Torch-Compiled Region: 7/0         0.04%      50.282ms         0.51%     592.331ms     493.609us       0.000us         0.00%        5.584s       4.653ms          1200  
+## Call CompiledFxGraph fotd6z4ycpy2tilfnm7z5gyyxizt...         0.15%     178.265ms         0.39%     458.556ms     382.130us       0.000us         0.00%        5.584s       4.653ms          1200  
+Cijk_Ailk_Bjlk_S_B_Bias_HA_S_SAV_UserArgs_MT16x16x8_...         0.00%       0.000us         0.00%       0.000us       0.000us        4.889s         4.13%        4.889s     264.280us         18500  
+Cijk_Alik_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT128x8...         0.00%       0.000us         0.00%       0.000us       0.000us        4.282s         3.62%        4.282s       1.529ms          2800  
+                                              aten::mul         0.37%     439.149ms         0.70%     817.168ms       7.193us        3.658s         3.09%        3.658s      32.198us        113600  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us        2.957s         2.50%        2.957s      23.617us        125200  
+                                            aten::copy_         0.03%      32.154ms        49.96%       58.572s       7.143ms        2.685s         2.27%        2.685s     327.461us          8200  
+                                               aten::to         0.01%      15.255ms        50.01%       58.632s       1.647ms       0.000us         0.00%        2.657s      74.630us         35600  
+                                         aten::_to_copy         0.02%      25.141ms        50.00%       58.617s       7.237ms       0.000us         0.00%        2.657s     328.004us          8100  
+## Call CompiledFxGraph fkco7j6zbxdboodwjbob5sghlpzo...         0.00%       0.000us         0.00%       0.000us       0.000us        2.618s         2.21%        2.618s       2.182ms          1200  
+## Call CompiledFxGraph fkco7j6zbxdboodwjbob5sghlpzo...         0.15%     171.635ms         0.36%     422.190ms     351.825us       0.000us         0.00%        2.600s       2.166ms          1200  
+       autograd::engine::evaluate_function: MmBackward0         0.00%       2.402ms         0.03%      40.382ms     134.606us       0.000us         0.00%        2.563s       8.542ms           300  
+                                            MmBackward0         0.00%       2.359ms         0.03%      37.979ms     126.598us       0.000us         0.00%        2.563s       8.542ms           300  
+## Call CompiledFxGraph fd42lggpjje2jukjmxqtoreaxeav...         0.00%       0.000us         0.00%       0.000us       0.000us        2.274s         1.92%        2.274s      22.743ms           100  
+## Call CompiledFxGraph fd42lggpjje2jukjmxqtoreaxeav...         0.05%      60.691ms         0.15%     171.159ms       1.712ms       0.000us         0.00%        2.262s      22.615ms           100  
+## Call CompiledFxGraph fkihvitroq53ki2s6lgtcgytgdox...         0.00%       0.000us         0.00%       0.000us       0.000us        2.100s         1.77%        2.100s      21.005ms           100  
+## Call CompiledFxGraph fkihvitroq53ki2s6lgtcgytgdox...         0.06%      71.169ms         0.17%     204.642ms       2.046ms       0.000us         0.00%        2.089s      20.888ms           100  
+autograd::engine::evaluate_function: CausalConv1dFnB...         0.01%      10.400ms         0.19%     218.682ms     182.235us       0.000us         0.00%        1.803s       1.503ms          1200  
+                                 CausalConv1dFnBackward         0.05%      63.933ms         0.18%     208.283ms     173.569us       0.000us         0.00%        1.803s       1.503ms          1200  
+                       DaoAILab::_causal_conv1d_bwd_cpp         0.08%      89.933ms         0.08%      96.273ms      80.228us        1.799s         1.52%        1.799s       1.499ms          1200  
+void causal_conv1d_channellast_bwd_kernel<Causal_con...         0.00%       0.000us         0.00%       0.000us       0.000us        1.799s         1.52%        1.799s       1.499ms          1200  
+                                              aten::add         0.23%     270.766ms         0.43%     507.469ms       7.147us        1.775s         1.50%        1.775s      25.005us         71000  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us        1.448s         1.22%        1.448s      20.513us         70600  
+triton_poi_fused__unsafe_view_cat_mul_silu_silu_back...         0.01%      14.720ms         0.02%      23.706ms      16.933us        1.429s         1.21%        1.429s       1.020ms          1400  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 117.244s
+Self CUDA time total: 118.344s
+
+
+=== SUMMARY ===
+config: model=OdinFlat batch=16 block=512
+  optimizer: no_muon=True imu1_groups=True normuon=True lr_2d=0.005 lr_1d=0.0008
+  sprint1: intra_doc_mask=True value_residuals=True head_gating=True
+  compile: True
+steps: warmup=50 measured=100
+timing: 1263.10 ms/step  6,486 tok/s
