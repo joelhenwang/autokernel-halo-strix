@@ -1,0 +1,185 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-s1_3-lr2_5e3-700/step_400.pt",
+  "checkpoint_name": "sprint3-s1_3-lr2_5e3-700-step-400",
+  "step": 400,
+  "model": {
+    "file": "models/odin_halo.py",
+    "class": "OdinHalo",
+    "total_params": 57567008,
+    "trainable_params": 57567008,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T16:31:15Z",
+  "eval_duration_s": 546.88,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.83,
+    "gpt_small_val": 2.7837,
+    "stem_crawl_val": 2.4302,
+    "dolma_val": 2.4425,
+    "_raw_ce": {
+      "wikitext_val": 7.0619,
+      "gpt_small_val": 6.9462,
+      "stem_crawl_val": 6.0642,
+      "dolma_val": 6.0949
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.8,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 100
+    },
+    "distinct_2": 0.3235,
+    "self_ppl": 6.536,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire       The   the        the                 the                     t",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.1919,
+        "self_ppl": 4.345
+      },
+      "stage2_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.2423,
+        "self_ppl": 5.229
+      },
+      "stage3_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 100,
+        "distinct_2": 0.3235,
+        "self_ppl": 6.536
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 7464.5,
+    "peak_mem_gb_seq256": 0.252,
+    "tok_s_seq512_bs1": 8846.2,
+    "peak_mem_gb_seq512": 0.305,
+    "tok_s_seq1024_bs1": 14198.4,
+    "peak_mem_gb_seq1024": 0.411
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:e9510a7523d17990",
+    "samples_preview": [
+      "The history of the Roman Empire began with the S the\n The G\n the Middle M\n the north and the\n the right\n the\n the\n the the\n the 17 the the the\n the the\n\n the no",
+      "In the field of particle physics, the Standard Model describes the model. In the model\nIn the function\n In the model\nIn the process the model the process the me",
+      "To prove that the square root of 2 is irrational, we assume that we use of 3, we assume that we assume that we obtain that we calculate that we analyze that we "
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint3-s1_3-lr2_5e3-700/step_200.pt",
+      "prior_hash": "sha256:31594f8d3cc84cc3",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with the S the\n The G\n the Middle M\n the north and the\n the right\n the\n the\n the the\n the 17 the the the\n the the\n\n the no",
+          "prior": "The history of the Roman Empire began with the \" the in the the the the the the the the the the the the the the the the the the the the the the the the the the "
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the model. In the model\nIn the function\n In the model\nIn the process the model the process the me",
+          "prior": "In the field of particle physics, the Standard Model describes the first the the the the the the the the the the the the the the the the the the the the the the"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume that we use of 3, we assume that we assume that we obtain that we calculate that we analyze that we ",
+          "prior": "To prove that the square root of 2 is irrational, we assume the angle is a 3, the equation is a, the sum is 0, the first, the formula\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+        }
+      ]
+    }
+  },
+  "activation_stats": null,
+  "convergence_stats": {
+    "num_batches": 3,
+    "seq_len": 512,
+    "batch_size": 2,
+    "is_looped": true,
+    "mean_recurrence": 3,
+    "num_layers": 6,
+    "tau": 0.95,
+    "per_layer_cos_to_final": [
+      0.4993,
+      0.5578,
+      0.5928,
+      0.9643,
+      0.9863,
+      1.0
+    ],
+    "per_layer_cos_to_final_frac_high": [
+      0.0,
+      0.0,
+      0.0,
+      0.863,
+      1.0,
+      1.0
+    ],
+    "inter_layer_transition_cos": [
+      0.9364,
+      0.9493,
+      0.6016,
+      0.987,
+      0.9863
+    ],
+    "effective_rank_final": 2.8945,
+    "_split_used": "wikitext_val",
+    "iter_k_cos_to_final": [
+      0.2696,
+      0.6393
+    ],
+    "iter_k_cos_to_final_frac_high": [
+      0.0,
+      0.0023
+    ],
+    "iter_transition_cos": [
+      0.1772,
+      0.6393
+    ]
+  }
+}

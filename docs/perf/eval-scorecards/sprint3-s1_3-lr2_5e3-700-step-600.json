@@ -1,0 +1,185 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-s1_3-lr2_5e3-700/step_600.pt",
+  "checkpoint_name": "sprint3-s1_3-lr2_5e3-700-step-600",
+  "step": 600,
+  "model": {
+    "file": "models/odin_halo.py",
+    "class": "OdinHalo",
+    "total_params": 57567008,
+    "trainable_params": 57567008,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T16:48:12Z",
+  "eval_duration_s": 476.86,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 3.0967,
+    "gpt_small_val": 3.0503,
+    "stem_crawl_val": 2.7492,
+    "dolma_val": 2.8017,
+    "_raw_ce": {
+      "wikitext_val": 7.7272,
+      "gpt_small_val": 7.6115,
+      "stem_crawl_val": 6.8602,
+      "dolma_val": 6.9911
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.8,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 40
+    },
+    "distinct_2": 0.0742,
+    "self_ppl": 1.608,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire                                                                     ",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.063,
+        "self_ppl": 1.6
+      },
+      "stage2_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.0742,
+        "self_ppl": 1.608
+      },
+      "stage3_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.0742,
+        "self_ppl": 1.608
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 7451.8,
+    "peak_mem_gb_seq256": 0.252,
+    "tok_s_seq512_bs1": 8777.7,
+    "peak_mem_gb_seq512": 0.305,
+    "tok_s_seq1024_bs1": 14579.7,
+    "peak_mem_gb_seq1024": 0.411
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:98de2fecd2be0121",
+    "samples_preview": [
+      "The history of the Roman Empire began with the West\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+      "In the field of particle physics, the Standard Model describes the comment. model of the post. test the function of particle control algorithm use the process o",
+      "To prove that the square root of 2 is irrational, we assume that if if 2 assume that\n\n\n\n\n\n\n\n\n\n\n\n33 know if2\n\n3\n\n\n3?\n3?\n4?\n3?\n\n4?\n3?\n6\n4?\n4?\n\n4?\n\n4?\n6?\n3?\n3?\n\n4?"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint3-s1_3-lr2_5e3-700/step_400.pt",
+      "prior_hash": "sha256:e9510a7523d17990",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with the West\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+          "prior": "The history of the Roman Empire began with the S the\n The G\n the Middle M\n the north and the\n the right\n the\n the\n the the\n the 17 the the the\n the the\n\n the no"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the comment. model of the post. test the function of particle control algorithm use the process o",
+          "prior": "In the field of particle physics, the Standard Model describes the model. In the model\nIn the function\n In the model\nIn the process the model the process the me"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume that if if 2 assume that\n\n\n\n\n\n\n\n\n\n\n\n33 know if2\n\n3\n\n\n3?\n3?\n4?\n3?\n\n4?\n3?\n6\n4?\n4?\n\n4?\n\n4?\n6?\n3?\n3?\n\n4?",
+          "prior": "To prove that the square root of 2 is irrational, we assume that we use of 3, we assume that we assume that we obtain that we calculate that we analyze that we "
+        }
+      ]
+    }
+  },
+  "activation_stats": null,
+  "convergence_stats": {
+    "num_batches": 3,
+    "seq_len": 512,
+    "batch_size": 2,
+    "is_looped": true,
+    "mean_recurrence": 3,
+    "num_layers": 6,
+    "tau": 0.95,
+    "per_layer_cos_to_final": [
+      0.2895,
+      0.3259,
+      0.3446,
+      0.942,
+      0.9764,
+      1.0
+    ],
+    "per_layer_cos_to_final_frac_high": [
+      0.0,
+      0.0,
+      0.0,
+      0.3968,
+      0.9834,
+      1.0
+    ],
+    "inter_layer_transition_cos": [
+      0.9382,
+      0.9331,
+      0.3826,
+      0.9789,
+      0.9764
+    ],
+    "effective_rank_final": 2.0037,
+    "_split_used": "wikitext_val",
+    "iter_k_cos_to_final": [
+      0.0404,
+      0.5224
+    ],
+    "iter_k_cos_to_final_frac_high": [
+      0.0,
+      0.0016
+    ],
+    "iter_transition_cos": [
+      0.0815,
+      0.5224
+    ]
+  }
+}

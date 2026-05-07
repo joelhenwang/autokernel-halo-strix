@@ -77,6 +77,9 @@ EVALUATORS = [
     ("inference_profile", "halo_training.eval.inference_profile"),
     ("sample_pack", "halo_training.eval.sample_pack"),
     ("activation_stats", "halo_training.eval.activation_stats"),
+    # Phase A' (2026-05-07): convergence / exit-readiness diagnostics for
+    # LEAP-style Phase B gating. Safe to skip via --skip-convergence-stats.
+    ("convergence_stats", "halo_training.eval.convergence_stats"),
 ]
 
 WALL_TIME_BUDGET_S = 15 * 60  # 15 min hard cap per spec
