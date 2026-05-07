@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-s1_3b-lr2e3-700/step_200.pt",
+  "checkpoint_name": "sprint3-s1_3b-lr2e3-700-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_halo.py",
+    "class": "OdinHalo",
+    "total_params": 57567008,
+    "trainable_params": 57567008,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T19:35:26Z",
+  "eval_duration_s": 509.98,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.9715,
+    "gpt_small_val": 2.9222,
+    "stem_crawl_val": 2.5491,
+    "dolma_val": 2.5462,
+    "_raw_ce": {
+      "wikitext_val": 7.415,
+      "gpt_small_val": 7.2918,
+      "stem_crawl_val": 6.3608,
+      "dolma_val": 6.3536
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.8,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 40
+    },
+    "distinct_2": 0.119,
+    "self_ppl": 2.047,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire for the the the the we the first the the the the the the the the the",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.0378,
+        "self_ppl": 1.564
+      },
+      "stage2_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.119,
+        "self_ppl": 2.047
+      },
+      "stage3_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.119,
+        "self_ppl": 2.047
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 6859.5,
+    "peak_mem_gb_seq256": 0.252,
+    "tok_s_seq512_bs1": 9257.8,
+    "peak_mem_gb_seq512": 0.305,
+    "tok_s_seq1024_bs1": 13859.8,
+    "peak_mem_gb_seq1024": 0.411
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:39bf005ccdbb6d71",
+    "samples_preview": [
+      "The history of the Roman Empire began with the \"Question A which the A In the M1 A C 1 the C A and the G- the A a the the B 3, the the A A the two the B (2 for ",
+      "In the field of particle physics, the Standard Model describes the first one in the T, the given the the the the B, the the the the n the the 1 the ( the the th",
+      "To prove that the square root of 2 is irrational, we assume the x i, then the, so the finite, if the equation.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\\n\n\n\n\n\nA\n\n\n\nThe\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": null,
+  "convergence_stats": {
+    "num_batches": 3,
+    "seq_len": 512,
+    "batch_size": 2,
+    "is_looped": true,
+    "mean_recurrence": 3,
+    "num_layers": 6,
+    "tau": 0.95,
+    "per_layer_cos_to_final": [
+      0.5949,
+      0.6659,
+      0.712,
+      0.9529,
+      0.9824,
+      1.0
+    ],
+    "per_layer_cos_to_final_frac_high": [
+      0.0,
+      0.0,
+      0.0,
+      0.6927,
+      0.9714,
+      1.0
+    ],
+    "inter_layer_transition_cos": [
+      0.9317,
+      0.957,
+      0.7422,
+      0.9815,
+      0.9824
+    ],
+    "effective_rank_final": 2.7788,
+    "_split_used": "wikitext_val",
+    "iter_k_cos_to_final": [
+      0.2848,
+      0.558
+    ],
+    "iter_k_cos_to_final_frac_high": [
+      0.0,
+      0.0003
+    ],
+    "iter_transition_cos": [
+      0.2501,
+      0.558
+    ]
+  }
+}
