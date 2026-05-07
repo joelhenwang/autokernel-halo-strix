@@ -410,6 +410,30 @@ proceeds as normal. The only wrinkle: option (c)'s fp32 inverse
 triggers a separate autotune pass for fp32 kernels, adding ~30 s to
 first compile.
 
+### 5.4 Interaction with the Fullgraph Compile Sprint (post-v3.1)
+
+The compile cost estimates in §5.1 (option A: 5–8% regression) assume
+today's per-layer `compile_zones`. The OdinHalo Fullgraph Compile
+Sprint (`docs/superpowers/specs/2026-05-07-odinhalo-fullgraph-compile-design.md`)
+targets the same graph-break boundaries A2 would otherwise have to
+patch around. If the Fullgraph Sprint ships before A2 starts:
+
+- HIP kernels already have `torch.library.custom_op` wrappers — A2's
+  coupling blocks inherit a clean single-graph compile target.
+- `depth_kv_buffer` is already a static tensor — A2 doesn't need to
+  duplicate that migration.
+- `compile_zones(fullgraph=True)` is a supported entry point — A2's
+  coupling variant just adds a second `fullgraph=True` path.
+
+**Updated cost estimate when Fullgraph Sprint lands first**: A2
+option (A) compile regression drops from 5–8% to approximately
+0–2% (parity or small win). This materially strengthens A2's
+decision case at its 2026-09-01 kill date.
+
+**If A2 starts before the Fullgraph Sprint**: A2 must absorb the
+full 5–8% compile tax AND do its own HIP-kernel-wrapping work. Not
+recommended — sequence them properly.
+
 ## 6. Corrected decision recommendation
 
 ### 6.1 Preconditions to start A2

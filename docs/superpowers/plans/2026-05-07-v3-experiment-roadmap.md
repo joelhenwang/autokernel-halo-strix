@@ -287,6 +287,32 @@ filtered binary and keep the current dataset.
 
 **Kill date**: 2026-10-01.
 
+## Infrastructure milestones (non-v3)
+
+These are engineering Sprints that don't fit the v3 speculative taxonomy
+but have dependencies on or from v3 phases.
+
+### Fullgraph Compile Sprint (post-v3.1, ~3 weeks)
+
+Full spec + plan:
+- `docs/superpowers/specs/2026-05-07-odinhalo-fullgraph-compile-design.md`
+- `docs/superpowers/plans/2026-05-07-odinhalo-fullgraph-compile-plan.md`
+
+Eliminates `torch.compile` graph breaks in OdinHalo forward by
+wrapping HIP kernels with `torch.library.custom_op` and migrating
+`depth_kv_buffer` to a static tensor. Two goals:
+
+1. Throughput win (honest ceiling ~2–5% without CUDA graphs, up to
+   15% if HIP graph capture works).
+2. Clean foundation for A2 reversible Parcae — reduces A2's
+   projected compile tax from 5–8% to ~0–2%.
+
+**Sequencing**: starts after v3.1 distillation lands; must land
+before A2 starts (otherwise A2 absorbs both compile taxes).
+**Budget**: ~3 weeks single-engineer.
+**Kill date**: 2026-09-15 (if not started by then, the v3.2 A2 kill
+check fires first with the higher compile cost).
+
 ## Execution Gantt (approximate)
 
 ```
@@ -296,8 +322,9 @@ W01-02  [v3.0] E4 + B1 + B4 (combined run)
 W03-04  [v3.1] E1 distillation infra + 3 runs
 W05     [v3.1] E2 iteration warmup (single run)
 W06     [v3.1] E3 context curriculum (single run)
-W07-09  [v3.2] A5 het-MoE (if triggered) OR A3 workspace
-W10-12  [v3.2] second v3.2 pick (gate-dependent)
+W07-09  [infra] Fullgraph Compile Sprint (OdinHalo)
+W10-12  [v3.2] A5 het-MoE (if triggered) OR A3 workspace
+W13-16  [v3.2] second v3.2 pick (A2 reversible now cheaper to run)
 
 parallel:
 W01-06  [E5] FrankenMoE-Loop v2 L11 ablations as they come up
@@ -322,10 +349,11 @@ runs, which are separate):
 |---|---|---|
 | v3.0 | ~10 hours | ~2 weeks |
 | v3.1 | ~20 hours (3 distillation runs + E2 + E3) | ~4 weeks |
+| Fullgraph Sprint (infra) | ~10 hours (validation runs) | ~3 weeks |
 | v3.2 | ~15 hours per experiment × 2 = 30 hours | ~6–8 weeks |
 | E5 parallel | ~8 hours | ~2 weeks (absorbed in v2 L11) |
 | E6 | ~2 hours (+ CPU analysis) | ~3 days |
-| **Total** | **~70 hours DDP** | **~12–14 weeks single-engineer** |
+| **Total** | **~80 hours DDP** | **~15–17 weeks single-engineer** |
 
 Compared to Sprint 3 dolma-10B full run at ~50 hours, this is a
 modest compute budget; the bottleneck is engineering time.
@@ -350,6 +378,10 @@ modest compute budget; the bottleneck is engineering time.
   A2 deep audit with detailed preconditions.
 - `docs/superpowers/specs/2026-05-07-self-distillation-odinflat-odinhalo.md` —
   E1 full spec.
+- `docs/superpowers/specs/2026-05-07-odinhalo-fullgraph-compile-design.md` —
+  infra milestone spec (post-v3.1).
+- `docs/superpowers/plans/2026-05-07-odinhalo-fullgraph-compile-plan.md` —
+  infra milestone plan.
 - `docs/superpowers/specs/2026-05-07-frankenmoe-loop-design.md` —
   FrankenMoE-Loop v2 (v3.2 A5 depends on post-v2 stability).
 - `STATUS.md` — current training status including Sprint 3 smoke
