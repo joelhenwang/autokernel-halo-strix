@@ -350,6 +350,37 @@ def test_log_line_includes_scale_field():
 # Bug-fix: --max-steps mid-accum termination no longer needs try/except
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Scale-collapse detection (smoke finding 2026-05-07)
+# ---------------------------------------------------------------------------
+
+def test_scaler_collapse_triggers_rollback():
+    """check_scaler returns False when scaler.scale < scale_floor."""
+    tm = _load_train_ddp_module()
+    guard = tm.StabilityGuard(checkpoint_dir=".", rank=0, scale_floor=1.0)
+
+    class FakeScaler:
+        def __init__(self, scale):
+            self._scale = scale
+        def get_scale(self):
+            return self._scale
+
+    # Healthy scale
+    assert guard.check_scaler(FakeScaler(1024.0), step=100) is True
+    # Collapsed scale (below floor)
+    assert guard.check_scaler(FakeScaler(0.5), step=100) is False
+    # Near-zero scale (the actual smoke-run failure mode)
+    assert guard.check_scaler(FakeScaler(2.8e-17), step=100) is False
+    # Exactly floor: PASSES (strictly below floor = collapse)
+    assert guard.check_scaler(FakeScaler(1.0), step=100) is True
+    # Failed read returns True (no false positives)
+    class BrokenScaler:
+        def get_scale(self):
+            raise RuntimeError("scaler broken")
+    assert guard.check_scaler(BrokenScaler(), step=100) is True
+    print("  OK: check_scaler returns False on scale<1.0, True on healthy/unreadable")
+
+
 def test_flush_guarded_by_backwards_in_cycle():
     """Flush block should be gated by backwards_in_cycle counter, not try/except.
 
@@ -402,6 +433,7 @@ def main():
         test_rollback_halves_growth_interval,
         test_rollback_scaler_optional,
         test_log_line_includes_scale_field,
+        test_scaler_collapse_triggers_rollback,
         test_flush_guarded_by_backwards_in_cycle,
     ]
     for t in tests:

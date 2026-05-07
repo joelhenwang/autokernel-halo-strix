@@ -278,10 +278,15 @@ def _model_accepts_doc_ids(model) -> bool:
 class StabilityGuard:
     """Detects training instability and auto-recovers from last checkpoint.
 
-    Three detection mechanisms:
+    Four detection mechanisms:
     1. NaN loss — immediate rollback
     2. Loss spike — loss > spike_factor * EMA triggers rollback
     3. Parameter NaN — periodic weight scan catches silent corruption
+    4. GradScaler scale collapse (2026-05-07+) — scale < scale_floor triggers
+       rollback. Closes the gap where sustained microstep-NaN causes scale
+       to halve repeatedly without ever tripping a loss-level NaN (step_loss
+       is NaN-filtered in train_ddp.py; runaway-backoff silently drives
+       scale -> 0 which deads training).
 
     On trigger: reload last checkpoint, reduce LR by decay_factor, continue.
     """
@@ -294,6 +299,7 @@ class StabilityGuard:
         lr_decay_on_rollback: float = 0.5,
         ema_alpha: float = 0.99,
         param_check_interval: int = 500,
+        scale_floor: float = 1.0,
         rank: int = 0,
     ):
         self.checkpoint_dir = checkpoint_dir
@@ -302,6 +308,10 @@ class StabilityGuard:
         self.lr_decay_on_rollback = lr_decay_on_rollback
         self.ema_alpha = ema_alpha
         self.param_check_interval = param_check_interval
+        # fp16-stability (smoke finding 2026-05-07): scale below this floor
+        # signals runaway backoff; default 1.0 catches scale collapse before
+        # it reaches zero and kills training.
+        self.scale_floor = scale_floor
         self.rank = rank
 
         self.loss_ema = None
@@ -367,6 +377,25 @@ class StabilityGuard:
                 if self.rank == 0:
                     print(f"  [StabilityGuard] NaN/Inf in param '{name}' at step {step}")
                 return False
+        return True
+
+    def check_scaler(self, scaler, step: int) -> bool:
+        """fp16-stability: detect GradScaler scale collapse.
+
+        Returns True if healthy. The default scaler init_scale is 1024; any
+        value below scale_floor (default 1.0) means at least 10 consecutive
+        overflow backoffs have happened — a clear sign that fp16 is not
+        sufficient for current training state. Triggers rollback.
+        """
+        try:
+            current_scale = float(scaler.get_scale())
+        except Exception:
+            return True  # Can't read scale; don't trigger a false positive.
+        if current_scale < self.scale_floor:
+            if self.rank == 0:
+                print(f"  [StabilityGuard] GradScaler scale collapse at step {step}: "
+                      f"scale={current_scale:.2e} < floor={self.scale_floor:.2e}")
+            return False
         return True
 
     def rollback(self, model, optimizer, device, scaler=None):
@@ -1044,7 +1073,8 @@ def main():
                 if guard_active and (
                     not guard.check_loss(step_loss, global_step) or
                     too_many_skips or
-                    not guard.check_params(model, global_step)
+                    not guard.check_params(model, global_step) or
+                    not guard.check_scaler(scaler, global_step)
                 ):
                     # fp16-stability R1: dump forensics BEFORE rollback so
                     # we capture the exact state that tripped the guard.
@@ -1057,7 +1087,17 @@ def main():
                         elif guard.loss_ema is not None and step_loss > guard.spike_factor * guard.loss_ema:
                             trigger = "loss_spike"
                         else:
-                            trigger = "param_nan_or_unknown"
+                            # At this point the trigger was either param_nan
+                            # (check_params scan) or scale_collapse (check_scaler).
+                            # Disambiguate cheaply:
+                            try:
+                                scale_now = float(scaler.get_scale())
+                            except Exception:
+                                scale_now = None
+                            if scale_now is not None and scale_now < guard.scale_floor:
+                                trigger = "scale_collapse"
+                            else:
+                                trigger = "param_nan"
                         save_nan_forensics(
                             dump_dir=args.checkpoint_dir,
                             step=global_step,

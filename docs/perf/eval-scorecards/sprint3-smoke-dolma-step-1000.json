@@ -1,0 +1,139 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-smoke-dolma/step_1000.pt",
+  "checkpoint_name": "sprint3-smoke-dolma-step-1000",
+  "step": 1000,
+  "model": {
+    "file": "models/odin_halo.py",
+    "class": "OdinHalo",
+    "total_params": 57567008,
+    "trainable_params": 57567008,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T11:13:57Z",
+  "eval_duration_s": 115.55,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 4.1432,
+    "gpt_small_val": 4.2224,
+    "stem_crawl_val": 3.8824,
+    "dolma_val": 4.2861,
+    "_raw_ce": {
+      "wikitext_val": 10.3386,
+      "gpt_small_val": 10.5362,
+      "stem_crawl_val": 9.688,
+      "dolma_val": 10.6952
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 40
+    },
+    "distinct_2": 0.3936,
+    "self_ppl": 3.334,
+    "avg_length": 83.8,
+    "sample_preview": "The history of the Roman Empire history?    - ( \" \"\"   \"  \" \"<|endoftext|>",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.3936,
+        "self_ppl": 3.334
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.3936,
+        "self_ppl": 3.334
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.3936,
+        "self_ppl": 3.334
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 19917.0,
+    "peak_mem_gb_seq256": 0.252,
+    "tok_s_seq512_bs1": 21772.1,
+    "peak_mem_gb_seq512": 0.305,
+    "tok_s_seq1024_bs1": 27451.5,
+    "peak_mem_gb_seq1024": 0.411
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:7dd80491e874aa70",
+    "samples_preview": [
+      "The history of the Roman Empire began with with. the previous is $The The mayal the subject and should conclude statement and follows,, will OF. did the the his",
+      "In the field of particle physics, the Standard Model describes in In in in in. In InIn inIn InIn InIn in inIn in in in in in in in in InIn inIn in inIn In in ev",
+      "To prove that the square root of 2 is irrational, we assume to to to to to to to to to to to to to to to to to to to to to to to to to to to to to to to to to t"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint3-smoke-dolma/step_750.pt",
+      "prior_hash": "sha256:734fea43245e0b01",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with with. the previous is $The The mayal the subject and should conclude statement and follows,, will OF. did the the his",
+          "prior": "The history of the Roman Empire began with The history the The history the the historical the history the history the history the history the history the histor"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes in In in in in. In InIn inIn InIn InIn in inIn in in in in in in in in InIn inIn in inIn In in ev",
+          "prior": "In the field of particle physics, the Standard Model describes in the graph in the model In the App In the circuit of the circuit in the circuit of the circuit "
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume to to to to to to to to to to to to to to to to to to to to to to to to to to to to to to to to to t",
+          "prior": "To prove that the square root of 2 is irrational, we assume to to to to the square to to can can can shall to can cannot to to can should to l to does even from"
+        }
+      ]
+    }
+  },
+  "activation_stats": null
+}

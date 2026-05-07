@@ -187,6 +187,22 @@ Every periodic log line now prints `scale=1.0e+03`. Also appended to
 `train_log.jsonl` as `scaler_scale`. Warning emitted when scale exceeds
 16384, debounced at one message per 1000 steps.
 
+### check_scaler: scale-collapse detection (2026-05-07+)
+
+**Added after Sprint 3 smoke uncovered a Guard gap.** When sustained
+microstep-NaN runs (every microstep in an accum cycle produces NaN),
+`step_loss` stays 0 because microstep NaNs are filtered before being
+accumulated. `check_loss(0.0)` passes, so no rollback triggers.
+Meanwhile `scaler.get_scale()` silently decays 2e+03 → 2.8e-17 → 0
+via normal GradScaler overflow-backoff. At scale=0, training is dead.
+
+Fix: `StabilityGuard.check_scaler(scaler, step)` returns False if
+`scaler.get_scale() < scale_floor` (default 1.0). Triggers the same
+rollback path as the other 3 checks, and the forensics dump's
+`trigger` field is set to `"scale_collapse"` for diagnostic clarity.
+
+Full smoke analysis: `docs/perf/sprint3-smoke-findings.md`.
+
 ## Recommended flags for long-horizon runs
 
 ```bash
@@ -223,7 +239,37 @@ tighten the specific knob.
   a bf16 path this would be the natural response at rollback #3+. Since
   we don't, the rollback ladder ends at abort.
 
+## Complementary content canaries (not shipped — port candidate from ZAYA1-8B §IV-F)
+
+Our current stack (`StabilityGuard`, activation monitor, `scaler.get_scale()`
+warning, `iter_scales.clamp`) catches **numerical** degeneracy — NaN, grad
+explosion, residual blowup. It does **not** catch *semantically* degenerate
+generation that still produces valid fp16 gradients: long repetitive spans,
+gibberish runs, off-distribution token-ID patterns. Zyphra's ZAYA1-8B report
+ships two cheap canaries that cover this gap:
+
+- **Streaming LZ77 compressibility**: zlib with `wbits=-10` (1024-byte
+  window), level-1 deflate, `Z_SYNC_FLUSH` between chunks. Per-chunk
+  ratio `r_c = (compressed − flush_overhead) / raw`. Flag if any chunk
+  has `r_c < τ_repeat = 0.05`. LZ77 is preferred over n-gram counting
+  because it captures **sequence-level matching within the window**, so
+  language and domain frequency biases don't confuse it.
+- **Rare-token fraction**: fraction of tokens whose IDs fall in the top
+  {10, 5, 2, 1} % of the tokenizer ID range. Rising rare-token fraction
+  tends to precede other failures.
+
+**Not yet ported.** Proposed home: `halo_training/content_canaries.py`,
+emitting to the same JSONL as `--activation-monitor`. For RLVR (if/when we
+build it) the LZ77 canary should additionally **zero the task reward** on
+flagged rollouts before advantage computation, even when the verifier accepts
+the answer — catches reward-hacking via degenerate fill ending in a correct
+answer.
+
+Full context, rationale, and port trigger in
+[zaya1_8b_findings_2026.md §3.B](zaya1_8b_findings_2026.md).
+
 ## Related
+
 
 - `knowledge/training/imu1_recipe_2026.md` — IMU-1 / NorMuon recipe,
   references this doc for fp16 stability around NorMuon updates.

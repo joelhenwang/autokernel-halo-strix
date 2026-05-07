@@ -1,0 +1,139 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-smoke-dolma/step_750.pt",
+  "checkpoint_name": "sprint3-smoke-dolma-step-750",
+  "step": 750,
+  "model": {
+    "file": "models/odin_halo.py",
+    "class": "OdinHalo",
+    "total_params": 57567008,
+    "trainable_params": 57567008,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T10:58:48Z",
+  "eval_duration_s": 583.13,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 3.9171,
+    "gpt_small_val": 3.8333,
+    "stem_crawl_val": 3.4678,
+    "dolma_val": 3.5176,
+    "_raw_ce": {
+      "wikitext_val": 9.7744,
+      "gpt_small_val": 9.5653,
+      "stem_crawl_val": 8.6534,
+      "dolma_val": 8.7776
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.15,
+      "top_p": 0.95,
+      "top_k": 0
+    },
+    "distinct_2": 0.3796,
+    "self_ppl": 3.078,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire The area the history the The historyThe the history the history the ",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.3333,
+        "self_ppl": 2.62
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.3333,
+        "self_ppl": 2.62
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 0,
+        "distinct_2": 0.3796,
+        "self_ppl": 3.078
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 6290.1,
+    "peak_mem_gb_seq256": 0.252,
+    "tok_s_seq512_bs1": 8259.9,
+    "peak_mem_gb_seq512": 0.305,
+    "tok_s_seq1024_bs1": 12791.9,
+    "peak_mem_gb_seq1024": 0.411
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:734fea43245e0b01",
+    "samples_preview": [
+      "The history of the Roman Empire began with The history the The history the the historical the history the history the history the history the history the histor",
+      "In the field of particle physics, the Standard Model describes in the graph in the model In the App In the circuit of the circuit in the circuit of the circuit ",
+      "To prove that the square root of 2 is irrational, we assume to to to to the square to to can can can shall to can cannot to to can should to l to does even from"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint3-smoke-dolma/step_500.pt",
+      "prior_hash": "sha256:506258a6ab581761",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with The history the The history the the historical the history the history the history the history the history the histor",
+          "prior": "The history of the Roman Empire began with its The have's their have a has a's a's a's a's a's a's a's a's a's a's a's a's a's a's a's a's a's a's a's a's a's a"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes in the graph in the model In the App In the circuit of the circuit in the circuit of the circuit ",
+          "prior": "In the field of particle physics, the Standard Model describes the field of so of the field of the field of the field of the field of the field of the field of "
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume to to to to the square to to can can can shall to can cannot to to can should to l to does even from",
+          "prior": "To prove that the square root of 2 is irrational, we assume to find if any to find to find for a if if to take to find to take to takes to take to by taking to "
+        }
+      ]
+    }
+  },
+  "activation_stats": null
+}

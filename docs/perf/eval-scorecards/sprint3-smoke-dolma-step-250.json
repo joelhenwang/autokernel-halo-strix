@@ -1,0 +1,117 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-smoke-dolma/step_250.pt",
+  "checkpoint_name": "sprint3-smoke-dolma-step-250",
+  "step": 250,
+  "model": {
+    "file": "models/odin_halo.py",
+    "class": "OdinHalo",
+    "total_params": 57567008,
+    "trainable_params": 57567008,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T10:11:34Z",
+  "eval_duration_s": 503.06,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.9236,
+    "gpt_small_val": 2.9202,
+    "stem_crawl_val": 2.5424,
+    "dolma_val": 2.5466,
+    "_raw_ce": {
+      "wikitext_val": 7.2953,
+      "gpt_small_val": 7.2869,
+      "stem_crawl_val": 6.344,
+      "dolma_val": 6.3545
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.15,
+      "top_p": 1.0,
+      "top_k": 100
+    },
+    "distinct_2": 0.5776,
+    "self_ppl": 40.258,
+    "avg_length": 117.8,
+    "sample_preview": "The history of the Roman Empire's find the time it gave the first \"S's just the original is the \"S's",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.4253,
+        "self_ppl": 26.779
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.5243,
+        "self_ppl": 39.403
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 1.0,
+        "top_k": 100,
+        "distinct_2": 0.5776,
+        "self_ppl": 40.258
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 6447.2,
+    "peak_mem_gb_seq256": 0.252,
+    "tok_s_seq512_bs1": 8456.6,
+    "peak_mem_gb_seq512": 0.305,
+    "tok_s_seq1024_bs1": 13494.0,
+    "peak_mem_gb_seq1024": 0.411
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:90322a569fa3f9ac",
+    "samples_preview": [
+      "The history of the Roman Empire began with the \"S's \"B's In the first in the C was the \"The find the We\n\n\n\n\n\nC\"\n2\n\n\n\n\n\nA it's \n\n\nA and its a\n\nThe\n\n\n\n\n\n\nAnswer\n\n",
+      "In the field of particle physics, the Standard Model describes the first, the the 2, the line, the the, the, the form of the, the \"N, the \"D, the set and the th",
+      "To prove that the square root of 2 is irrational, we assume the number of the center of the equation for the two numbers of the number of the area, the formula "
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": null
+}

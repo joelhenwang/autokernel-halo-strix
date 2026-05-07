@@ -5,6 +5,150 @@
 
 ---
 
+## Research: ZAYA1-8B Findings for Odin (2026-05-07)
+
+**Status:** Research dive complete; synthesis doc + AP-trimming recipe shipped.
+No code changes yet. Three candidate ports identified for Odin.
+
+Zyphra's ZAYA1-8B technical report (760M active / 8.4B MoE reasoning model,
+AMD MI300X-trained) was read in full alongside the two companion arXiv papers
+(2511.17127 AMD systems, 2510.04476 CCA attention). Most architectural choices
+are MoE-specific and don't transfer; the methodology and stability work does.
+
+### Applicability ratings
+
+- **HIGH fit** — AP-trimming, LZ77 + rare-token canaries, learned residual
+  scaling, BFD packing (when SFT lands), half-RoPE ablation.
+- **CAPTURE for later** — RL cascade recipe (DPPO Binary-TV + Dr-GRPO SMTSN +
+  MaxRL + no-KL-in-reward + momentum-free Muon), RLVE-Gym + Thompson/IRT
+  curriculum, Markovian RSA TTC harness. All need RLVR infra we don't have.
+- **N/A** — CCA/CCGQA (we're dense + GQA already), MLP router + PID
+  balancing (MoE only), router replay (MoE + RL), MI300X/Pollara systems
+  (different SKU).
+
+### Artifacts
+
+- `knowledge/training/zaya1_8b_findings_2026.md` — main synthesis + full
+  applicability matrix + port sketches.
+- `knowledge/training/ap_trimming_recipe.md` — standalone P0 recipe for
+  using long-CoT data at our block sizes (256-1024). Ship trigger: next
+  CPT run that includes reasoning data, or first SFT stage.
+- `docs/research/zaya1_8b_technical_report/zaya1_8b_technical_report.md` —
+  full source report (106 KB).
+- `docs/research/subq_ssa_watchlist_2026.md` — SubQ / SSA watch-list note;
+  no paper published, not actionable until one drops.
+
+### Recommended next actions (not launched)
+
+1. **Learned residual scaling on OdinHalo** — 200-step DDP A/B on wikitext-103
+   (via eval scorecard). Address residual-norm growth in the Parcae loop.
+   Per-iteration `(α, β)` pairs, not shared across iters.
+2. **LZ77 + rare-token canary module** — `halo_training/content_canaries.py`,
+   wired into periodic eval logging; supplement to `StabilityGuard`. Would
+   have added diagnostic value during the fp16 NaN incident.
+3. **Half-RoPE on `NoPECodaAttention`** — apply RoPE to first `head_dim // 2`
+   dims of Q/K, leave rest position-free. One 200-step scorecard run on
+   OdinFlat.
+
+### FrankenMoE composition (2026-05-07, design-only)
+
+ZAYA1 + Odin composition promoted into two specs/designs, both blocked on
+FrankenMoE-Flat v1 L9 before implementation:
+
+- **FrankenMoE-Flat v1** (spec TBD) — 75M active / 175M total, OdinFlat
+  backbone, MoE on 7 FFN layers, ZAYA1 MLP router + PID balancing, learned
+  αβ residual scaling, half-RoPE on NoPE-GQA blocks, LZ77 + rare-token
+  canaries. Architecture + pretraining knobs only; no SFT, no RL.
+- **FrankenMoE-Loop v2** — [spec shipped](docs/superpowers/specs/2026-05-07-frankenmoe-loop-design.md).
+  OdinHalo backbone (6 shared × 3 iters), 2 MoE layers at positions {1, 4},
+  **R2 sticky routing + E1 shared experts** (route at iter 0, replay at iter
+  1-2, same experts throughout), **N1 per-expert per-iteration γ_{e,i}**
+  (novel), **2.5-iteration aggressive Sched-A + M3** (iter 2 runs only the
+  two GQA blocks with half-width FFN). R1 + N3 + N4 run as L11 ablation to
+  validate R2 choice. Companion design notes in
+  [knowledge/architectures/looped_moe_design_2026.md](knowledge/architectures/looped_moe_design_2026.md).
+  Implementation estimate: 6-8 weeks after v1 L9 trigger.
+
+  **Creative additions (spec §3.11):** T7 permutation caching (throughput,
+  invariant under R2); T11 iter-2 KV reuse via MoDA buffer (throughput
+  +potential quality, zero new code); Q1 expert stochastic depth (regularization,
+  training-only); Q10 routing temperature annealing (exploration, zero cost);
+  Q3 iteration-varying RoPE base (positional curriculum, zero params). All
+  five opt-in via CLI flag; rollout interleaves them at L4.5, L5.5, L6.5, L7.5,
+  L8.75. Philosophy: R2+E1 creates invariants (permutation stable, MoDA caches
+  iter-1 KV, experts see tokens 3×, routing happens once) that each creative
+  addition exploits for free throughput or quality.
+
+No code yet. Specs document the architecture, training curriculum,
+scorecard additions, risk register, and rollout L0-L11.
+
+---
+
+---
+
+## Sprint 3 Smoke: OdinHalo dolma-10B (2026-05-07)
+
+**Status:** COMPLETED; training FAILED via scale-collapse; uncovered
+StabilityGuard gap now patched.
+
+**Duration:** 1000 steps DDP, 131M tokens, 93 min wall, 23,302 tok/s
+**Guards active:** --z-loss 1e-4 --attn-softcap 50.0 --activation-monitor
+--intra-doc-mask --value-residuals --head-gating --imu1-groups --normuon
+
+### What happened
+
+Loss minimum at step 650 (3.25); then steadily climbed (3.51, 3.53, 3.92,
+4.33) while activation monitor recorded exponential growth in
+`shared_layers.5` maxabs: 38 → 289 → 1237 → 3247 → 5061 → **9117** over
+500 steps. fp16 headroom dropped from 1700× to 7.2× (below safe-10×
+threshold). At step ~900 fp16 overflow triggered sustained
+NaN-backward; GradScaler scale decayed 2e+03 → 2.8e-17 → 0 over 50
+steps. Step 1000 evaluator scorecard wiki_bpb 4.14 (training dead).
+
+### Critical finding (StabilityGuard gap)
+
+Guard did NOT roll back despite the failure. Root cause: when all
+microsteps in a cycle produce NaN, `step_loss` is NaN-filtered to 0,
+which `check_loss(0.0)` passes. `_consecutive_skips` reset to 1-3
+(never 5+) between partial-finite cycles. `check_params` scan runs
+every 500 steps; missed the window.
+
+### Fix shipped
+
+**`StabilityGuard.check_scaler(scaler, step)`** — 4th detection
+mechanism. Returns False if `scaler.get_scale() < scale_floor` (default
+1.0). Routed into the existing guard OR-chain; forensics dump now
+classifies `"scale_collapse"` as a trigger.
+
+Test: `test_scaler_collapse_triggers_rollback` in
+`scripts/test_fp16_stability.py`. **16/16** tests pass.
+
+### Sprint 3 full-run blockers (must address before 50h commit)
+
+1. **Lower lr_2d to 2e-3 or 3e-3.** lr_2d=5e-3 was Sprint 1's
+   OdinFlat/wikitext tuning; OdinHalo on dolma needs less.
+2. **Extend --z-loss-fraction to 1.0.** 0.4 ramp-off too early for
+   multi-epoch runs.
+3. **Checkpoint more often** during the first epoch (100-200 step
+   interval) so scale-collapse rollback has recent good state.
+4. **Watch activation_stats.jsonl** for first 1000 steps; any
+   fp16_headroom < 20 means LR is too high.
+
+Full analysis: `docs/perf/sprint3-smoke-findings.md`
+
+### Artifacts
+
+```
+docs/perf/sprint3-smoke-findings.md            — this analysis
+docs/perf/sprint3-smoke-dolma-activation-stats.jsonl  — full monitor data
+docs/perf/eval-scorecards/sprint3-smoke-dolma-step-{250,500,750,1000}.json
+checkpoints/sprint3-smoke-dolma/rank0.log      — full training log
+scripts/analyze_activation_stats.py            — helper for progression tables
+scripts/run_sprint3_smoke.sh                   — reproducible runner
+```
+
+---
+
 ## fp16 Stability Hardening (2026-05-07, SHIPPED inline)
 
 **Status:** COMPLETE. Inline follow-up to the dolma-10B NaN incident
