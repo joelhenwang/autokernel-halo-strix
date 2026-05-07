@@ -846,6 +846,9 @@ def main():
             sample_every=args.activation_monitor_interval,
         )
         monitor.attach()
+        # Arm for the first opt step (global_step increments to 1 before
+        # monitor.step() is called, so forwards of step 1 need set_step(1)).
+        monitor.set_step(1)
         print(f"[fp16-stability] activation monitor ON: "
               f"interval={args.activation_monitor_interval}, "
               f"out={monitor_out}, "
@@ -1014,6 +1017,10 @@ def main():
                     # fp16-stability D1: sample activation stats (no-op if off)
                     if monitor is not None:
                         monitor.step(global_step)
+                        # Arm hooks for next opt step's microstep forwards.
+                        # Disarmed steps fully no-op → ~10-15% throughput
+                        # recovery on looped models (was `.item()`-per-forward).
+                        monitor.set_step(global_step + 1)
 
                     # Logging (instantaneous tok/s, not cumulative average)
                     if rank == 0 and global_step % args.log_interval == 0:

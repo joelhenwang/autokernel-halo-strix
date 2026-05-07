@@ -11,6 +11,8 @@ Test coverage:
   - P5: --max-grad-norm defaults to 0.8 when --resume-from is set
   - P6: --attn-softcap flag registered; softcap bounds pre-softmax scores
   - D1: --activation-monitor flag; ActivationMonitor writes JSONL
+  - D1b: monitor.set_step() gates forward hook (disarmed = no reduction)
+  - D1c: monitor.set_step() arms hook; maxabs stored as GPU tensor, .item() deferred
   - R1: save_nan_forensics writes a .pt dump with required keys
   - R3: StabilityGuard.rollback(scaler=...) halves scaler._growth_interval
   - R5: scaler.get_scale() appears in log JSONL
@@ -225,6 +227,89 @@ def test_activation_monitor_writes_jsonl():
         print(f"  OK: monitor wrote {len(lines)} JSONL entries with required keys")
 
 
+def test_activation_monitor_set_step_gates_hook():
+    """Hook fully no-ops when ``_should_sample`` is False (set via set_step).
+
+    Verifies the 2026-05-07 performance fix: disarming the monitor via
+    set_step(non_sample_step) makes forwards bypass the reduction entirely.
+    """
+    from halo_training.activation_monitor import ActivationMonitor
+
+    class TinyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = nn.ModuleList([nn.Linear(8, 8)])
+
+        def forward(self, x):
+            for layer in self.layers:
+                x = layer(x)
+            return x
+
+    model = TinyModel()
+    monitor = ActivationMonitor(model, output_path=None, sample_every=100)
+    monitor.attach()
+    # Arm for a NON-sampling step (5 % 100 != 0 → _should_sample = False).
+    monitor.set_step(5)
+    assert monitor._should_sample is False, "set_step(5) should disarm hook"
+    x = torch.randn(2, 8)
+    model(x)
+    # Hook ran, but since _should_sample=False, nothing should have been
+    # recorded. _current_stats stays empty.
+    assert len(monitor._current_stats) == 0, (
+        f"Hook should no-op when disarmed, got {list(monitor._current_stats)}"
+    )
+    # Commit on non-sample step → no write, state stays clear.
+    monitor.step(global_step=5)
+    assert len(monitor._current_stats) == 0
+    monitor.detach()
+    print("  OK: set_step disarms hook; no reduction, no dict write")
+
+
+def test_activation_monitor_set_step_arms_hook():
+    """Hook records (as GPU tensor) when armed; ``.item()`` deferred to step()."""
+    from halo_training.activation_monitor import ActivationMonitor
+
+    class TinyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = nn.ModuleList([nn.Linear(8, 8)])
+
+        def forward(self, x):
+            for layer in self.layers:
+                x = layer(x)
+            return x
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "activation_stats.jsonl")
+        model = TinyModel()
+        monitor = ActivationMonitor(model, output_path=out, sample_every=50)
+        monitor.attach()
+        # Arm for sampling step (50 % 50 == 0 → _should_sample = True).
+        monitor.set_step(50)
+        assert monitor._should_sample is True, "set_step(50) should arm hook"
+
+        x = torch.randn(2, 8)
+        model(x)
+        # Hook recorded — but as a GPU tensor, not a Python float.
+        assert "layers.0" in monitor._current_stats
+        entry = monitor._current_stats["layers.0"]
+        assert "maxabs_tensor" in entry, "hook should store 0-d tensor, not scalar"
+        assert isinstance(entry["maxabs_tensor"], torch.Tensor)
+        assert entry["maxabs_tensor"].ndim == 0
+
+        # Commit → .item() sync happens here, JSONL gets written.
+        monitor.step(global_step=50)
+        assert len(monitor._current_stats) == 0, "step() should clear after commit"
+        assert os.path.exists(out)
+        lines = [json.loads(l) for l in open(out, encoding="utf-8") if l.strip()]
+        assert len(lines) == 1
+        assert lines[0]["step"] == 50
+        assert lines[0]["layer"] == "layers.0"
+        assert isinstance(lines[0]["maxabs"], float)
+        monitor.detach()
+    print("  OK: set_step arms hook; maxabs stored as GPU tensor; .item() deferred to step()")
+
+
 # ---------------------------------------------------------------------------
 # R1 — NaN forensics dump
 # ---------------------------------------------------------------------------
@@ -429,6 +514,8 @@ def main():
         test_attention_module_softcap_attribute,
         test_activation_monitor_flag_registered,
         test_activation_monitor_writes_jsonl,
+        test_activation_monitor_set_step_gates_hook,
+        test_activation_monitor_set_step_arms_hook,
         test_save_nan_forensics_writes_pt,
         test_rollback_halves_growth_interval,
         test_rollback_scaler_optional,

@@ -13,8 +13,18 @@ Schema (one JSON per line):
 ``fp16_headroom`` = 65504 / maxabs; values <2 indicate danger of overflow.
 
 Hooks are detached (``maxabs`` is computed without autograd state), so
-the monitor does not pollute the backward graph. Cost is ~0 when not
-sampled; O(one reduction per sampled step) when sampled.
+the monitor does not pollute the backward graph.
+
+**Sampling gate (2026-05-07 fix):** Hooks no-op entirely on non-sampling
+steps — no reduction kernel, no GPU→CPU sync, no dict write. The trainer
+calls ``monitor.set_step(global_step)`` once per opt step BEFORE the
+microstep forwards to flip ``_should_sample``. On sampling steps, hooks
+store the maxabs as a 0-d GPU tensor; ``.item()`` sync is deferred until
+``monitor.step()`` commits the JSONL at end-of-cycle (one sync per tracked
+layer per sample step, not per microstep per forward). This removes the
+~10-15% steady-state overhead observed on OdinHalo. Default behavior with
+no ``set_step`` call is "record every forward" for backward compatibility
+with isolated-unit-test usage.
 
 See ``knowledge/training/fp16_stability_gfx1151.md`` for interpretation.
 """
@@ -46,8 +56,10 @@ class ActivationMonitor:
         monitor.detach()
 
     The hooks store per-layer max-abs into ``self._current_stats`` on
-    every forward. ``step(N)`` decides whether to commit the current
-    stats to JSONL based on ``sample_every``. Between commits, only the
+    sampling-step forwards only (gated by ``_should_sample`` flag set by
+    the trainer's ``set_step()`` call). ``step(N)`` commits stored stats
+    to JSONL at end-of-cycle on sampling steps. Non-sampling forwards
+    are zero-cost (no reduction, no sync). Between commits, only the
     most recent forward's values are kept — sampling is instantaneous,
     not a running max, to match ``torch.profiler`` semantics.
     """
@@ -72,6 +84,14 @@ class ActivationMonitor:
         self._tracked: Dict[str, Dict] = {}  # {name: {maxabs, dtype, shape}}
         self._current_stats: Dict[str, Dict] = {}
         self._attached = False
+
+        # Sampling gate: trainer calls ``set_step(global_step)`` each opt
+        # step to arm or disarm the forward hooks. Default True so that
+        # isolated-unit-test usage (single forward, one step() call) still
+        # records without the trainer contract. When False, hooks fully
+        # no-op — no reduction, no sync, no dict write.
+        self._current_step: int = -1
+        self._should_sample: bool = True
 
     def _enumerate_tracked_modules(self) -> List[tuple]:
         """Return list of (name, module) pairs to hook.
@@ -124,40 +144,89 @@ class ActivationMonitor:
 
     def _make_hook(self, name: str):
         def hook(module, inputs, output):
+            # Fast path: non-sampling step → zero work (no reduction, no
+            # GPU sync, no dict write). This removes the per-forward
+            # ``.item()`` sync that dominated monitor overhead on looped
+            # models (~10-15% throughput on OdinHalo).
+            if not self._should_sample:
+                return
             # Output can be a tensor, tuple, or dict. We take the first
             # tensor we find.
             t = _first_tensor(output)
             if t is None:
                 return
             with torch.no_grad():
-                maxabs = t.detach().abs().max().item()
+                # Keep reduction on GPU — defer .item() until commit in
+                # ``step()``. Allocates a 0-d tensor; no host transfer yet.
+                maxabs_tensor = t.detach().abs().max()
             self._current_stats[name] = {
-                "maxabs": float(maxabs),
+                "maxabs_tensor": maxabs_tensor,
                 "dtype": str(t.dtype).replace("torch.", ""),
                 "shape": list(t.shape),
             }
         return hook
 
+    def set_step(self, global_step: int) -> None:
+        """Arm (or disarm) the forward hooks for the upcoming opt step.
+
+        Called by the trainer once per optimizer step, BEFORE the first
+        microstep's forward. The flag remains in effect until the next
+        ``set_step`` call. Hooks fully no-op on disarmed steps (no reduction,
+        no sync).
+
+        If the caller never invokes ``set_step`` the monitor defaults to
+        "record every forward" for backward compatibility with isolated
+        usage (e.g. unit tests with ``sample_every=1`` and a single step).
+        """
+        self._current_step = int(global_step)
+        self._should_sample = (int(global_step) % self.sample_every == 0)
+
     def current_stats(self) -> Dict[str, Dict]:
         """Return a defensive copy of the most recent per-layer stats.
 
-        Used by the NaN forensics dump (R1). Returns empty dict if no
-        forward has completed yet.
+        Used by the NaN forensics dump (R1). Forces ``.item()`` on any
+        pending 0-d tensors so downstream consumers see float values.
+        Returns empty dict if no forward has completed yet.
         """
-        return {k: dict(v) for k, v in self._current_stats.items()}
+        out: Dict[str, Dict] = {}
+        for k, v in self._current_stats.items():
+            d = dict(v)
+            t = d.pop("maxabs_tensor", None)
+            if t is not None and isinstance(t, torch.Tensor):
+                try:
+                    d["maxabs"] = float(t.item())
+                except Exception:
+                    d["maxabs"] = float("nan")
+            elif "maxabs" not in d:
+                d["maxabs"] = float("nan")
+            out[k] = d
+        return out
 
     def step(self, global_step: int) -> None:
         """Commit current stats to JSONL if this step is a sampling step."""
         if global_step % self.sample_every != 0:
+            # Not a sampling step. Drop anything the hook recorded
+            # pre-``set_step`` (defensive; should be empty under correct
+            # trainer contract).
+            self._current_stats.clear()
             return
         if not self._current_stats:
             return
         if self.output_path is None:
+            self._current_stats.clear()
             return
         os.makedirs(os.path.dirname(self.output_path) or ".", exist_ok=True)
         with open(self.output_path, "a", encoding="utf-8") as f:
             for layer, stats in sorted(self._current_stats.items()):
-                maxabs = stats["maxabs"]
+                maxabs_t = stats.get("maxabs_tensor")
+                if maxabs_t is not None and isinstance(maxabs_t, torch.Tensor):
+                    # Single GPU→CPU sync per tracked layer per sample step.
+                    maxabs = float(maxabs_t.item())
+                elif "maxabs" in stats:
+                    # Back-compat path (shouldn't trigger under new hook).
+                    maxabs = float(stats["maxabs"])
+                else:
+                    continue
                 headroom = _FP16_MAX / maxabs if maxabs > 0 else float("inf")
                 f.write(json.dumps({
                     "step": int(global_step),
@@ -167,6 +236,9 @@ class ActivationMonitor:
                     "dtype": stats["dtype"],
                     "shape": stats["shape"],
                 }) + "\n")
+        # Clear after commit so a missed ``set_step`` on the next step
+        # doesn't leak this cycle's data into the next JSONL entry.
+        self._current_stats.clear()
 
 
 _DEFAULT_TOP_LEVEL = {
