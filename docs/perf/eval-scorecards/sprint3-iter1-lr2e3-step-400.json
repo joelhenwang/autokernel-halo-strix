@@ -1,0 +1,139 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-iter1-lr2e3/step_400.pt",
+  "checkpoint_name": "sprint3-iter1-lr2e3-step-400",
+  "step": 400,
+  "model": {
+    "file": "models/odin_halo.py",
+    "class": "OdinHalo",
+    "total_params": 57567008,
+    "trainable_params": 57567008,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T13:20:41Z",
+  "eval_duration_s": 138.3,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.825,
+    "gpt_small_val": 2.7944,
+    "stem_crawl_val": 2.4312,
+    "dolma_val": 2.4418,
+    "_raw_ce": {
+      "wikitext_val": 7.0494,
+      "gpt_small_val": 6.9729,
+      "stem_crawl_val": 6.0666,
+      "dolma_val": 6.0931
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 100
+    },
+    "distinct_2": 0.1933,
+    "self_ppl": 7.04,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire Institute of the United States. The National Street. The The The the",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.1499,
+        "self_ppl": 6.337
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.1499,
+        "self_ppl": 6.337
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 100,
+        "distinct_2": 0.1933,
+        "self_ppl": 7.04
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 19025.3,
+    "peak_mem_gb_seq256": 0.252,
+    "tok_s_seq512_bs1": 20263.8,
+    "peak_mem_gb_seq512": 0.305,
+    "tok_s_seq1024_bs1": 30888.2,
+    "peak_mem_gb_seq1024": 0.411
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:9c3d7e821f909ae7",
+    "samples_preview": [
+      "The history of the Roman Empire began with the The Great The Union founded the National Institute of the Soviet Union Institute was founded the United States la",
+      "In the field of particle physics, the Standard Model describes the first. This result of the first state of the question, the state of the process the following",
+      "To prove that the square root of 2 is irrational, we assume that we divide $(0, we let \\( $ if we get $ I we calculate this, we know that we need to $ we we nee"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint3-iter1-lr2e3/step_200.pt",
+      "prior_hash": "sha256:40d7b9a0f6e8dbb9",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with the The Great The Union founded the National Institute of the Soviet Union Institute was founded the United States la",
+          "prior": "The history of the Roman Empire began with a \" A The A A: In a M1 A C.\n\n\n\n\nC. I A a\n\nC.\n2 a\n\n\n\n\nA A\n\n\n\n\nA\n\nB\n\nThe A\nA,\n\n\nAnswer\nD\n\n\nAnswer\n\n\n\n\nWhat\n\n\n\nD\n\n\n\nAnsw"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the first. This result of the first state of the question, the state of the process the following",
+          "prior": "In the field of particle physics, the Standard Model describes the first. This would return 2: $ 3, the sum is a number of the total, the **N, (1, (2, the lengt"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume that we divide $(0, we let \\( $ if we get $ I we calculate this, we know that we need to $ we we nee",
+          "prior": "To prove that the square root of 2 is irrational, we assume the number of the total, the equation \\(\n\n\n\n\n\n\n\n\n\n\n\\\n\n\n\n\n\n\n\n\n\n\n\\y\n\n\n\n*\n\n\n\n\n\n\n\nA\n\n\\\n\n\n\n\n\n\n\n*\n2\n\n\nThe\n"
+        }
+      ]
+    }
+  },
+  "activation_stats": null
+}
