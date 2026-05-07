@@ -1,0 +1,181 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1-run2b/step_936.pt",
+  "checkpoint_name": "sprint1-run2b-step-936",
+  "step": 936,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T02:57:11Z",
+  "eval_duration_s": 44.01,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 1.8962,
+    "gpt_small_val": 2.8277,
+    "stem_crawl_val": 3.442,
+    "dolma_val": 3.0822,
+    "_raw_ce": {
+      "wikitext_val": 4.7316,
+      "gpt_small_val": 7.0561,
+      "stem_crawl_val": 8.589,
+      "dolma_val": 7.6911
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.15,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "distinct_2": 0.9421,
+    "self_ppl": 14.528,
+    "avg_length": 66.5,
+    "sample_preview": "The history of the Roman Empire was an important figure in Rome , and the first of the 14th century ",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.8855,
+        "self_ppl": 9.474
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.9264,
+        "self_ppl": 10.926
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 1.0,
+        "top_k": 0,
+        "distinct_2": 0.9421,
+        "self_ppl": 14.528
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49417.3,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 58111.4,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 64073.6,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:16c0e680eb3167d6",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new period in which it was not known as the reign of its status . \n<|endoftext|>",
+      "In the field of particle physics, the Standard Model describes the first @-@ dimensional model of the mathematical gravity theory . The results in a process tha",
+      "To prove that the square root of 2 is irrational, we assume , and whether it can be correct . \n<|endoftext|>"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint1-run2b/step_500.pt",
+      "prior_hash": "sha256:1fc47a9c966dfd01",
+      "diff_count": 18,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with a new period in which it was not known as the reign of its status . \n<|endoftext|>",
+          "prior": "The history of the Roman Empire began with a new world in which was the first Roman world . In this point , he started to extend his reign of Egypt . \n<|endofte"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the first @-@ dimensional model of the mathematical gravity theory . The results in a process tha",
+          "prior": "In the field of particle physics, the Standard Model describes the first @-@ dimensional design of the mathematical weapons , and is a number of the development"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume , and whether it can be correct . \n<|endoftext|>",
+          "prior": "To prove that the square root of 2 is irrational, we assume , and if it can be found to get a lot of an individual . This is at all that this , but the same thi"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      25.685,
+      31.074,
+      36.21,
+      38.868,
+      37.143,
+      35.12,
+      19.392,
+      18.042,
+      16.478,
+      15.32,
+      14.271,
+      13.243,
+      12.2,
+      9.457
+    ],
+    "layer_rms_norm": [
+      1.996,
+      2.34,
+      2.662,
+      2.947,
+      3.193,
+      3.475,
+      4.149,
+      4.274,
+      4.413,
+      4.553,
+      4.695,
+      4.853,
+      5.034,
+      5.619
+    ],
+    "mean_layer_kurtosis": 23.036,
+    "mean_layer_rms_norm": 3.872,
+    "max_layer_kurtosis": 38.868,
+    "max_layer_rms_norm": 5.619,
+    "_split_used": "wikitext_val"
+  }
+}

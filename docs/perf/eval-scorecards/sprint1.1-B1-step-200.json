@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1.1-B1/step_200.pt",
+  "checkpoint_name": "sprint1.1-B1-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T01:11:00Z",
+  "eval_duration_s": 40.31,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.2157,
+    "gpt_small_val": 3.0692,
+    "stem_crawl_val": 3.5856,
+    "dolma_val": 3.2538,
+    "_raw_ce": {
+      "wikitext_val": 5.5288,
+      "gpt_small_val": 7.6587,
+      "stem_crawl_val": 8.9472,
+      "dolma_val": 8.1193
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 0
+    },
+    "distinct_2": 0.8896,
+    "self_ppl": 8.028,
+    "avg_length": 41.0,
+    "sample_preview": "The history of the Roman Empire in the 1893 . The Allied service , the 1970s was the Battle of the C",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.7498,
+        "self_ppl": 5.687
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.7498,
+        "self_ppl": 5.687
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 0,
+        "distinct_2": 0.8896,
+        "self_ppl": 8.028
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 31393.1,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 51203.7,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 48033.5,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:ea8d54ee10b63ed6",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new contract in which was part of the first in July 15th century . \n<|endoftext|>",
+      "In the field of particle physics, the Standard Model describes for its use . \n<|endoftext|>",
+      "To prove that the square root of 2 is irrational, we assume , and a small to the gills . \n<|endoftext|>"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      1.955,
+      1.775,
+      1.76,
+      1.735,
+      1.653,
+      1.573,
+      1.132,
+      1.044,
+      0.969,
+      0.908,
+      0.842,
+      0.784,
+      0.73,
+      0.511
+    ],
+    "layer_rms_norm": [
+      0.328,
+      0.391,
+      0.432,
+      0.464,
+      0.494,
+      0.522,
+      0.591,
+      0.603,
+      0.617,
+      0.633,
+      0.651,
+      0.669,
+      0.689,
+      0.787
+    ],
+    "mean_layer_kurtosis": 1.241,
+    "mean_layer_rms_norm": 0.562,
+    "max_layer_kurtosis": 1.955,
+    "max_layer_rms_norm": 0.787,
+    "_split_used": "wikitext_val"
+  }
+}

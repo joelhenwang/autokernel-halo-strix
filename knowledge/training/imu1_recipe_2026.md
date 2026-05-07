@@ -51,7 +51,10 @@ rows/columns to address post-orthogonalization norm imbalance.
 Implementation notes:
 - **7 Newton-Schulz iterations** with Polar Express constants (Amsel et al. 2025)
 - Dion Triton kernel (Ahn et al. 2025) for orthogonalization efficiency
-- ~3% overhead vs AdamW
+- Paper claim: ~3% overhead vs AdamW at 430M (Triton + Nvidia)
+- Our gfx1151 result (after Sprint 1.1): **3.5% overhead** with
+  PyTorch NS + fp16 dtype; matches paper within noise. See
+  `normuon_throughput_gfx1151.md` for the fp16-NS fix details.
 
 #### Cautious Weight Decay (CWD)
 
@@ -172,27 +175,29 @@ The change: (1) neuron-wise normalization (NorMuon vs plain Muon), (2) Triton
 kernel (Dion), (3) Polar Express constants for Newton-Schulz. Together these
 turn Muon from "slow but good" into "fast and good."
 
-## Empirical results at our scale (Sprint 1 Phase 3, 2026-05-06)
+## Empirical results at our scale (Sprint 1 Phase 3 + Sprint 1.1, 2026-05-07)
 
 Trained OdinFlat (121.7M) on wikitext-103 with NorMuon + all architectural
 additions. Full results: `normuon_throughput_gfx1151.md`.
 
 **Short version:**
-- Quality gain **DID transfer**: Run 2 final loss 4.4736 vs AdamW baseline
-  4.7975 = **−6.8%** improvement; BPB down on all 4 validation domains.
-- Throughput cost was **much larger than the paper's 3%**: we measured
-  ~13-16% for NorMuon alone and 17.8% for the full recipe (NorMuon +
-  value residuals + head gating).
-- Root cause: we run NS via PyTorch ops (not Triton, which doesn't
-  reliably work on gfx1151). Each NS iteration is 3 separate matmul
-  kernel launches, amplified by ~60 2D params × 5 iters = ~900 launches
-  per optimizer step. Plus gfx1151's no-MFMA matmul is slower on the
-  small matrix sizes NS operates on.
+- Quality gain **transferred**: Run 2b final loss 4.4741 vs AdamW baseline
+  4.7975 = **−6.7%** improvement; BPB down on all 4 validation domains.
+- **After Sprint 1.1** (`--ns-dtype fp16` now default): cost reduced to
+  **3.5% vs AdamW**. Matches the paper's 3% claim within noise, without
+  a custom Triton/HIP kernel.
+- Fix was one line: default `ns_dtype=torch.float16` instead of fp32 in
+  `NorMuon.__init__`. rocBLAS `HHS_BH_` half-precision kernels are 8-13×
+  faster than `S_B_` fp32 on OdinFlat's dominant SwiGLU shapes.
+- Pre-fix: NorMuon alone ~13-16% cost, full recipe 17.8% cost.
+- Root cause pre-fix: we never explicitly set `ns_dtype`, and the
+  default `None` was cast to fp32 internally. gfx1151 has no MFMA but
+  DOES have native fp16 WMMA — the tensor cores were going unused.
 
 Sprint 1.1 (`../../docs/superpowers/specs/2026-05-07-sprint1.1-normuon-throughput-design.md`)
-addresses this with a 5-phase optimization plan: fp16 NS, size-gated
-neuron-norm, batched NS, reduced iterations, optional HIP kernel.
-Expected post-optimization cost: ≤10% with quality preserved within 1%.
+originally planned 5 phases (profile, quick wins, batched NS, HIP kernel,
+validation). Phase B1 (fp16 NS) alone closed the gate; Phases C and D
+were skipped. Full sprint outcome: `../../docs/perf/sprint1.1-summary.md`.
 
 ## See also
 

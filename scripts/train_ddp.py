@@ -453,6 +453,25 @@ def main():
                         help="Sprint 1 Phase 2: per-head sigmoid gate on attention output.")
     parser.add_argument("--no-head-gating", dest="head_gating", action="store_false")
     parser.set_defaults(head_gating=False)
+
+    # Sprint 1.1 Phase B — NorMuon throughput knobs
+    parser.add_argument("--ns-dtype", choices=["fp32", "fp16"], default="fp16",
+                        help="Sprint 1.1: Newton-Schulz inner matmul dtype. "
+                             "fp16 (DEFAULT, shipped 2026-05-07) routes NS "
+                             "through rocBLAS HHS_BH_ kernels — +17.5 pct "
+                             "tok/s measured on Run 2b, with loss "
+                             "indistinguishable from fp32 at 1 epoch. "
+                             "Use fp32 to restore Phase 2 behavior.")
+    parser.add_argument("--neuron-norm-min-dim", type=int, default=0,
+                        help="Sprint 1.1: skip NorMuon neuron-wise norm on "
+                             "2D params where min(rows, cols) < this threshold. "
+                             "0=always apply (default). Try 512 to skip "
+                             "embed-adjacent small projections.")
+    parser.add_argument("--cautious-wd", dest="cautious_wd", action="store_true",
+                        help="Sprint 1.1: enable cautious weight decay (IMU-1 default).")
+    parser.add_argument("--no-cautious-wd", dest="cautious_wd", action="store_false",
+                        help="Sprint 1.1: disable cautious WD (use standard decoupled WD).")
+    parser.set_defaults(cautious_wd=True)
     args = parser.parse_args()
 
     use_async = not args.no_async
@@ -562,6 +581,8 @@ def main():
             from halo_training.optimizer import build_imu1_optimizer
             lr_2d = args.lr_2d if args.lr_2d is not None else args.lr
             lr_1d = args.lr_1d if args.lr_1d is not None else args.lr * 0.3
+            # Sprint 1.1 Phase B: resolve ns_dtype string -> torch.dtype
+            ns_dtype = torch.float16 if args.ns_dtype == "fp16" else torch.float32
             optimizer = build_imu1_optimizer(
                 raw_model,
                 lr_2d=lr_2d,
@@ -569,6 +590,9 @@ def main():
                 weight_decay_2d=0.1,
                 betas=(0.9, 0.95),
                 use_normuon=args.normuon,
+                ns_dtype=ns_dtype,
+                neuron_norm_min_dim=args.neuron_norm_min_dim,
+                cautious_wd=args.cautious_wd,
             )
             # build_imu1_optimizer prints on rank 0 already; no duplicate log
         else:

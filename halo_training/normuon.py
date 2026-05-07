@@ -115,6 +115,7 @@ class NorMuon(torch.optim.Optimizer):
         ns_dtype: Optional[torch.dtype] = None,
         cautious_wd: bool = True,
         neuron_wise_norm: bool = True,
+        neuron_norm_min_dim: int = 0,
     ):
         if betas is not None:
             # Treat betas=(0.9, 0.95) as AdamW-side configuration override,
@@ -124,6 +125,10 @@ class NorMuon(torch.optim.Optimizer):
         self.ns_dtype = ns_dtype
         self.cautious_wd = cautious_wd
         self.neuron_wise_norm = neuron_wise_norm
+        # Sprint 1.1 Phase B2: if neuron_norm_min_dim > 0, neuron-wise
+        # normalization is skipped on 2D params where min(rows, cols) <
+        # this threshold. Default 0 = always apply (matches Phase 2 behavior).
+        self.neuron_norm_min_dim = neuron_norm_min_dim
 
         if isinstance(muon_params, dict):
             muon_params = [muon_params]
@@ -222,8 +227,14 @@ class NorMuon(torch.optim.Optimizer):
             # Newton-Schulz orthogonalization
             m_orth = _newton_schulz_polar_express(m, steps=ns_steps, dtype=self.ns_dtype)
 
-            # Neuron-wise normalization (NorMuon innovation)
-            if self.neuron_wise_norm:
+            # Neuron-wise normalization (NorMuon innovation).
+            # Sprint 1.1 Phase B2: optionally skip on small matrices via
+            # neuron_norm_min_dim gate. min(rows, cols) check catches both
+            # tall-skinny and short-fat projections symmetrically.
+            if self.neuron_wise_norm and (
+                self.neuron_norm_min_dim == 0
+                or min(m_orth.shape) >= self.neuron_norm_min_dim
+            ):
                 m_orth = _neuron_wise_normalize(m_orth)
 
             # Built-in muP-style scaling matches Muon convention

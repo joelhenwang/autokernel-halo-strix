@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1.1-B3/step_200.pt",
+  "checkpoint_name": "sprint1.1-B3-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T01:38:38Z",
+  "eval_duration_s": 35.69,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.2183,
+    "gpt_small_val": 3.0693,
+    "stem_crawl_val": 3.6205,
+    "dolma_val": 3.2766,
+    "_raw_ce": {
+      "wikitext_val": 5.5354,
+      "gpt_small_val": 7.6589,
+      "stem_crawl_val": 9.0344,
+      "dolma_val": 8.1763
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.15,
+      "top_p": 0.95,
+      "top_k": 0
+    },
+    "distinct_2": 0.944,
+    "self_ppl": 12.253,
+    "avg_length": 43.0,
+    "sample_preview": "The history of the Roman Empire . In 2005 , the D.@ 9th @-@ 2nd Division was the first half in a rec",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.9216,
+        "self_ppl": 9.356
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.9216,
+        "self_ppl": 9.356
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 0,
+        "distinct_2": 0.944,
+        "self_ppl": 12.253
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49077.1,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 58052.6,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 64116.9,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:7cbe926e241b6fb1",
+    "samples_preview": [
+      "The history of the Roman Empire began with the English War in their national team @-@ in the 2004 . In its first time , a total of the third season , a 3 \u2013 1 se",
+      "In the field of particle physics, the Standard Model describes for its use . The original production is also have been used as a number of the same and the \" \n<",
+      "To prove that the square root of 2 is irrational, we assume , and a small to the only one @-@ 000 long @-@ 000 . \n<|endoftext|>"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      1.618,
+      1.593,
+      1.556,
+      1.522,
+      1.446,
+      1.358,
+      0.964,
+      0.891,
+      0.829,
+      0.768,
+      0.713,
+      0.662,
+      0.615,
+      0.44
+    ],
+    "layer_rms_norm": [
+      0.325,
+      0.387,
+      0.428,
+      0.461,
+      0.491,
+      0.52,
+      0.586,
+      0.597,
+      0.612,
+      0.628,
+      0.646,
+      0.664,
+      0.683,
+      0.778
+    ],
+    "mean_layer_kurtosis": 1.07,
+    "mean_layer_rms_norm": 0.558,
+    "max_layer_kurtosis": 1.618,
+    "max_layer_rms_norm": 0.778,
+    "_split_used": "wikitext_val"
+  }
+}

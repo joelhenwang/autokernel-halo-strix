@@ -5,37 +5,77 @@
 
 ---
 
-## Sprint 1.1: NorMuon Throughput Optimization (2026-05-07, design approved)
+## Sprint 1.1: NorMuon Throughput Optimization (2026-05-07, SHIPPED)
 
-**Status:** Design approved and committed (`ba71b45`). Implementation pending.
+**Status:** COMPLETE. All quality gates PASS, throughput target exceeded.
+Default flag `--ns-dtype fp16` flipped on in `train_ddp.py` +
+`profile_step.py`. Single-commit delivery.
 
-Sprint 1 full recipe (Run 2, commit 511d675) delivers real quality gains:
-  Final loss 4.4736 (−6.8% vs AdamW baseline 4.7975)
-  wikitext_val BPB 1.893 (−1.5% vs baseline 1.9214)
-  BPB improvement on ALL 4 held-out domains
-but at **17.8% throughput cost** (32,478 tok/s vs 39,538 baseline), failing
-the original ≤7% gate.
+### Headline result
 
-Sprint 1.1 is a focused sub-sprint to reduce that cost while preserving
-quality within 1% (loss ≤ 4.518, wiki_val BPB ≤ 1.912).
+| Metric | Run 2 (fp32 NS) | **Run 2b (fp16 NS)** | Δ | Gate | Status |
+|---|---:|---:|---:|:---|:---:|
+| Final loss | 4.4736 | **4.4741** | +0.01% | ≤ 4.518 | PASS |
+| wiki_val BPB | 1.8930 | **1.8962** | +0.17% | ≤ 1.912 | PASS |
+| avg BPB | 2.8114 | **2.8120** | +0.02% | ≤ 2.838 | PASS |
+| tok/s | 32,478 | **38,162** | **+17.5%** | ≥ 33K floor | EXCELLENT |
+| cost vs AdamW | 17.8% | **3.5%** | 5× reduction | ≤ 10% excellent | EXCELLENT |
+| Memory | 10.1 GB | 10.1 GB | 0% | unchanged | PASS |
 
-Spec: `docs/superpowers/specs/2026-05-07-sprint1.1-normuon-throughput-design.md`
+### Root cause
 
-Approach: five-phase measurement-driven descent
-  Phase A   Profile NorMuon step (3 configs) to attribute the 12-16% cost
-  Phase A.5 torch.compile graph-break analysis + NS micro-benchmark
-  Phase B   Quick-win ablations (fp16 NS, size-gated neuron-norm, no-cautious-WD, best combo)
-  Phase C   Structural (batched NS across same-shape params + reduced iterations)
-  Phase D   Custom HIP Newton-Schulz kernel (conditional, only if C insufficient)
-  Phase E   Final Run 2b validation at best config
+NorMuon's Newton-Schulz iteration ran fp32 matmuls (rocBLAS `Cijk_..._S_B_...`)
+by default. Phase A profile: NS fp32 matmul = 53% of step time. Phase A.5
+micro-bench: switching to fp16 gives 8-13× speedup on SwiGLU shapes,
+4× on smaller projections. Machine-parity confirmed.
 
-Each phase has explicit throughput + quality gates. If target hit early
-(≤7% cost), stop descending. If quality regresses, revert offending knob.
+### What shipped
 
-Key knowledge-base additions:
-  knowledge/training/normuon_throughput_gfx1151.md (NEW)
-  knowledge/training/imu1_recipe_2026.md (updated w/ empirical findings)
-  knowledge/INDEX.md (updated)
+- `--ns-dtype {fp16,fp32}` CLI flag (default fp16) in `train_ddp.py` and
+  `profile_step.py`
+- `--neuron-norm-min-dim` and `--no-cautious-wd` as opt-in ablation knobs
+- `halo_training/normuon.py::NorMuon` accepts `neuron_norm_min_dim` +
+  respects it in `_normuon_step`
+- `halo_training/optimizer.py::build_imu1_optimizer` forwards all 3 kwargs
+- Single-node `scripts/profile_step.py` rewritten to accept Sprint 1 flags
+- `scripts/bench_newton_schulz.py` standalone NS micro-benchmark
+- 12/12 unit tests pass (test_sprint1_1_profile.py + test_sprint1_1_bench.py
+  + test_sprint1_1_normuon.py)
+
+### Phase outcomes
+
+| Phase | Plan | Status |
+|:-----:|------|:------:|
+| A | Profile NorMuon step path (3 configs) | ✓ DONE |
+| A.5 | Compile events + NS micro-bench + summary | ✓ DONE |
+| B | Quick-win ablations B0-B4 | ✓ DONE |
+| C | Batched NS (structural) | **SKIPPED** (cost already ≤ 7%) |
+| D | HIP NS kernel | **SKIPPED** (cost already ≤ 7%) |
+| E | Run 2b full-epoch validation | ✓ DONE |
+
+### Artifacts
+
+```
+docs/perf/normuon-profile-{AdamW,NorMuon,Full}.txt   — Phase A raw profiles
+docs/perf/normuon-compile-log.txt                     — Phase A.5.1 dynamo events
+docs/perf/normuon-ns-benchmark{,-machineB}.json       — Phase A.5.2 NS bench (both machines)
+docs/perf/normuon-profile-summary.md                  — Phase A.5.3 attribution doc
+docs/perf/sprint1.1-phaseB-scorecard.md               — Phase B 5-run scorecard
+docs/perf/sprint1.1-summary.md                        — Sprint-level summary
+docs/perf/eval-scorecards/sprint1.1-B{0,1,2,3,4}-step-200.json
+docs/perf/eval-scorecards/sprint1-run2b-step-{500,936}.json
+scripts/profile_step.py  bench_newton_schulz.py  run_sprint1_1_*.sh
+scripts/test_sprint1_1_{profile,bench,normuon}.py     — 12/12 tests pass
+knowledge/training/normuon_throughput_gfx1151.md      — updated with Run 2b numbers
+```
+
+### Unlocks
+
+- **Sprint 1 throughput gate now PASSES** (3.5% cost; target ≤ 10%). Ship
+  Sprint 1 recipe as default for OdinFlat training.
+- **Sprint 3 (T²-optimal dolma-10B)** inherits +17.5% throughput — saves
+  ~8 hours per full epoch at 50-hour run length.
+- **Sprint 1.5 (SPECTRA + μP)** inherits optimized NorMuon configuration.
 
 ---
 

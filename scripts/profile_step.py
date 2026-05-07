@@ -113,6 +113,12 @@ def main():
     p.add_argument("--head-gating", dest="head_gating", action="store_true")
     p.add_argument("--no-head-gating", dest="head_gating", action="store_false")
     p.set_defaults(head_gating=False)
+    # Sprint 1.1 Phase B knobs
+    p.add_argument("--ns-dtype", choices=["fp32", "fp16"], default="fp16")
+    p.add_argument("--neuron-norm-min-dim", type=int, default=0)
+    p.add_argument("--cautious-wd", dest="cautious_wd", action="store_true")
+    p.add_argument("--no-cautious-wd", dest="cautious_wd", action="store_false")
+    p.set_defaults(cautious_wd=True)
     # compile
     p.add_argument("--compile", action="store_true")
     # misc
@@ -162,11 +168,15 @@ def main():
             from halo_training.optimizer import build_imu1_optimizer
             lr_2d = args.lr_2d if args.lr_2d is not None else args.lr
             lr_1d = args.lr_1d if args.lr_1d is not None else args.lr * 0.3
+            ns_dtype = torch.float16 if args.ns_dtype == "fp16" else torch.float32
             optimizer = build_imu1_optimizer(
                 raw_model,
                 lr_2d=lr_2d, lr_1d=lr_1d,
                 weight_decay_2d=0.1, betas=(0.9, 0.95),
                 use_normuon=args.normuon,
+                ns_dtype=ns_dtype,
+                neuron_norm_min_dim=args.neuron_norm_min_dim,
+                cautious_wd=args.cautious_wd,
             )
         else:
             optimizer = torch.optim.AdamW(

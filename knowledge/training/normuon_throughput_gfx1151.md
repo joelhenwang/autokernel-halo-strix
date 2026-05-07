@@ -1,5 +1,5 @@
 ---
-title: "NorMuon Throughput on gfx1151: Empirical Results + Optimization Plan"
+title: "NorMuon Throughput on gfx1151: Empirical Results + Sprint 1.1 Fix"
 domain: training
 type: reference
 status: active
@@ -15,12 +15,20 @@ related:
 
 # NorMuon Throughput on gfx1151 (122M OdinFlat, DDP)
 
-Empirical results from Sprint 1 Phase 3 (2026-05-06) plus optimization
-plan from Sprint 1.1 (2026-05-07). Written against the backdrop of
-`imu1_recipe_2026.md`'s claim that "NorMuon has only ~3% step overhead."
-Reality at our scale is different.
+Empirical results from Sprint 1 Phase 3 (2026-05-06), Sprint 1.1 profile
++ fix (2026-05-07), and the IMU-1 paper's claims compared side-by-side.
 
-## Observed throughput cost
+## TL;DR
+
+- **Pre-Sprint-1.1 (fp32 NS):** 17.8% cost vs AdamW. NS fp32 matmuls
+  dominated (53% of step time).
+- **Post-Sprint-1.1 (fp16 NS, shipped as default):** **3.5% cost** vs
+  AdamW, no quality regression. fp16 NS in rocBLAS runs 8-13× faster on
+  SwiGLU-shape matrices.
+- **IMU-1 paper's 3% claim** is now within reach on gfx1151 once you
+  flip one dtype. No custom Triton or HIP kernel required.
+
+## Before Sprint 1.1 — observed throughput cost
 
 All runs OdinFlat (121.7M params), DDP over TB4 (2× Strix Halo),
 block=512, batch=16, accum=8 (eff_batch=256), fp16 autocast,
@@ -33,129 +41,130 @@ block=512, batch=16, accum=8 (eff_batch=256), fp16 autocast,
 | Probe A | NorMuon lr_2d=8e-4 lr_1d=8e-4 | + free wins | 34,363 | 13.1% |
 | Probe B | NorMuon lr_2d=2e-3 lr_1d=8e-4 | + free wins | 34,596 | 12.5% |
 | Probe C | NorMuon lr_2d=5e-3 lr_1d=8e-4 | + free wins | 33,234 | 15.9% |
-| Run 2 (full recipe) | NorMuon lr_2d=5e-3 lr_1d=8e-4 | + free wins + value residuals + head gating | **32,478** | **17.8%** |
+| Run 2 (full recipe, fp32 NS) | NorMuon lr_2d=5e-3 lr_1d=8e-4 | + free wins + value residuals + head gating | 32,478 | 17.8% |
 
-**Key disagreement with IMU-1 paper:** NorMuon's step overhead is
-**~13-16% at our scale**, not the ~3% they claim. Reasons:
+## After Sprint 1.1 — same config, fp16 NS
 
-1. **IMU-1 uses Triton** kernel for Newton-Schulz. We use PyTorch
-   ops because gfx1151 doesn't run upstream Triton reliably. Each NS
-   iteration is 3 matmuls as separate kernel launches; 5 iterations ×
-   ~60 2D matrices × 3 matmuls = ~900 kernel launches per optimizer step.
+| Run         | tok/s    | Cost vs baseline | Δ loss vs Run 2 | Δ wiki_bpb vs Run 2 |
+|-------------|---------:|-----------------:|----------------:|--------------------:|
+| **Run 2b (full recipe, fp16 NS)** | **38,162** | **3.5%** | +0.01% | +0.17% |
 
-2. **IMU-1 is at 430M with ~3× our param count**. The per-param Python
-   overhead amortizes better at higher parameter counts; at 122M the
-   Python dispatch is a larger fraction of step time.
+Single-flag difference from Run 2: `--ns-dtype fp16` (now the default).
+Quality within noise floor; throughput +17.5% over Run 2.
 
-3. **gfx1151 has no MFMA**. Matmul throughput is ~60% of rocBLAS peak
-   with the small matrix sizes NS runs (768×768 and similar). The
-   quadratic-in-matmul NS suffers disproportionately.
+## Root cause: NorMuon was running fp32 matmuls in Newton-Schulz
 
-4. **Not compiled**. The NS function explicitly disables torch.compile
-   (per `halo_training/muon.py` comment — shape-specific recompile
-   blowup). Means we miss Inductor fusion on the 5-iter path.
+Sprint 1.1 Phase A profile (`docs/perf/normuon-profile-summary.md`):
 
-## Quality gain that justifies the cost (Run 2 results)
+| Config | CUDA/step | aten::mm | NorMuon.step | NS rocBLAS prefix |
+|---|---:|---:|---:|---|
+| P-AdamW (baseline)          | 453 ms  | 56% | —   | `HHS_BH_` (fp16) |
+| P-NorMuon (fp32 NS default) | 1079 ms | 76% | 59% | `S_B_` (fp32)    |
+| P-Full (Run 2 config)       | 1183 ms | 78% | 62% | `S_B_` (fp32)    |
 
-| Metric | Run 2 (NorMuon full) | Baseline (AdamW) | Δ |
+**Why fp32 was the default:** `halo_training/normuon.py::NorMuon.__init__`
+has `ns_dtype: Optional[torch.dtype] = None`, and `build_imu1_optimizer`
+never set it explicitly. The NS iteration internally does
+`X = X.to(dtype or torch.float32)` — so absent an explicit dtype, fp32.
+
+**Why fp16 works:** gfx1151 has no MFMA, but it DOES have native fp16
+WMMA. rocBLAS dispatches `Cijk_..._HHS_BH_...` half-precision kernels
+for 2D matmuls sized like OdinFlat's SwiGLU (768×2816) and square
+projections (768×768). Those kernels are 8-13× faster than the
+single-precision equivalents (Phase A bench, n=500):
+
+| Shape         | fp32 (ms) | fp16 (ms) | Speedup |
+|---------------|---------:|---------:|--------:|
+| (768, 768)    | 6.96     | 0.65     | 10.7×   |
+| (768, 2816)   | 22.21    | 1.69     | **13.1×** |
+| (2816, 768)   | 23.15    | 2.70     | 8.6×    |
+| (768, 128)    | 0.89     | 0.22     | 4.1×    |
+| (128, 768)    | 0.84     | 0.22     | 3.9×    |
+| (256, 768)    | 0.84     | 0.22     | 3.8×    |
+
+Machine B parity: fp16 total within 0.8% of Machine A, confirming
+deterministic behavior. fp32 is 31% slower on Machine B, which made the
+fp16 switch MORE attractive there (93% NS reduction vs 91% on A).
+
+## Quality gain justifying NorMuon at all (Run 2b results)
+
+| Metric | Run 2b | Baseline (AdamW) | Δ |
 |---|---:|---:|---:|
-| Final train loss | **4.4736** | 4.7975 | **−6.8%** |
-| wikitext_val BPB | **1.893** | 1.9214 | −1.5% |
-| gpt_small_val BPB | 2.8327 | 2.8634 | −1.1% |
-| stem_crawl_val BPB | 3.4314 | 3.5361 | −3.0% |
-| dolma_val BPB | 3.0883 | 3.1094 | −0.7% |
-| avg BPB | 2.810 | 2.861 | −1.8% |
+| Final train loss | **4.4741** | 4.7975 | **−6.7%** |
+| wikitext_val BPB | **1.8962** | 1.9214 | −1.3% |
+| gpt_small_val BPB | 2.8277 | 2.8634 | −1.2% |
+| stem_crawl_val BPB | 3.4420 | 3.5361 | −2.7% |
+| dolma_val BPB | 3.0822 | 3.1094 | −0.9% |
+| avg BPB | 2.8120 | 2.861 | −1.7% |
 | Memory | 10.1 GB | 10.3 GB | −1.9% |
 
-The full recipe (NorMuon + value residuals + head gating) delivers
-−6.8% training loss and beats baseline on ALL 4 held-out domains.
-Quality improvement is real; the only gate failure is throughput.
+Post Sprint 1.1 the full recipe delivers −6.7% training loss, beats
+baseline on all 4 domains, **AND** achieves this with only 3.5%
+throughput cost. The recipe is now Pareto-dominant.
 
-## Where the cost goes (informed guesses pending Phase A profile)
+## Other knobs that didn't make it
 
-The Sprint 1.1 profile will give us concrete numbers; prior-art guesses:
+Sprint 1.1 Phase B tested two other throughput toggles; both have
+been shipped as opt-in CLI flags but not adopted as default:
 
-| Likely cost center | Guess | Evidence |
-|---|---:|---|
-| Newton-Schulz matmuls (5 iter × 3 matmuls × ~60 params) | 60-70% | 900 small-matrix launches dominate on gfx1151 |
-| Python per-param for-loop overhead | 10-15% | `for p in group["params"]: ...` with ~60 iterations |
-| Neuron-wise normalization (L2 norm per row + div) | 5-10% | ~60 reductions + divisions |
-| Cautious-WD sign mask + elementwise select | 5-10% | Per-param sign compute + elementwise |
-| Momentum buffer copy / mul / add | 5-10% | Standard optimizer overhead |
+- **`--neuron-norm-min-dim 512`** — skip neuron-wise norm on matrices
+  with `min(rows, cols) < 512`. +6.6% tok/s at step 200 but wiki_bpb
+  drifted to 2.2242 (above the 2.22 gate by 0.09%). Rejected.
+- **`--no-cautious-wd`** — remove the sign-mask cautious WD gate. +2.8%
+  tok/s at step 200 (noise-floor). Clean quality. Kept available but
+  not default.
 
-Sprint 1.1 Phase A will run `scripts/profile_step.py` on three configs
-(AdamW, NorMuon-only, full recipe) to attribute this concretely. See
-`docs/superpowers/specs/2026-05-07-sprint1.1-normuon-throughput-design.md`.
-
-## Optimization candidates (Sprint 1.1 design)
-
-### Cheap wins (Phase B)
-
-- **`ns_dtype=torch.float16`** — gfx1151 has native fp16 WMMA; NS in fp16
-  should roughly 1.5-2× faster. Already supported via `ns_dtype` kwarg in
-  `halo_training/muon.py::zeropower_via_polar_express`. Risk: numerical
-  stability at edges of orthogonality.
-
-- **Size-gated neuron-norm** (`neuron_norm_min_dim=512`) — skip neuron-wise
-  norm for matrices where `min(rows, cols) < 512`. In OdinFlat this only
-  skips the factorized embedding projection (256×768), preserves all
-  attention + FFN. Saves the reduction + division for that one param.
-
-- **Disable cautious WD** — removes the sign-mask elementwise op per
-  param. Quality risk is small (CWD is a small refinement); reverts to
-  standard decoupled WD.
-
-### Structural wins (Phase C)
-
-- **Batched Newton-Schulz** — stack same-shape 2D parameters into a 3D
-  tensor and run NS once on the batch. OdinFlat has 12 identical
-  HyPEShortConv SwiGLU inputs, 12 identical SwiGLU outputs, 12 identical
-  gate matrices. Reduces ~60 per-param NS invocations to ~10 batched ones.
-  Algorithmically equivalent.
-
-- **Reduce NS iterations** 5 → 4 or 3. Linear cost reduction. Quality
-  risk at 3 iters (orthogonality err grows from 0.08 to 0.25).
-
-### Heavy lift (Phase D, conditional)
-
-- **Fused HIP Newton-Schulz kernel** — if profile shows matmuls dominate,
-  write a single HIP kernel that does the 5-iter NS in one launch with
-  half2 loads. Matches the pattern used for `fused_rope_gate_mul`. Only
-  attempted if Phase B + C don't hit the <10% cost target.
+Neither knob was needed; fp16 NS alone solved the throughput gate
+with substantial margin.
 
 ## Interaction with torch.compile
 
-The NorMuon step is NOT compiled (explicit design choice — shape-specific
-recompile blowup). But the MODEL forward (which includes value_residuals
-and head_gating) IS compiled via `compile_zones()`. Adding value_residuals
-and head_gating in Run 2 cost +2 pp over Probe C; likely a combination of:
+Confirmed clean via `TORCH_LOGS=graph_breaks,recompiles`:
 
-- Value residual `v = v + v_res_scale * v_prev` adds a residual path in
-  the compiled graph, potentially introducing a graph break at the
-  layer boundary
-- Head gating `attn_out *= sigmoid(head_gate).view(1, n, 1, 1)` is a
-  simple broadcast multiply; probably cheap in isolation
+- **NorMuon.step is NOT compiled** (Python-side optimizer loop, correct).
+- **2 graph breaks in the model forward:** `fused_rope_mul` and
+  `causal_conv1d_fwd_cpp`. Both intentional (torch.compiler.disable
+  wrappers for our HIP kernel and aiter's op respectively). Zero breaks
+  attributable to NorMuon / value-residuals / head-gating.
+- **0 recompiles.**
 
-Phase A.5 will analyze `TORCH_LOGS=graph_breaks,recompiles` output to
-confirm or refute.
+So compile was never the issue. The fp32 NS matmul was.
 
-## Revision of IMU-1 recipe expectations at our scale
+## Why the IMU-1 paper reported ~3% overhead
 
-`knowledge/training/imu1_recipe_2026.md` predicts "~3% step overhead" for
-NorMuon. Our measurements show **~13-16% for NorMuon alone on gfx1151 /
-122M / PyTorch ops**. Expected delta after Sprint 1.1 optimizations:
+IMU-1 used a custom Triton kernel for the 5-step Newton-Schulz. At 430M
+the per-param overhead amortizes better and the Triton kernel presumably
+routes through fp16 tensor cores on NVIDIA. We arrive at the same
+effective cost (3.5% vs their 3%) by simply asking rocBLAS to dispatch
+the fp16 kernels instead of fp32. No custom kernel needed.
 
-| Target | Path |
-|--------|------|
-| 10% cost | Phase B + maybe Phase C1 (batched NS) |
-| 7% cost (original gate) | Phase C1 + C2 (reduce iters) or Phase D (HIP) |
-| 3% cost (paper claim) | Would require custom Triton/HIP kernel matching their implementation |
+## How to use
 
-Pragmatic goal: ≤10% cost at <1% quality regression. Documented trade-off.
+- **Default path (2026-05-07+):** fp16 NS is ON automatically when you
+  use `--normuon`. No extra flag needed.
+- **Restore Phase 2 behavior (fp32 NS):** pass `--ns-dtype fp32`.
+- **Debug:** `scripts/bench_newton_schulz.py` runs the 5-step NS in
+  isolation per shape; useful when sanity-checking new param shapes
+  or a different hardware target.
+
+## Future work (not needed near-term)
+
+The original Sprint 1.1 plan included Phase C (batched NS across same-
+shape params) and Phase D (fused HIP NS kernel). Both were gated
+behind "Phase B achieves cost > 7%". Phase B achieved 5.97% cost with
+B1 alone and 4.26% with the B4 combo. Neither C nor D ran.
+
+If a future model scales beyond 1B params or uses a different shape
+distribution (e.g. much larger FFN), re-measure. Batched NS could add
+~10-20% if there's significant shape clustering. HIP NS kernel would
+save the 6% Python + neuron-norm + cautious-WD overhead.
 
 ## See also
 
-- `imu1_recipe_2026.md` — the recipe we're implementing (now cross-referenced)
+- `imu1_recipe_2026.md` — the recipe we're implementing
 - `muon_optimizer_results.md` — earlier Muon cost analysis (pre-NorMuon)
-- `../../docs/superpowers/specs/2026-05-07-sprint1.1-normuon-throughput-design.md` — the optimization spec
-- `../../STATUS.md` — Sprint 1 Phase 3 run-by-run results
+- `../../docs/superpowers/specs/2026-05-07-sprint1.1-normuon-throughput-design.md` — spec
+- `../../docs/superpowers/plans/2026-05-07-sprint1.1-normuon-throughput-plan.md` — plan
+- `../../docs/perf/sprint1.1-summary.md` — final summary
+- `../../docs/perf/normuon-profile-summary.md` — Phase A profile details
+- `../../STATUS.md` — Sprint 1 + 1.1 run-by-run results

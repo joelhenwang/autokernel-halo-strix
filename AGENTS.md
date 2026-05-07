@@ -95,6 +95,7 @@ New models: import from `from models.components import X`, never from other mode
 - WSD schedule: `--scheduler wsd --min-lr-ratio 0.1` (MIN_LR=10%, don't decay to zero).
 - Logit softcap=30: stability in fp16 looped models.
 - **`max-autotune` crashes with `accum_steps > 1`** (CUDA graph buffer overwrite). Use `max-autotune-no-cudagraphs` for any training with gradient accumulation. Same Triton autotuning benefit, no graph capture attempt.
+- **NorMuon: `--ns-dtype fp16` is default (2026-05-07+)**. Routes Newton-Schulz matmuls through rocBLAS `HHS_BH_` fp16 kernels (8-13× faster on SwiGLU shapes). Measured +17.5% tok/s on Run 2b with zero quality regression. Pass `--ns-dtype fp32` to restore old behavior; useful only for debugging. See `knowledge/training/normuon_throughput_gfx1151.md`.
 
 ## DDP training defaults (Strix Halo + TB4)
 

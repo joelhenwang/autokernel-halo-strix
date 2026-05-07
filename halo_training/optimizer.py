@@ -87,6 +87,10 @@ def build_imu1_optimizer(
     weight_decay_2d: float = 0.1,
     betas: Tuple[float, float] = (0.9, 0.95),
     use_normuon: bool = False,
+    # Sprint 1.1 Phase B: throughput-optimization knobs
+    ns_dtype: Optional[torch.dtype] = None,
+    neuron_norm_min_dim: int = 0,
+    cautious_wd: bool = True,
 ) -> torch.optim.Optimizer:
     """Sprint 1 entry point: build a two-group optimizer per IMU-1 recipe.
 
@@ -97,6 +101,24 @@ def build_imu1_optimizer(
 
     With ``use_normuon=True`` (Phase 2+), the 2D group is routed to NorMuon
     and the 1D group stays on AdamW no-WD.
+
+    Sprint 1.1 Phase B throughput knobs (only meaningful with use_normuon=True):
+
+    Parameters
+    ----------
+    ns_dtype : torch.dtype or None
+        Cast dtype for Newton-Schulz inner matmuls. ``None`` or
+        ``torch.float32`` uses fp32 (safe default, matches Phase 2 behavior).
+        ``torch.float16`` routes NS through rocBLAS HHS_BH_ fp16 kernels,
+        which Phase A measured as 8-13x faster on SwiGLU shapes.
+    neuron_norm_min_dim : int
+        Sprint 1.1 Phase B2. If >0, neuron-wise normalization is skipped on
+        2D params whose smaller dimension is below this threshold. Set to
+        e.g. 512 to skip embedding-adjacent small projections. 0 = always
+        apply (Phase 2 behavior).
+    cautious_wd : bool
+        Toggle cautious weight decay (per IMU-1 paper). False = standard
+        decoupled WD. True is IMU-1 default and matches Phase 2 behavior.
     """
     group_2d, group_1d = split_params_2d_vs_1d(model)
     n_2d = sum(p.numel() for _, p in group_2d)
@@ -120,8 +142,17 @@ def build_imu1_optimizer(
             lr=lr_2d,
             weight_decay=weight_decay_2d,
             betas=betas,
+            ns_dtype=ns_dtype,
+            neuron_norm_min_dim=neuron_norm_min_dim,
+            cautious_wd=cautious_wd,
         )
-        print(f"IMU-1 optimizer: NorMuon(2D, n={n_2d:,}, lr={lr_2d}) "
+        # Phase 2 logging + Phase B throughput-knob trail so scorecard runs
+        # record exactly which config was used.
+        ns_tag = (str(ns_dtype).split(".")[-1] if ns_dtype is not None
+                  else "fp32")
+        print(f"IMU-1 optimizer: NorMuon(2D, n={n_2d:,}, lr={lr_2d}, "
+              f"ns_dtype={ns_tag}, neuron_norm_min_dim={neuron_norm_min_dim}, "
+              f"cautious_wd={cautious_wd}) "
               f"+ AdamW(1D, n={n_1d:,}, lr={lr_1d}, wd=0)")
         return opt
 

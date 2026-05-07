@@ -1,0 +1,159 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint1.1-B4/step_200.pt",
+  "checkpoint_name": "sprint1.1-B4-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T01:59:10Z",
+  "eval_duration_s": 45.33,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.2238,
+    "gpt_small_val": 3.0401,
+    "stem_crawl_val": 3.5431,
+    "dolma_val": 3.2344,
+    "_raw_ce": {
+      "wikitext_val": 5.5491,
+      "gpt_small_val": 7.586,
+      "stem_crawl_val": 8.8411,
+      "dolma_val": 8.071
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "distinct_2": 0.6895,
+    "self_ppl": 9.789,
+    "avg_length": 89.5,
+    "sample_preview": "The history of the Roman Empire in the 18th century . In 18th century , the early 1876 , the C. D.S.",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.6203,
+        "self_ppl": 8.006
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.6679,
+        "self_ppl": 8.466
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "distinct_2": 0.6895,
+        "self_ppl": 9.789
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 49189.5,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 59436.4,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 61653.5,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:bf7a9d3aed9b90d5",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new year in which he had been promoted to become a member of the club . It was a team , and a team , a match of the",
+      "In the field of particle physics, the Standard Model describes the first game . The episode was a four @-@ game has been nominated for the United States , which",
+      "To prove that the square root of 2 is irrational, we assume , and whether any longer have it 's a lot of the player . I don 't do about . I have been the most o"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      1.973,
+      2.028,
+      2.035,
+      1.982,
+      1.919,
+      1.788,
+      1.231,
+      1.155,
+      1.076,
+      0.989,
+      0.917,
+      0.842,
+      0.776,
+      0.559
+    ],
+    "layer_rms_norm": [
+      0.328,
+      0.392,
+      0.434,
+      0.468,
+      0.498,
+      0.527,
+      0.593,
+      0.605,
+      0.618,
+      0.634,
+      0.651,
+      0.668,
+      0.687,
+      0.779
+    ],
+    "mean_layer_kurtosis": 1.376,
+    "mean_layer_rms_norm": 0.563,
+    "max_layer_kurtosis": 2.035,
+    "max_layer_rms_norm": 0.779,
+    "_split_used": "wikitext_val"
+  }
+}
