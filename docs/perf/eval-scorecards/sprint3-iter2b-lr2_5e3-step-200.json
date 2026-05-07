@@ -1,0 +1,117 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-iter2b-lr2_5e3/step_200.pt",
+  "checkpoint_name": "sprint3-iter2b-lr2_5e3-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_halo.py",
+    "class": "OdinHalo",
+    "total_params": 57567008,
+    "trainable_params": 57567008,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T15:18:12Z",
+  "eval_duration_s": 496.24,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.9675,
+    "gpt_small_val": 2.9065,
+    "stem_crawl_val": 2.5447,
+    "dolma_val": 2.5837,
+    "_raw_ce": {
+      "wikitext_val": 7.4049,
+      "gpt_small_val": 7.2526,
+      "stem_crawl_val": 6.35,
+      "dolma_val": 6.4471
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.15,
+      "top_p": 0.95,
+      "top_k": 40
+    },
+    "distinct_2": 0.1036,
+    "self_ppl": 2.998,
+    "avg_length": 120.0,
+    "sample_preview": "The history of the Roman Empire                                                                     ",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.1036,
+        "self_ppl": 2.998
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.1036,
+        "self_ppl": 2.998
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.15,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.1036,
+        "self_ppl": 2.998
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 6584.0,
+    "peak_mem_gb_seq256": 0.252,
+    "tok_s_seq512_bs1": 9050.0,
+    "peak_mem_gb_seq512": 0.305,
+    "tok_s_seq1024_bs1": 13402.1,
+    "peak_mem_gb_seq1024": 0.411
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:a89e068f97df2c03",
+    "samples_preview": [
+      "The history of the Roman Empire began with the new the in the the the the the the the the the the the the the the 3 the 3 the the the the the the 3, the the 2 t",
+      "In the field of particle physics, the Standard Model describes the first.\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n",
+      "To prove that the square root of 2 is irrational, we assume that each one, 3,2, for a, if we can be 1, we, we know,2, we are, we, we, we are.\n1,, we can, 2, we,"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": null
+}
