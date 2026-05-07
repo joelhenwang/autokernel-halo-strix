@@ -138,6 +138,7 @@ not signal. Re-measure multi-seed if a knob seems to matter by <5%.
 ## Compile strategy
 
 - For **looped models (HALO)**: trainer auto-uses `compile_zones()` per-layer. Don't override.
+- **Why per-layer, not whole-model**: the Python `for i in range(mean_recurrence)` loop is NOT itself the problem — Dynamo unrolls static-bound loops. The graph breaks come from (a) `@torch.compiler.disable`'d HIP kernels inside `HyPEShortConvBlock` (`fused_rope_gate_mul` + 3× `causal_conv1d_fn` = 4 breaks/block), (b) Python list mutation on `depth_kv_buffer`, (c) `h.detach()` in the MoDA depth-KV write (by design — severs cross-iter gradient). Per-layer compile sidesteps all three: the Python control flow runs outside compiled regions, and each layer gets a clean single-graph compile. Phase 3 WI-B2 measured whole-model compile at only +1.3% vs per-layer — below the shipping threshold.
 - **Compile lift scales with batch size**:
   - batch=4: ~1.08× (low value)
   - batch=16: ~1.32× (recommended minimum for compile benefit)
