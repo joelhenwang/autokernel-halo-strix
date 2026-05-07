@@ -1,0 +1,7 @@
+checkpoints/sprint3-iter2b-lr2_5e3/step_400.pt	models/odin_halo.py	OdinHalo
+checkpoints/sprint3-s1_3-lr2_5e3-700/step_200.pt	models/odin_halo.py	OdinHalo
+checkpoints/sprint3-s1_3-lr2_5e3-700/step_400.pt	models/odin_halo.py	OdinHalo
+checkpoints/sprint3-s1_3-lr2_5e3-700/step_600.pt	models/odin_halo.py	OdinHalo
+checkpoints/sprint3-s1_3-lr2_5e3-700/step_700.pt	models/odin_halo.py	OdinHalo
+checkpoints/sprint3-s1_5-odinflat-dolma/step_200.pt	models/odin_flat.py	OdinFlat
+checkpoints/sprint3-s1_5-odinflat-dolma/step_400.pt	models/odin_flat.py	OdinFlat

@@ -1,0 +1,242 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-s1_5-odinflat-dolma/step_400.pt",
+  "checkpoint_name": "sprint3-s1_5-odinflat-dolma-step-400",
+  "step": 400,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T17:48:25Z",
+  "eval_duration_s": 90.37,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.714,
+    "gpt_small_val": 2.6788,
+    "stem_crawl_val": 2.2646,
+    "dolma_val": 2.2968,
+    "_raw_ce": {
+      "wikitext_val": 6.7723,
+      "gpt_small_val": 6.6844,
+      "stem_crawl_val": 5.651,
+      "dolma_val": 5.7312
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 0
+    },
+    "distinct_2": 0.5276,
+    "self_ppl": 6.167,
+    "avg_length": 82.3,
+    "sample_preview": "The history of the Roman Empire is by the British Revolution. The World War of the Roman Empire is i",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.4071,
+        "self_ppl": 4.49
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.4836,
+        "self_ppl": 5.208
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "distinct_2": 0.5276,
+        "self_ppl": 6.167
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 28778.4,
+    "peak_mem_gb_seq256": 0.38,
+    "tok_s_seq512_bs1": 47479.9,
+    "peak_mem_gb_seq512": 0.432,
+    "tok_s_seq1024_bs1": 51234.5,
+    "peak_mem_gb_seq1024": 0.535
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:e33a7b4089cd0eec",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new World War.\n\nA. The New York was released\nB. It was a National War\nC.\nD. It was a Germanist of the United States",
+      "In the field of particle physics, the Standard Model describes the momentum of electromagnetic field. In a wave function, the momentum is a unit to measure and ",
+      "To prove that the square root of 2 is irrational, we assume that each part of $x = 1$.\n\n\nTherefore, let's calculate the correct. Let's denote the equation:\n\n\n$$"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/sprint3-s1_5-odinflat-dolma/step_200.pt",
+      "prior_hash": "sha256:1ff06d0d790578e9",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with a new World War.\n\nA. The New York was released\nB. It was a National War\nC.\nD. It was a Germanist of the United States",
+          "prior": "The history of the Roman Empire began with a \"S in their rights of In which of the \"He was the \"The first, it was the \"s \"F\" \"M\" \"R\" \"G\" \"The \"The \"the \"A\" \"S\" "
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the momentum of electromagnetic field. In a wave function, the momentum is a unit to measure and ",
+          "prior": "In the field of particle physics, the Standard Model describes the first-f of T-1. The first-M1, and to the M-E-G-P-D-like-L-P-R-E-A-F-O-C-G-W-N-S-L-R-Q-T-D-I-V"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume that each part of $x = 1$.\n\n\nTherefore, let's calculate the correct. Let's denote the equation:\n\n\n$$",
+          "prior": "To prove that the square root of 2 is irrational, we assume the angle is a square, and so for a sequence. If that you can be a, because it would be the equation"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      2.459,
+      3.853,
+      3.587,
+      3.078,
+      2.733,
+      2.44,
+      0.912,
+      0.727,
+      0.597,
+      0.498,
+      0.428,
+      0.377,
+      0.338,
+      0.297
+    ],
+    "layer_rms_norm": [
+      2.379,
+      2.847,
+      3.157,
+      3.417,
+      3.675,
+      3.927,
+      5.332,
+      5.586,
+      5.815,
+      6.041,
+      6.255,
+      6.467,
+      6.676,
+      7.406
+    ],
+    "mean_layer_kurtosis": 1.595,
+    "mean_layer_rms_norm": 4.927,
+    "max_layer_kurtosis": 3.853,
+    "max_layer_rms_norm": 7.406,
+    "_split_used": "wikitext_val"
+  },
+  "convergence_stats": {
+    "num_batches": 3,
+    "seq_len": 512,
+    "batch_size": 2,
+    "is_looped": false,
+    "mean_recurrence": 1,
+    "num_layers": 14,
+    "tau": 0.95,
+    "per_layer_cos_to_final": [
+      0.4936,
+      0.5302,
+      0.5517,
+      0.5681,
+      0.5806,
+      0.5899,
+      0.8304,
+      0.868,
+      0.8937,
+      0.9128,
+      0.9268,
+      0.9369,
+      0.9433,
+      1.0
+    ],
+    "per_layer_cos_to_final_frac_high": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0026,
+      0.0098,
+      0.0156,
+      0.0212,
+      0.0407,
+      0.1403,
+      0.307,
+      1.0
+    ],
+    "inter_layer_transition_cos": [
+      0.9636,
+      0.9846,
+      0.9902,
+      0.9927,
+      0.9945,
+      0.733,
+      0.989,
+      0.9927,
+      0.9947,
+      0.9957,
+      0.9968,
+      0.9974,
+      0.9433
+    ],
+    "effective_rank_final": 3.1273,
+    "_split_used": "wikitext_val",
+    "iter_k_cos_to_final": null,
+    "iter_k_cos_to_final_frac_high": null,
+    "iter_transition_cos": null
+  }
+}

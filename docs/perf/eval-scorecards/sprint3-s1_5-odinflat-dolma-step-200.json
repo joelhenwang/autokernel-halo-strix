@@ -1,0 +1,220 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/sprint3-s1_5-odinflat-dolma/step_200.pt",
+  "checkpoint_name": "sprint3-s1_5-odinflat-dolma-step-200",
+  "step": 200,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "joelwang-ai-2-BeyondMax-Series",
+  "eval_timestamp": "2026-05-07T17:38:14Z",
+  "eval_duration_s": 313.48,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.8734,
+    "gpt_small_val": 2.8034,
+    "stem_crawl_val": 2.3684,
+    "dolma_val": 2.4106,
+    "_raw_ce": {
+      "wikitext_val": 7.1701,
+      "gpt_small_val": 6.9954,
+      "stem_crawl_val": 5.9099,
+      "dolma_val": 6.0152
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 1.0,
+      "top_k": 40
+    },
+    "distinct_2": 0.4498,
+    "self_ppl": 6.811,
+    "avg_length": 100.8,
+    "sample_preview": "The history of the Roman Empire is an in the population. The first and the city of the passage is th",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.3924,
+        "self_ppl": 6.103
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.4498,
+        "self_ppl": 6.811
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 1.0,
+        "top_k": 40,
+        "distinct_2": 0.4498,
+        "self_ppl": 6.811
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 8806.3,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 10442.3,
+    "peak_mem_gb_seq512": 0.433,
+    "tok_s_seq1024_bs1": 18488.6,
+    "peak_mem_gb_seq1024": 0.536
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:1ff06d0d790578e9",
+    "samples_preview": [
+      "The history of the Roman Empire began with a \"S in their rights of In which of the \"He was the \"The first, it was the \"s \"F\" \"M\" \"R\" \"G\" \"The \"The \"the \"A\" \"S\" ",
+      "In the field of particle physics, the Standard Model describes the first-f of T-1. The first-M1, and to the M-E-G-P-D-like-L-P-R-E-A-F-O-C-G-W-N-S-L-R-Q-T-D-I-V",
+      "To prove that the square root of 2 is irrational, we assume the angle is a square, and so for a sequence. If that you can be a, because it would be the equation"
+    ],
+    "diff_vs_prior": null
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      1.371,
+      1.502,
+      1.413,
+      1.282,
+      1.168,
+      1.082,
+      0.442,
+      0.343,
+      0.275,
+      0.234,
+      0.205,
+      0.186,
+      0.169,
+      0.136
+    ],
+    "layer_rms_norm": [
+      1.096,
+      1.31,
+      1.454,
+      1.573,
+      1.686,
+      1.791,
+      2.364,
+      2.494,
+      2.612,
+      2.72,
+      2.816,
+      2.909,
+      2.994,
+      3.397
+    ],
+    "mean_layer_kurtosis": 0.7,
+    "mean_layer_rms_norm": 2.23,
+    "max_layer_kurtosis": 1.502,
+    "max_layer_rms_norm": 3.397,
+    "_split_used": "wikitext_val"
+  },
+  "convergence_stats": {
+    "num_batches": 3,
+    "seq_len": 512,
+    "batch_size": 2,
+    "is_looped": false,
+    "mean_recurrence": 1,
+    "num_layers": 14,
+    "tau": 0.95,
+    "per_layer_cos_to_final": [
+      0.4646,
+      0.5115,
+      0.5397,
+      0.5629,
+      0.5808,
+      0.5939,
+      0.85,
+      0.8847,
+      0.9078,
+      0.9224,
+      0.9323,
+      0.9392,
+      0.9437,
+      1.0
+    ],
+    "per_layer_cos_to_final_frac_high": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0013,
+      0.0065,
+      0.0251,
+      0.1113,
+      0.2614,
+      0.3945,
+      1.0
+    ],
+    "inter_layer_transition_cos": [
+      0.9507,
+      0.9782,
+      0.9865,
+      0.9905,
+      0.9933,
+      0.7687,
+      0.9912,
+      0.9945,
+      0.9963,
+      0.9974,
+      0.998,
+      0.9984,
+      0.9437
+    ],
+    "effective_rank_final": 2.7669,
+    "_split_used": "wikitext_val",
+    "iter_k_cos_to_final": null,
+    "iter_k_cos_to_final_frac_high": null,
+    "iter_transition_cos": null
+  }
+}

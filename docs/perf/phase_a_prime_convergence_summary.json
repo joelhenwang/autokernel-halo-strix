@@ -1,0 +1,493 @@
+{
+  "checkpoints": [
+    {
+      "checkpoint": "checkpoints/sprint3-iter2b-lr2_5e3/step_400.pt",
+      "model_file": "models/odin_halo.py",
+      "class_name": "OdinHalo",
+      "step": 400,
+      "elapsed_s": 4.5,
+      "convergence_stats": {
+        "num_batches": 3,
+        "seq_len": 512,
+        "batch_size": 2,
+        "is_looped": true,
+        "mean_recurrence": 3,
+        "num_layers": 6,
+        "tau": 0.95,
+        "per_layer_cos_to_final": [
+          0.4847,
+          0.5426,
+          0.5772,
+          0.9629,
+          0.9864,
+          1.0
+        ],
+        "per_layer_cos_to_final_frac_high": [
+          0.0,
+          0.0,
+          0.0,
+          0.8473,
+          0.9928,
+          1.0
+        ],
+        "inter_layer_transition_cos": [
+          0.9394,
+          0.9528,
+          0.5942,
+          0.9854,
+          0.9864
+        ],
+        "effective_rank_final": 2.8201,
+        "_split_used": "wikitext_val",
+        "iter_k_cos_to_final": [
+          0.2811,
+          0.5821
+        ],
+        "iter_k_cos_to_final_frac_high": [
+          0.0,
+          0.0016
+        ],
+        "iter_transition_cos": [
+          0.1741,
+          0.5821
+        ]
+      },
+      "gate_status": "KILL",
+      "gate_details": {
+        "gate_metric_frac_high_cos": 0.0016,
+        "thresholds": {
+          "greenlight": 0.95,
+          "partial": 0.85
+        },
+        "iter_cos_to_final": [
+          0.2811,
+          0.5821
+        ],
+        "iter_transition_cos": [
+          0.1741,
+          0.5821
+        ]
+      }
+    },
+    {
+      "checkpoint": "checkpoints/sprint3-s1_3-lr2_5e3-700/step_200.pt",
+      "model_file": "models/odin_halo.py",
+      "class_name": "OdinHalo",
+      "step": 200,
+      "elapsed_s": 1.5,
+      "convergence_stats": {
+        "num_batches": 3,
+        "seq_len": 512,
+        "batch_size": 2,
+        "is_looped": true,
+        "mean_recurrence": 3,
+        "num_layers": 6,
+        "tau": 0.95,
+        "per_layer_cos_to_final": [
+          0.5633,
+          0.6543,
+          0.7105,
+          0.9564,
+          0.9848,
+          1.0
+        ],
+        "per_layer_cos_to_final_frac_high": [
+          0.0,
+          0.0,
+          0.0,
+          0.7529,
+          0.9948,
+          1.0
+        ],
+        "inter_layer_transition_cos": [
+          0.9143,
+          0.9501,
+          0.7331,
+          0.9828,
+          0.9848
+        ],
+        "effective_rank_final": 3.1199,
+        "_split_used": "wikitext_val",
+        "iter_k_cos_to_final": [
+          0.331,
+          0.6133
+        ],
+        "iter_k_cos_to_final_frac_high": [
+          0.0,
+          0.0013
+        ],
+        "iter_transition_cos": [
+          0.2941,
+          0.6133
+        ]
+      },
+      "gate_status": "KILL",
+      "gate_details": {
+        "gate_metric_frac_high_cos": 0.0013,
+        "thresholds": {
+          "greenlight": 0.95,
+          "partial": 0.85
+        },
+        "iter_cos_to_final": [
+          0.331,
+          0.6133
+        ],
+        "iter_transition_cos": [
+          0.2941,
+          0.6133
+        ]
+      }
+    },
+    {
+      "checkpoint": "checkpoints/sprint3-s1_3-lr2_5e3-700/step_400.pt",
+      "model_file": "models/odin_halo.py",
+      "class_name": "OdinHalo",
+      "step": 400,
+      "elapsed_s": 1.5,
+      "convergence_stats": {
+        "num_batches": 3,
+        "seq_len": 512,
+        "batch_size": 2,
+        "is_looped": true,
+        "mean_recurrence": 3,
+        "num_layers": 6,
+        "tau": 0.95,
+        "per_layer_cos_to_final": [
+          0.4993,
+          0.5578,
+          0.5928,
+          0.9643,
+          0.9863,
+          1.0
+        ],
+        "per_layer_cos_to_final_frac_high": [
+          0.0,
+          0.0,
+          0.0,
+          0.863,
+          1.0,
+          1.0
+        ],
+        "inter_layer_transition_cos": [
+          0.9364,
+          0.9493,
+          0.6016,
+          0.987,
+          0.9863
+        ],
+        "effective_rank_final": 2.8945,
+        "_split_used": "wikitext_val",
+        "iter_k_cos_to_final": [
+          0.2696,
+          0.6393
+        ],
+        "iter_k_cos_to_final_frac_high": [
+          0.0,
+          0.0023
+        ],
+        "iter_transition_cos": [
+          0.1772,
+          0.6393
+        ]
+      },
+      "gate_status": "KILL",
+      "gate_details": {
+        "gate_metric_frac_high_cos": 0.0023,
+        "thresholds": {
+          "greenlight": 0.95,
+          "partial": 0.85
+        },
+        "iter_cos_to_final": [
+          0.2696,
+          0.6393
+        ],
+        "iter_transition_cos": [
+          0.1772,
+          0.6393
+        ]
+      }
+    },
+    {
+      "checkpoint": "checkpoints/sprint3-s1_3-lr2_5e3-700/step_600.pt",
+      "model_file": "models/odin_halo.py",
+      "class_name": "OdinHalo",
+      "step": 600,
+      "elapsed_s": 1.5,
+      "convergence_stats": {
+        "num_batches": 3,
+        "seq_len": 512,
+        "batch_size": 2,
+        "is_looped": true,
+        "mean_recurrence": 3,
+        "num_layers": 6,
+        "tau": 0.95,
+        "per_layer_cos_to_final": [
+          0.2895,
+          0.3259,
+          0.3446,
+          0.942,
+          0.9764,
+          1.0
+        ],
+        "per_layer_cos_to_final_frac_high": [
+          0.0,
+          0.0,
+          0.0,
+          0.3968,
+          0.9834,
+          1.0
+        ],
+        "inter_layer_transition_cos": [
+          0.9382,
+          0.9331,
+          0.3826,
+          0.9789,
+          0.9764
+        ],
+        "effective_rank_final": 2.0037,
+        "_split_used": "wikitext_val",
+        "iter_k_cos_to_final": [
+          0.0404,
+          0.5224
+        ],
+        "iter_k_cos_to_final_frac_high": [
+          0.0,
+          0.0016
+        ],
+        "iter_transition_cos": [
+          0.0815,
+          0.5224
+        ]
+      },
+      "gate_status": "KILL",
+      "gate_details": {
+        "gate_metric_frac_high_cos": 0.0016,
+        "thresholds": {
+          "greenlight": 0.95,
+          "partial": 0.85
+        },
+        "iter_cos_to_final": [
+          0.0404,
+          0.5224
+        ],
+        "iter_transition_cos": [
+          0.0815,
+          0.5224
+        ]
+      }
+    },
+    {
+      "checkpoint": "checkpoints/sprint3-s1_3-lr2_5e3-700/step_700.pt",
+      "model_file": "models/odin_halo.py",
+      "class_name": "OdinHalo",
+      "step": 700,
+      "elapsed_s": 1.5,
+      "convergence_stats": {
+        "num_batches": 3,
+        "seq_len": 512,
+        "batch_size": 2,
+        "is_looped": true,
+        "mean_recurrence": 3,
+        "num_layers": 6,
+        "tau": 0.95,
+        "per_layer_cos_to_final": [
+          0.2653,
+          0.3049,
+          0.3317,
+          0.9593,
+          0.9806,
+          1.0
+        ],
+        "per_layer_cos_to_final_frac_high": [
+          0.0,
+          0.0,
+          0.0,
+          0.8187,
+          1.0,
+          1.0
+        ],
+        "inter_layer_transition_cos": [
+          0.9026,
+          0.9059,
+          0.3639,
+          0.9879,
+          0.9806
+        ],
+        "effective_rank_final": 2.1812,
+        "_split_used": "wikitext_val",
+        "iter_k_cos_to_final": [
+          0.0837,
+          0.4117
+        ],
+        "iter_k_cos_to_final_frac_high": [
+          0.0,
+          0.0013
+        ],
+        "iter_transition_cos": [
+          0.0768,
+          0.4117
+        ]
+      },
+      "gate_status": "KILL",
+      "gate_details": {
+        "gate_metric_frac_high_cos": 0.0013,
+        "thresholds": {
+          "greenlight": 0.95,
+          "partial": 0.85
+        },
+        "iter_cos_to_final": [
+          0.0837,
+          0.4117
+        ],
+        "iter_transition_cos": [
+          0.0768,
+          0.4117
+        ]
+      }
+    },
+    {
+      "checkpoint": "checkpoints/sprint3-s1_5-odinflat-dolma/step_200.pt",
+      "model_file": "models/odin_flat.py",
+      "class_name": "OdinFlat",
+      "step": 200,
+      "elapsed_s": 1.9,
+      "convergence_stats": {
+        "num_batches": 3,
+        "seq_len": 512,
+        "batch_size": 2,
+        "is_looped": false,
+        "mean_recurrence": 1,
+        "num_layers": 14,
+        "tau": 0.95,
+        "per_layer_cos_to_final": [
+          0.4646,
+          0.5115,
+          0.5397,
+          0.5629,
+          0.5808,
+          0.5939,
+          0.85,
+          0.8847,
+          0.9078,
+          0.9224,
+          0.9323,
+          0.9392,
+          0.9437,
+          1.0
+        ],
+        "per_layer_cos_to_final_frac_high": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0013,
+          0.0065,
+          0.0251,
+          0.1113,
+          0.2614,
+          0.3945,
+          1.0
+        ],
+        "inter_layer_transition_cos": [
+          0.9507,
+          0.9782,
+          0.9865,
+          0.9905,
+          0.9933,
+          0.7687,
+          0.9912,
+          0.9945,
+          0.9963,
+          0.9974,
+          0.998,
+          0.9984,
+          0.9437
+        ],
+        "effective_rank_final": 2.7669,
+        "_split_used": "wikitext_val",
+        "iter_k_cos_to_final": null,
+        "iter_k_cos_to_final_frac_high": null,
+        "iter_transition_cos": null
+      },
+      "gate_status": "N/A",
+      "gate_details": {
+        "reason": "not a looped model"
+      }
+    },
+    {
+      "checkpoint": "checkpoints/sprint3-s1_5-odinflat-dolma/step_400.pt",
+      "model_file": "models/odin_flat.py",
+      "class_name": "OdinFlat",
+      "step": 400,
+      "elapsed_s": 1.9,
+      "convergence_stats": {
+        "num_batches": 3,
+        "seq_len": 512,
+        "batch_size": 2,
+        "is_looped": false,
+        "mean_recurrence": 1,
+        "num_layers": 14,
+        "tau": 0.95,
+        "per_layer_cos_to_final": [
+          0.4936,
+          0.5302,
+          0.5517,
+          0.5681,
+          0.5806,
+          0.5899,
+          0.8304,
+          0.868,
+          0.8937,
+          0.9128,
+          0.9268,
+          0.9369,
+          0.9433,
+          1.0
+        ],
+        "per_layer_cos_to_final_frac_high": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0026,
+          0.0098,
+          0.0156,
+          0.0212,
+          0.0407,
+          0.1403,
+          0.307,
+          1.0
+        ],
+        "inter_layer_transition_cos": [
+          0.9636,
+          0.9846,
+          0.9902,
+          0.9927,
+          0.9945,
+          0.733,
+          0.989,
+          0.9927,
+          0.9947,
+          0.9957,
+          0.9968,
+          0.9974,
+          0.9433
+        ],
+        "effective_rank_final": 3.1273,
+        "_split_used": "wikitext_val",
+        "iter_k_cos_to_final": null,
+        "iter_k_cos_to_final_frac_high": null,
+        "iter_transition_cos": null
+      },
+      "gate_status": "N/A",
+      "gate_details": {
+        "reason": "not a looped model"
+      }
+    }
+  ]
+}
