@@ -382,7 +382,11 @@ class VidarHaloAblation(VidarHaloBase):
     def _apply_iter_norm(self, h, i):
         h = self.iter_norm(h)
         if hasattr(self, "iter_output_scales"):
-            h = h * self.iter_output_scales[i]
+            # fp16-stability P3: clamp iter_output_scales at forward time to
+            # prevent compounding across Parcae iterations. Matches OdinHalo
+            # treatment; see knowledge/training/fp16_stability_gfx1151.md.
+            scale = self.iter_output_scales[i].clamp(-4.0, 4.0)
+            h = h * scale
         return h + self.loop_pos_embeds[i]
 
     def _forward_unrolled(self, input_ids):

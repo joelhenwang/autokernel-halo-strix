@@ -96,6 +96,7 @@ New models: import from `from models.components import X`, never from other mode
 - Logit softcap=30: stability in fp16 looped models.
 - **`max-autotune` crashes with `accum_steps > 1`** (CUDA graph buffer overwrite). Use `max-autotune-no-cudagraphs` for any training with gradient accumulation. Same Triton autotuning benefit, no graph capture attempt.
 - **NorMuon: `--ns-dtype fp16` is default (2026-05-07+)**. Routes Newton-Schulz matmuls through rocBLAS `HHS_BH_` fp16 kernels (8-13× faster on SwiGLU shapes). Measured +17.5% tok/s on Run 2b with zero quality regression. Pass `--ns-dtype fp32` to restore old behavior; useful only for debugging. See `knowledge/training/normuon_throughput_gfx1151.md`.
+- **fp16 stability for long/multi-epoch runs (2026-05-07+)**. Prevention stack now includes: `--z-loss 1e-4` (logsumexp² regularization), `--attn-softcap 50.0` (pre-softmax score cap), `--activation-monitor` (per-layer maxabs JSONL), tightened `GradScaler(growth_interval=500)`, auto `--max-grad-norm 0.8` on resumed runs, and iter_scales.clamp(-4,4) inside looped-model forward. When NaN still fires, `StabilityGuard` dumps `nan_dump_step_N.pt` (offending batch + weight maxabs + scaler state + grad history + activation stats) before rollback. See `knowledge/training/fp16_stability_gfx1151.md`.
 
 ## DDP training defaults (Strix Halo + TB4)
 

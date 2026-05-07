@@ -211,7 +211,15 @@ class OdinHaloBase(nn.Module):
         return h, current_kvs
 
     def _apply_iter_norm(self, h: torch.Tensor, iter_idx: int) -> torch.Tensor:
-        return self.iter_norm(h) * self.iter_scales[iter_idx] + self.loop_pos_embeds[iter_idx]
+        # fp16-stability P3: clamp iter_scales at forward time to prevent
+        # compounding drift across Parcae iterations. The underlying
+        # Parameter is never modified — only the value used for this forward
+        # is bounded. Mitigates a NaN failure mode observed in long-horizon
+        # (multi-epoch) dolma-10B training where learned scales drifted
+        # above ~5, pushing iter-chained activations out of fp16 range.
+        # See knowledge/training/fp16_stability_gfx1151.md.
+        scale = self.iter_scales[iter_idx].clamp(-4.0, 4.0)
+        return self.iter_norm(h) * scale + self.loop_pos_embeds[iter_idx]
 
     def _forward_unrolled(self, input_ids: torch.Tensor):
         B, T = input_ids.shape

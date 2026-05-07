@@ -17,16 +17,73 @@ from models._components import apply_rotary_emb
 _HAS_HYBRID_ATTN = False  # disabled: flash_attn requires aiter (not on Machine A)
 
 
+def _attention_core(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
+                    softcap: float = 0.0,
+                    is_causal: bool = True,
+                    attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Shared attention computation with optional pre-softmax softcap.
+
+    When softcap > 0, computes attention manually with scores bounded to
+    [-softcap, softcap] via ``scores = softcap * tanh(scores / softcap)``
+    before softmax. Prevents fp16 overflow (>65504) on long-context runs
+    at ~3% throughput cost vs F.scaled_dot_product_attention.
+
+    When softcap == 0, delegates to F.scaled_dot_product_attention for the
+    fast path. This is the default; zero regression on existing models.
+
+    Args:
+        q, k, v: [B, H, T, D] with H = n_heads (post-GQA repeat) and
+                 T_q == T_k == T_v (for causal+softcap path) or
+                 T_k == T_v (for depth_kvs path).
+        softcap: float; 0 disables, >0 enables softcap path.
+        is_causal: apply triangular causal mask.
+        attn_mask: optional additive or bool mask; SDPA semantics.
+
+    Returns: [B, H, T_q, D] attention output.
+    """
+    if softcap > 0:
+        head_dim = q.size(-1)
+        scale = 1.0 / math.sqrt(head_dim)
+        scores = torch.matmul(q, k.transpose(-2, -1)) * scale  # [B, H, T_q, T_k]
+        cap = softcap
+        scores = cap * torch.tanh(scores / cap)
+        if is_causal and attn_mask is None:
+            T_q = scores.size(-2)
+            T_k = scores.size(-1)
+            # diagonal=(T_k - T_q + 1) so depth-KV prepend doesn't break causality
+            diagonal = (T_k - T_q) + 1
+            mask = torch.ones(T_q, T_k, device=scores.device, dtype=torch.bool).triu_(diagonal)
+            scores = scores.masked_fill(mask, float("-inf"))
+        elif attn_mask is not None:
+            if attn_mask.dtype == torch.bool:
+                scores = scores.masked_fill(~attn_mask, float("-inf"))
+            else:
+                scores = scores + attn_mask
+        attn = F.softmax(scores, dim=-1).to(v.dtype)
+        return torch.matmul(attn, v)
+    if attn_mask is not None:
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=False)
+    return F.scaled_dot_product_attention(q, k, v, is_causal=is_causal)
+
+
 class Attention(nn.Module):
     """GQA with RoPE + QK-Norm. Uses separate wq/wk/wv/wo for autokernel FusedQKV pattern."""
 
-    def __init__(self, dim: int, n_heads: int, n_kv_heads: int, qk_norm: bool = True):
+    def __init__(self, dim: int, n_heads: int, n_kv_heads: int, qk_norm: bool = True,
+                 attn_score_softcap: float = 0.0):
         super().__init__()
         self.n_heads = n_heads
         self.n_kv_heads = n_kv_heads
         self.head_dim = dim // n_heads
         self.n_rep = n_heads // n_kv_heads
         self.qk_norm = qk_norm
+        # fp16-stability P6: pre-softmax attention-score softcap. 0 = off
+        # (default; uses fast F.scaled_dot_product_attention). >0 = manual
+        # attention path where scores = softcap * tanh(scores / softcap)
+        # before softmax, bounding each score element to [-softcap, softcap].
+        # Prevents rare fp16 overflow (>65504) on long-context looped runs.
+        # See knowledge/training/fp16_stability_gfx1151.md.
+        self.attn_score_softcap = float(attn_score_softcap)
 
         self.wq = nn.Linear(dim, n_heads * self.head_dim, bias=False)
         self.wk = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
@@ -53,7 +110,9 @@ class Attention(nn.Module):
             k = k.repeat_interleave(self.n_rep, dim=1)
             v = v.repeat_interleave(self.n_rep, dim=1)
 
-        if _HAS_HYBRID_ATTN and q.dtype == torch.float16:
+        if self.attn_score_softcap > 0:
+            y = _attention_core(q, k, v, softcap=self.attn_score_softcap, is_causal=True)
+        elif _HAS_HYBRID_ATTN and q.dtype == torch.float16:
             y = hybrid_flash_sdpa_attention(
                 q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
             ).transpose(1, 2)
@@ -113,15 +172,15 @@ class CodaAttention(Attention):
             k = torch.cat(depth_k_list + [k], dim=2)
             v = torch.cat(depth_v_list + [v], dim=2)
 
-        if _HAS_HYBRID_ATTN and q.dtype == torch.float16 and not has_depth:
+        if _HAS_HYBRID_ATTN and q.dtype == torch.float16 and not has_depth and self.attn_score_softcap == 0:
             try:
                 y = hybrid_flash_sdpa_attention(
                     q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
                 ).transpose(1, 2)
             except Exception:
-                y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+                y = _attention_core(q, k, v, softcap=self.attn_score_softcap, is_causal=True)
         else:
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+            y = _attention_core(q, k, v, softcap=self.attn_score_softcap, is_causal=True)
 
         if self.exclusive:
             v_seq = v[:, :, -T:, :]
@@ -240,16 +299,17 @@ class NoPECodaAttention(Attention):
             causal = torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
             attn_mask = causal.unsqueeze(0) & doc_mask           # [B, T, T]
             attn_mask = attn_mask.unsqueeze(1)                    # [B, 1, T, T]
-            y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, is_causal=False)
-        elif _HAS_HYBRID_ATTN and q.dtype == torch.float16 and not has_depth:
+            y = _attention_core(q, k, v, softcap=self.attn_score_softcap,
+                                is_causal=False, attn_mask=attn_mask)
+        elif _HAS_HYBRID_ATTN and q.dtype == torch.float16 and not has_depth and self.attn_score_softcap == 0:
             try:
                 y = hybrid_flash_sdpa_attention(
                     q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), causal=True
                 ).transpose(1, 2)
             except Exception:
-                y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+                y = _attention_core(q, k, v, softcap=self.attn_score_softcap, is_causal=True)
         else:
-            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+            y = _attention_core(q, k, v, softcap=self.attn_score_softcap, is_causal=True)
 
         # Sprint 1: per-head gating before the wo projection.
         if head_gate_active:

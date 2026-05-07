@@ -1,7 +1,67 @@
-# Current Training Status
+## Current Training Status
 
 > **Read this file before every training launch or decision.**
 > Update after every run completes or fails.
+
+---
+
+## fp16 Stability Hardening (2026-05-07, SHIPPED inline)
+
+**Status:** COMPLETE. Inline follow-up to the dolma-10B NaN incident
+(2-epoch OdinHalo loss + grad NaN). No Sprint spec/plan; single commit.
+User explicitly declined validation run — forensic reasoning only.
+
+### What shipped
+
+**Prevention (Ring 1):**
+- `--z-loss <w> --z-loss-fraction <f>` in `train_ddp.py` (mirrors `halo_training/trainer.py`, now available in DDP path)
+- `iter_scales.clamp(-4, 4)` at forward time in OdinHalo + VidarHalo. Parameter unchanged; checkpoint-compatible both ways.
+- GradScaler `growth_interval` default 2000 → 500 (slower scale runaway)
+- `--max-grad-norm` auto-tightens 1.0 → 0.8 when `--resume-from` is set
+- `--attn-softcap <c>` opt-in pre-softmax tanh cap in Attention / CodaAttention / NoPECodaAttention (all use shared `_attention_core` helper). 0 = SDPA fast path (no regression).
+- `--activation-monitor` opt-in: per-layer maxabs + fp16_headroom to `$CKPT_DIR/activation_stats.jsonl`. New module `halo_training/activation_monitor.py`.
+
+**Response (Ring 2):**
+- NaN forensics dump (R1): on `StabilityGuard` trigger, saves `$CKPT_DIR/nan_dump_step_N.pt` with offending batch, scaler state, grad norm history (last 50), per-param weight maxabs, activation stats. Diagnostic for post-mortem; does not block rollback.
+- Rollback also halves `scaler.growth_interval` (R3). Floor 100.
+- `scaler.get_scale()` in periodic log line + warning when > 16384 (R5). JSONL gets `scaler_scale` key.
+
+**Docs:**
+- NEW: `knowledge/training/fp16_stability_gfx1151.md` (root cause + every knob + forensics schema + diagnostic playbook)
+- AGENTS.md training-gotchas entry added
+- CONSTRAINTS.md adds `fp16 Stability` checklist section + iter_scales clamp entry
+
+### Tests
+
+`scripts/test_fp16_stability.py` — **14/14 pass**. Covers every knob
+above + backward-compat of `StabilityGuard.rollback(scaler=None)`.
+
+All existing test suites regressed clean:
+  - test_sprint1_phase1.py: 15/15
+  - test_sprint1_phase2.py: 15/15
+  - test_sprint1_1_profile.py: 3/3
+  - test_sprint1_1_bench.py: 1/1
+  - test_sprint1_1_normuon.py: 8/8
+  - test_fp16_stability.py: 14/14
+  - Total: 56/56
+
+### Explicitly NOT shipped
+
+- `--bf16` flag: user call — bf16 not compatible with gfx1151 / our stack.
+- Reproduction / smoke run of 2-epoch dolma-10B: user declined validation.
+- Data-pointer advance on rollback (R2): punted.
+- bf16 escalation ladder on rollback 3+ (R4): punted.
+
+### Recommended flags for future long-horizon runs
+
+```bash
+EXTRA_FLAGS="--z-loss 1e-4 --z-loss-fraction 0.4 \
+             --attn-softcap 50.0 \
+             --activation-monitor \
+             --max-grad-norm 0.8"
+```
+
+For resumed runs, `--resume-from` auto-tightens grad-norm.
 
 ---
 

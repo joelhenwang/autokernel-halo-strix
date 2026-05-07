@@ -26,6 +26,7 @@ import math
 import os
 import sys
 import time
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -149,6 +150,99 @@ def spawn_auto_eval(checkpoint_path: str, model_path: str, class_name: str) -> N
 
 def compute_bpb(ce_loss: float) -> float:
     return (ce_loss / math.log(2)) / 3.6
+
+
+def save_nan_forensics(
+    dump_dir: str,
+    step: int,
+    trigger: str,
+    loss_val: float,
+    batch_idx: int,
+    input_ids: Optional[torch.Tensor],
+    targets: Optional[torch.Tensor],
+    doc_ids: Optional[torch.Tensor],
+    scaler: torch.amp.GradScaler,
+    model: nn.Module,
+    recent_grad_norms,
+    monitor=None,
+    global_step: int = 0,
+) -> Optional[str]:
+    """fp16-stability R1: dump diagnostic state on first NaN detection.
+
+    Writes ``{dump_dir}/nan_dump_step_{step}.pt`` capturing everything a
+    post-mortem needs:
+
+      - The offending batch (so it can be re-run offline without
+        reproducing a full 2-epoch run).
+      - Per-parameter weight max-abs (flags which params are out of range).
+      - GradScaler scale + growth_tracker (tells us if scale runaway was
+        the proximate cause).
+      - Recent grad-norm history (last 50 steps) — a slow drift upward is
+        a canonical pre-NaN signature.
+      - ActivationMonitor's per-layer max-abs if D1 is active.
+      - trigger: "nan_loss" | "loss_spike" | "param_nan" | "grad_skips"
+
+    Rank 0 only. Fail-quiet: any exception is caught and logged; we never
+    let the dump failure prevent the subsequent rollback.
+    """
+    import traceback
+    try:
+        os.makedirs(dump_dir, exist_ok=True)
+        path = os.path.join(dump_dir, f"nan_dump_step_{step}.pt")
+
+        raw = model.module if hasattr(model, "module") else model
+        raw = raw._orig_mod if hasattr(raw, "_orig_mod") else raw
+
+        # Per-parameter max-abs (cheap scan; avoids full state-dict dump)
+        weight_maxabs = {}
+        for name, p in raw.named_parameters():
+            with torch.no_grad():
+                try:
+                    weight_maxabs[name] = float(p.data.detach().abs().max().item())
+                except Exception:
+                    weight_maxabs[name] = None
+
+        # GradScaler state
+        scaler_state = {}
+        try:
+            scaler_state["scale"] = float(scaler.get_scale())
+        except Exception:
+            scaler_state["scale"] = None
+        try:
+            # private attributes; best-effort
+            scaler_state["growth_tracker"] = int(scaler._growth_tracker)
+            scaler_state["growth_interval"] = int(scaler._growth_interval)
+            scaler_state["init_scale"] = float(scaler._init_scale)
+        except Exception:
+            pass
+
+        dump = {
+            "step": int(step),
+            "global_step": int(global_step),
+            "trigger": str(trigger),
+            "loss_val": float(loss_val) if loss_val is not None else None,
+            "microbatch_idx": int(batch_idx) if batch_idx is not None else None,
+            "input_ids_cpu": input_ids.detach().cpu() if input_ids is not None else None,
+            "targets_cpu": targets.detach().cpu() if targets is not None else None,
+            "doc_ids_cpu": doc_ids.detach().cpu() if doc_ids is not None else None,
+            "scaler_state": scaler_state,
+            "weight_maxabs": weight_maxabs,
+            "grad_norm_history": list(recent_grad_norms),
+            "activation_stats": monitor.current_stats() if monitor is not None else None,
+            "consecutive_grad_skips": _consecutive_skips,
+        }
+        torch.save(dump, path)
+        print(f"  [fp16-forensics] NaN dump -> {path} "
+              f"(trigger={trigger}, scale={scaler_state.get('scale')})")
+        return path
+    except Exception as exc:
+        print(f"  [fp16-forensics] WARNING: NaN dump failed: "
+              f"{type(exc).__name__}: {exc}")
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+        return None
 
 
 _DOC_IDS_SUPPORT_CACHE: dict = {}
@@ -275,8 +369,14 @@ class StabilityGuard:
                 return False
         return True
 
-    def rollback(self, model, optimizer, device):
-        """Reload last good checkpoint and reduce LR. Returns (step, success)."""
+    def rollback(self, model, optimizer, device, scaler=None):
+        """Reload last good checkpoint and reduce LR. Returns (step, success).
+
+        fp16-stability R3 (2026-05-07): when ``scaler`` is passed, also
+        halves its ``growth_interval`` so scale recovery is more
+        conservative after a NaN trip. This reduces the chance of a
+        second overflow at the same scale level.
+        """
         if self.rollback_count >= self.max_rollbacks:
             if self.rank == 0:
                 print(f"  [StabilityGuard] Max rollbacks ({self.max_rollbacks}) reached, aborting")
@@ -312,6 +412,19 @@ class StabilityGuard:
             pg["lr"] = old_lr * decay
             if self.rank == 0 and pg is optimizer.param_groups[0]:
                 print(f"  [StabilityGuard] LR reduced: {old_lr:.2e} -> {pg['lr']:.2e}")
+
+        # fp16-stability R3: also halve the scaler's growth_interval (private
+        # attribute; best-effort if torch version changes the name). Floors at
+        # 100 so growth doesn't stall completely.
+        if scaler is not None:
+            try:
+                old_gi = scaler._growth_interval
+                scaler._growth_interval = max(100, old_gi // 2)
+                if self.rank == 0:
+                    print(f"  [StabilityGuard] scaler.growth_interval: "
+                          f"{old_gi} -> {scaler._growth_interval}")
+            except AttributeError:
+                pass
 
         self.rollback_count += 1
         self.loss_ema = None  # reset EMA after rollback
@@ -472,6 +585,33 @@ def main():
     parser.add_argument("--no-cautious-wd", dest="cautious_wd", action="store_false",
                         help="Sprint 1.1: disable cautious WD (use standard decoupled WD).")
     parser.set_defaults(cautious_wd=True)
+
+    # fp16 stability hardening (2026-05-07, post-dolma-10B NaN incident)
+    # See knowledge/training/fp16_stability_gfx1151.md for details.
+    parser.add_argument("--z-loss", type=float, default=0.0,
+                        help="Auxiliary z-loss weight on logsumexp(logits)^2. "
+                             "Recommended 1e-4 for looped/long-horizon runs. "
+                             "Only applied when model forward returns a dict "
+                             "with 'logits' (raw-logits path). 0 = off.")
+    parser.add_argument("--z-loss-fraction", type=float, default=0.4,
+                        help="Fraction of total steps across which z-loss "
+                             "remains active (linearly ramps to 0 after). "
+                             "Default 0.4 = first 40%% of training.")
+    parser.add_argument("--attn-softcap", type=float, default=0.0,
+                        help="Pre-softmax attention-score tanh softcap. "
+                             "0 = off (uses F.scaled_dot_product_attention). "
+                             ">0 = manual attention path with "
+                             "scores = softcap * tanh(scores / softcap). "
+                             "Recommended 50.0 for long-context looped runs.")
+    parser.add_argument("--activation-monitor", dest="activation_monitor",
+                        action="store_true",
+                        help="Enable per-layer max-abs activation tracker. "
+                             "Samples every --activation-monitor-interval steps "
+                             "(default 100). Emits $CKPT_DIR/activation_stats.jsonl. "
+                             "Negligible throughput cost when sampled.")
+    parser.add_argument("--activation-monitor-interval", type=int, default=100,
+                        help="Sampling interval (optimizer steps) for "
+                             "--activation-monitor. Default 100.")
     args = parser.parse_args()
 
     use_async = not args.no_async
@@ -514,6 +654,20 @@ def main():
         print(f"[Sprint 1] WARNING: feature flags requested but "
               f"{type(model).__name__} does not expose any; all ignored.")
 
+    # fp16-stability P6: attention score softcap. Sets the attribute on
+    # every Attention instance in the model graph (works for OdinHalo,
+    # OdinFlat, and any halo variant using models.components.attention).
+    if args.attn_softcap > 0:
+        n_patched = 0
+        from models.components.attention import Attention as _AttnBase
+        for mod in model.modules():
+            if isinstance(mod, _AttnBase):
+                mod.attn_score_softcap = float(args.attn_softcap)
+                n_patched += 1
+        if rank == 0:
+            print(f"[fp16-stability] attn_score_softcap={args.attn_softcap} "
+                  f"applied to {n_patched} Attention modules")
+
     # autokernel BEFORE checkpoint load (checkpoint has fused QKV keys)
     if args.optimize_kernels:
         try:
@@ -527,6 +681,17 @@ def main():
 
     # Resume (Approach B: weights only, fresh optimizer)
     if args.resume_from:
+        # fp16-stability P5: tighten max_grad_norm default on resumed runs.
+        # Accumulated weight magnitude in a resumed model is higher than at
+        # fresh init, making large grads more likely to overflow fp16. Only
+        # overrides if user kept argparse's default (1.0); explicit user value
+        # is preserved.
+        if args.max_grad_norm == 1.0:
+            args.max_grad_norm = 0.8
+            if rank == 0:
+                print(f"[fp16-stability] --resume-from set; "
+                      f"tightening --max-grad-norm 1.0 -> 0.8 "
+                      f"(pass --max-grad-norm 1.0 explicitly to disable)")
         if rank == 0:
             print(f"Loading checkpoint: {args.resume_from}")
         ckpt = torch.load(args.resume_from, map_location=device, weights_only=False)
@@ -607,7 +772,13 @@ def main():
 
     # --- Loss + AMP ---
     ce_loss_fn = nn.CrossEntropyLoss()
-    scaler = torch.amp.GradScaler("cuda", init_scale=1024.0, backoff_factor=0.25)
+    # fp16-stability P4: growth_interval 2000 -> 500. Faster overflow response
+    # and slower scale runaway on long-horizon runs. GradScaler doubles scale
+    # after this many consecutive non-overflow steps; 500 means ~5min (at
+    # 100ms/step) between scale doublings, keeping scale bounded enough that
+    # a single outlier batch cannot overflow catastrophically.
+    scaler = torch.amp.GradScaler("cuda", init_scale=1024.0, backoff_factor=0.25,
+                                  growth_interval=500)
 
     # --- Metrics ---
     n_params = sum(p.numel() for p in raw_model.parameters())
@@ -632,6 +803,24 @@ def main():
         param_check_interval=500,
         rank=rank,
     )
+
+    # fp16-stability D1: opt-in activation monitor (rank 0 only to avoid
+    # file contention; per-layer stats are model-identical across ranks).
+    monitor = None
+    if args.activation_monitor and rank == 0:
+        from halo_training.activation_monitor import ActivationMonitor
+        monitor_out = os.path.join(args.checkpoint_dir or "checkpoints/ddp",
+                                    "activation_stats.jsonl")
+        monitor = ActivationMonitor(
+            model,
+            output_path=monitor_out,
+            sample_every=args.activation_monitor_interval,
+        )
+        monitor.attach()
+        print(f"[fp16-stability] activation monitor ON: "
+              f"interval={args.activation_monitor_interval}, "
+              f"out={monitor_out}, "
+              f"tracked={len(monitor._tracked)} layers")
     # Seed the guard with the resume checkpoint as fallback
     if args.resume_from and args.checkpoint_dir:
         fallback_dir = args.checkpoint_dir
@@ -658,6 +847,14 @@ def main():
 
     # Async state: pending allreduce handles from previous optimizer step
     pending_handles = None
+
+    # fp16-stability guards initialization
+    _z_loss_warned = False  # one-shot warning when z-loss skipped
+    # Ring buffer of recent grad norms — surfaced in NaN forensics dump (R1).
+    from collections import deque
+    recent_grad_norms: deque = deque(maxlen=50)
+    # Track rank0 scaler-scale-warning debounce (R5).
+    _last_scale_warn_step = -10_000
 
     _rollback_restart = False
     try:
@@ -699,6 +896,14 @@ def main():
                             output = model(input_ids, targets=targets)
                         if isinstance(output, torch.Tensor) and output.dim() == 0:
                             loss = output / args.accum_steps
+                            # z-loss needs logits; scalar-output path can't apply it.
+                            # Warn once so users see the flag was silently skipped.
+                            if args.z_loss > 0 and not _z_loss_warned:
+                                if rank == 0:
+                                    print(f"  [fp16-stability] --z-loss {args.z_loss} "
+                                          f"requested but model returns scalar loss; "
+                                          f"z-loss requires logits path. Skipping.")
+                                _z_loss_warned = True
                         elif isinstance(output, dict):
                             logits = output["logits"]
                             loss = ce_loss_fn(
@@ -710,10 +915,22 @@ def main():
                                 loss = loss + 0.3 * ce_loss_fn(
                                     mtp1.reshape(-1, logits.size(-1)), mtp_targets
                                 ) / args.accum_steps
+                            # fp16-stability P1: z-loss auxiliary regularization.
+                            # Penalizes drift of log-partition-function magnitudes.
+                            # Active during first z_loss_fraction of training only.
+                            if args.z_loss > 0 and global_step < total_steps * args.z_loss_fraction:
+                                z_logits = logits.float()
+                                z_loss_val = args.z_loss * z_logits.logsumexp(dim=-1).pow(2).mean()
+                                loss = loss + z_loss_val / args.accum_steps
                         else:
                             loss = ce_loss_fn(
                                 output.view(-1, output.size(-1)), targets.view(-1)
                             ) / args.accum_steps
+                            # fp16-stability P1: z-loss on raw-logits tensor path.
+                            if args.z_loss > 0 and global_step < total_steps * args.z_loss_fraction:
+                                z_logits = output.float()
+                                z_loss_val = args.z_loss * z_logits.logsumexp(dim=-1).pow(2).mean()
+                                loss = loss + z_loss_val / args.accum_steps
 
                     scaler.scale(loss).backward()
 
@@ -744,6 +961,17 @@ def main():
                     )
                     global_step += 1
 
+                    # fp16-stability R1: ring buffer of recent grad norms for
+                    # post-NaN forensics dump.
+                    if hasattr(last_grad_norm, "item"):
+                        recent_grad_norms.append(
+                            (global_step, float(last_grad_norm.item()))
+                        )
+
+                    # fp16-stability D1: sample activation stats (no-op if off)
+                    if monitor is not None:
+                        monitor.step(global_step)
+
                     # Logging (instantaneous tok/s, not cumulative average)
                     if rank == 0 and global_step % args.log_interval == 0:
                         now = time.time()
@@ -758,12 +986,23 @@ def main():
                         bpb = compute_bpb(avg_loss)
                         lr = scheduler.get_last_lr()[0]
                         mem_gb = torch.cuda.max_memory_allocated() / 1e9
+                        # fp16-stability R5: surface GradScaler scale.
+                        try:
+                            scale_val = float(scaler.get_scale())
+                        except Exception:
+                            scale_val = float("nan")
                         print(
                             f"[step {global_step:>6d}] "
                             f"loss={avg_loss:.4f} bpb={bpb:.3f} lr={lr:.2e} "
                             f"grad={last_grad_norm:.2f} tok/s={tok_s:,.0f} "
-                            f"mfu={mfu:.1%} mem={mem_gb:.1f}GB"
+                            f"mfu={mfu:.1%} mem={mem_gb:.1f}GB scale={scale_val:.1e}"
                         )
+                        # Threshold warning (debounced, once per 1000 steps).
+                        if scale_val > 16384.0 and (global_step - _last_scale_warn_step) >= 1000:
+                            print(f"  [fp16-stability] WARN: scaler.scale={scale_val:.1e} "
+                                  f"is high; fp16 grad headroom is low. Consider: "
+                                  f"--resume-from + --max-grad-norm 0.5 + --z-loss 1e-4")
+                            _last_scale_warn_step = global_step
                         if log_file:
                             with open(log_file, "a") as f:
                                 f.write(json.dumps({
@@ -771,6 +1010,7 @@ def main():
                                     "bpb": bpb, "lr": lr, "tok_s": tok_s,
                                     "mfu": mfu, "mem_gb": mem_gb,
                                     "grad_norm": last_grad_norm.item() if hasattr(last_grad_norm, "item") else last_grad_norm,
+                                    "scaler_scale": scale_val,
                                 }) + "\n")
                         running_loss = 0.0
                         best_loss = min(best_loss, avg_loss)
@@ -792,6 +1032,33 @@ def main():
                     too_many_skips or
                     not guard.check_params(model, global_step)
                 ):
+                    # fp16-stability R1: dump forensics BEFORE rollback so
+                    # we capture the exact state that tripped the guard.
+                    # Rank 0 only; fail-quiet.
+                    if rank == 0 and args.checkpoint_dir:
+                        if too_many_skips:
+                            trigger = "grad_skips"
+                        elif math.isnan(step_loss) or math.isinf(step_loss):
+                            trigger = "nan_loss"
+                        elif guard.loss_ema is not None and step_loss > guard.spike_factor * guard.loss_ema:
+                            trigger = "loss_spike"
+                        else:
+                            trigger = "param_nan_or_unknown"
+                        save_nan_forensics(
+                            dump_dir=args.checkpoint_dir,
+                            step=global_step,
+                            trigger=trigger,
+                            loss_val=step_loss,
+                            batch_idx=batch_idx,
+                            input_ids=input_ids,
+                            targets=targets,
+                            doc_ids=doc_ids,
+                            scaler=scaler,
+                            model=model,
+                            recent_grad_norms=recent_grad_norms,
+                            monitor=monitor,
+                            global_step=global_step,
+                        )
                     if too_many_skips and rank == 0:
                         print(f"  [StabilityGuard] {_consecutive_skips} consecutive grad skips, rolling back")
                     optimizer.zero_grad(set_to_none=True)
@@ -805,7 +1072,7 @@ def main():
                                                      args.checkpoint_dir, total_tokens * world_size)
                         if args.auto_eval:
                             spawn_auto_eval(saved_path, args.model, args.class_name)
-                    rollback_step, ok = guard.rollback(model, optimizer, device)
+                    rollback_step, ok = guard.rollback(model, optimizer, device, scaler=scaler)
                     if not ok:
                         raise RuntimeError("StabilityGuard: unrecoverable instability")
                     global_step = rollback_step

@@ -45,7 +45,8 @@ tags: [%index, %knowledge]
 | [bpb_mfu_analysis.md](training/bpb_mfu_analysis.md) | BPB + MFU analysis |
 | [evaluation_guide.md](training/evaluation_guide.md) | Evaluation guide |
 | [imu1_recipe_2026.md](training/imu1_recipe_2026.md) | **IMU-1 recipe (arXiv:2602.02522): NorMuon + Cautious WD + μP for small LM pretraining. −3.85% loss over AdamW at 430M** |
-| [normuon_throughput_gfx1151.md](training/normuon_throughput_gfx1151.md) | **NorMuon empirical throughput on gfx1151 (Sprint 1): 13-16% cost vs paper's 3% claim. Root-cause analysis (no Triton, no MFMA) + Sprint 1.1 optimization plan** |
+| [normuon_throughput_gfx1151.md](training/normuon_throughput_gfx1151.md) | **NorMuon empirical throughput on gfx1151 (Sprint 1 + 1.1): fp16 NS reduces cost from 17.8% to 3.5%. Matches paper claim without custom kernel.** |
+| [fp16_stability_gfx1151.md](training/fp16_stability_gfx1151.md) | **fp16 prevention + forensics + response for long/multi-epoch/resumed runs. Root causes, --z-loss / --attn-softcap / --activation-monitor, NaN dump schema + diagnostic playbook** |
 | [grpo_family_2026.md](training/grpo_family_2026.md) | **GRPO variant family: F-GRPO, Scaf-GRPO, GRPO-SG, f-GRPO, Apriel-Reasoner. Post-R1 RLVR landscape** |
 | [cpt_best_practices_2026.md](training/cpt_best_practices_2026.md) | **Continued pretraining recipes: token replay 7-10%, LR rewind 30-50%, stage order, eval schedule. Consolidated from 2025-2026 CPT papers** |
 | [scaling_laws_t2_2026.md](training/scaling_laws_t2_2026.md) | **T² scaling laws, Chinchilla Approach 2 biases, architecture-conditional scaling. "Overtrain is compute-optimal" when inference cost included** |
