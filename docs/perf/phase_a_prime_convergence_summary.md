@@ -17,12 +17,16 @@ Gate thresholds (on the last iter-pair's fraction of tokens with cos > 0.95):
 | `sprint3-s1_3-lr2_5e3-700/step_400.pt` | 400 | OdinHalo | yes | 0.270, 0.639 | 0.000, 0.002 | **KILL** |
 | `sprint3-s1_3-lr2_5e3-700/step_600.pt` | 600 | OdinHalo | yes | 0.040, 0.522 | 0.000, 0.002 | **KILL** |
 | `sprint3-s1_3-lr2_5e3-700/step_700.pt` | 700 | OdinHalo | yes | 0.084, 0.412 | 0.000, 0.001 | **KILL** |
+| `sprint3-s1_3b-lr2e3-700/step_200.pt` | 200 | OdinHalo | yes | 0.285, 0.558 | 0.000, 0.000 | **KILL** |
+| `sprint3-s1_3b-lr2e3-700/step_400.pt` | 400 | OdinHalo | yes | 0.310, 0.571 | 0.000, 0.001 | **KILL** |
+| `sprint3-s1_3b-lr2e3-700/step_600.pt` | 600 | OdinHalo | yes | 0.166, 0.472 | 0.000, 0.002 | **KILL** |
+| `sprint3-s1_3b-lr2e3-700/step_700.pt` | 700 | OdinHalo | yes | 0.103, 0.418 | 0.000, 0.001 | **KILL** |
 | `sprint3-s1_5-odinflat-dolma/step_200.pt` | 200 | OdinFlat | no | - | - | **N/A** |
 | `sprint3-s1_5-odinflat-dolma/step_400.pt` | 400 | OdinFlat | no | - | - | **N/A** |
 
 ## Gate decision (aggregate)
 
-- 0 GREENLIGHT, 0 PARTIAL, 5 KILL (out of 5 looped checkpoints).
+- 0 GREENLIGHT, 0 PARTIAL, 9 KILL (out of 9 looped checkpoints).
 - Aggregate recommendation: **KILL** (majority below 0.85)
 
 ## Per-layer convergence (flat or last-iter view)
@@ -61,6 +65,34 @@ per_layer_cos_to_final: 0.265, 0.305, 0.332, 0.959, 0.981, 1.000
 per_layer_frac_high_cos: 0.000, 0.000, 0.000, 0.819, 1.000, 1.000
 inter_layer_transition_cos: 0.903, 0.906, 0.364, 0.988, 0.981
 effective_rank_final: 2.2
+
+### sprint3-s1_3b-lr2e3-700/step_200.pt
+
+per_layer_cos_to_final: 0.595, 0.666, 0.712, 0.953, 0.982, 1.000
+per_layer_frac_high_cos: 0.000, 0.000, 0.000, 0.693, 0.971, 1.000
+inter_layer_transition_cos: 0.932, 0.957, 0.742, 0.982, 0.982
+effective_rank_final: 2.8
+
+### sprint3-s1_3b-lr2e3-700/step_400.pt
+
+per_layer_cos_to_final: 0.549, 0.593, 0.623, 0.963, 0.986, 1.000
+per_layer_frac_high_cos: 0.000, 0.000, 0.000, 0.883, 1.000, 1.000
+inter_layer_transition_cos: 0.953, 0.961, 0.636, 0.986, 0.986
+effective_rank_final: 2.8
+
+### sprint3-s1_3b-lr2e3-700/step_600.pt
+
+per_layer_cos_to_final: 0.446, 0.477, 0.496, 0.955, 0.984, 1.000
+per_layer_frac_high_cos: 0.000, 0.000, 0.000, 0.703, 0.990, 1.000
+inter_layer_transition_cos: 0.959, 0.957, 0.518, 0.980, 0.984
+effective_rank_final: 2.6
+
+### sprint3-s1_3b-lr2e3-700/step_700.pt
+
+per_layer_cos_to_final: 0.375, 0.404, 0.420, 0.947, 0.978, 1.000
+per_layer_frac_high_cos: 0.000, 0.000, 0.000, 0.502, 0.978, 1.000
+inter_layer_transition_cos: 0.953, 0.941, 0.472, 0.981, 0.978
+effective_rank_final: 2.4
 
 ### sprint3-s1_5-odinflat-dolma/step_200.pt
 

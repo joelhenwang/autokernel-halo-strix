@@ -177,14 +177,15 @@ knobs for Sprint 3A/3B via 5 short runs. Landed commits `c8d8225`,
 | S1.2 | 3e-3 | OdinHalo | dolma | 400 | 4.58 | 86.9 | PASS-W (late re-accel) |
 | S1.2b | 2.5e-3 | OdinHalo | dolma | 400 | 4.64 | 52.3 | PASS (clean) |
 | S1.3 | 2.5e-3 | OdinHalo | dolma | **700** | 2.72 | **238** | **FAIL gate #2** |
+| S1.3b | 2e-3 | OdinHalo | dolma | **700** | 3.34 | **100** | **PASS all 7** |
 | S1.4 | 2e-3 | OdinHalo | dolma | — | — | — | SKIP (kernel crash) |
 | S1.5 | 5e-3 | OdinFlat | dolma | 400 | 4.57 | 41.1 | PASS |
 
 ### Decision
 
-- **Sprint 3B (OdinHalo dolma-10B)**: `lr_2d=2e-3` per S1.3 halt rule.
-  S1.1's 400-step trajectory projects to safe step-700 maxabs ~89
-  (well under 200 gate). Full-epoch risk re-evaluated at first save.
+- **Sprint 3B (OdinHalo dolma-10B)**: `lr_2d=2e-3` per S1.3 halt rule AND
+  empirically confirmed by S1.3b (maxabs 100 at step 700; 2.0× margin
+  vs gate; first measured late-window *decrease* of any Stage 1 run).
 - **Sprint 3A (OdinFlat dolma-10B)**: `lr_2d=5e-3` per S1.5.
 - **--optimize-kernels DISABLED** for both models. autokernel pattern
   matcher incompatible with Sprint 1 kwargs (`depth_kvs`, `doc_mask`,
