@@ -856,6 +856,14 @@ def main():
     # Track rank0 scaler-scale-warning debounce (R5).
     _last_scale_warn_step = -10_000
 
+    # Bug-fix (2026-05-07): track microbatch backwards in the current accum
+    # cycle. Used by the end-of-training flush path: if we broke out mid-cycle
+    # (e.g. --max-steps hit before the cycle completed), we must NOT call
+    # _complete_step on the pending_handles — the scaler is in post-update()
+    # READY state and unscale_ would assert. Was papered over with
+    # try/except AssertionError; now handled cleanly with counter-gated flush.
+    backwards_in_cycle = 0
+
     _rollback_restart = False
     try:
         for epoch in range(args.epochs):
@@ -933,6 +941,9 @@ def main():
                                 loss = loss + z_loss_val / args.accum_steps
 
                     scaler.scale(loss).backward()
+                    # Bug-fix (2026-05-07): track microbatch backwards in
+                    # the current accum cycle for end-of-training flush logic.
+                    backwards_in_cycle += 1
 
                 total_tokens += input_ids.numel()
                 loss_val = loss.item()
@@ -960,6 +971,9 @@ def main():
                         world_size, args.max_grad_norm, rank,
                     )
                     global_step += 1
+                    # Bug-fix: completed optimizer step consumed this cycle's
+                    # accumulated backwards; reset counter for next cycle.
+                    backwards_in_cycle = 0
 
                     # fp16-stability R1: ring buffer of recent grad norms for
                     # post-NaN forensics dump.
@@ -1066,6 +1080,8 @@ def main():
                         for h in pending_handles:
                             h.wait()
                         pending_handles = None
+                    # Bug-fix: rollback discards the in-flight accum cycle.
+                    backwards_in_cycle = 0
                     # Save emergency checkpoint before rollback
                     if rank == 0 and args.checkpoint_dir:
                         saved_path = save_checkpoint(model, optimizer, global_step,
@@ -1101,6 +1117,8 @@ def main():
                     )
                     global_step += 1
                     pending_handles = None
+                    # Bug-fix: sync path also consumed the accum cycle.
+                    backwards_in_cycle = 0
 
             else:
                 continue
@@ -1108,25 +1126,31 @@ def main():
                 continue
             break
 
-        # Flush final pending allreduce
+        # Flush final pending allreduce.
+        # Bug-fix (2026-05-07): only call _complete_step if at least one
+        # microbatch backward happened in the current accum cycle. Without
+        # this guard, --max-steps termination AFTER a completed step could
+        # reach here with pending_handles referencing already-completed
+        # grads and backwards_in_cycle == 0, tripping an assertion inside
+        # scaler.unscale_ (state machine expects a scaled backward since
+        # last update). Wait for the handles to land regardless so the
+        # collective ops don't leave the backend in a bad state.
         if pending_handles is not None:
             for h in pending_handles:
                 h.wait()
-            average_grads(model, world_size)
-            if use_fp16:
-                decompress_grads_fp32(model)
-            try:
+            if backwards_in_cycle > 0:
+                average_grads(model, world_size)
+                if use_fp16:
+                    decompress_grads_fp32(model)
                 _complete_step(model, optimizer, scaler, scheduler,
                                world_size, args.max_grad_norm, rank)
                 global_step += 1
-            except AssertionError as e:
-                # Sprint 1: --max-steps can terminate mid-accumulation before
-                # any backward has been called in the current accum cycle,
-                # leaving the GradScaler with no inf checks for _complete_step.
-                # This is a clean termination condition, not a training failure.
+                backwards_in_cycle = 0
+            else:
                 if rank == 0:
-                    print(f"[rank 0] Skipping final _complete_step "
-                          f"(likely mid-accumulation termination): {e}")
+                    print(f"[rank 0] Flush skipped _complete_step "
+                          f"(backwards_in_cycle=0 after early termination); "
+                          f"handles waited cleanly")
 
     except KeyboardInterrupt:
         if rank == 0:

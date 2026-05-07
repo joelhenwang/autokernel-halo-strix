@@ -347,6 +347,42 @@ def test_log_line_includes_scale_field():
 
 
 # ---------------------------------------------------------------------------
+# Bug-fix: --max-steps mid-accum termination no longer needs try/except
+# ---------------------------------------------------------------------------
+
+def test_flush_guarded_by_backwards_in_cycle():
+    """Flush block should be gated by backwards_in_cycle counter, not try/except.
+
+    Historical behavior: a bare try/except AssertionError around
+    _complete_step() masked a real state-machine mismatch. Fix replaces
+    the silent-swallow with a counter-gated branch.
+    """
+    path = os.path.join(REPO_ROOT, "scripts", "train_ddp.py")
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    # Counter must be initialized before the training loop.
+    assert "backwards_in_cycle = 0" in src, (
+        "backwards_in_cycle counter not initialized in train_ddp.py"
+    )
+    # Counter must be incremented on each scaler.scale(loss).backward().
+    assert "backwards_in_cycle += 1" in src, (
+        "backwards_in_cycle counter never incremented"
+    )
+    # Flush block must gate on the counter, not use bare except AssertionError.
+    assert "if backwards_in_cycle > 0:" in src, (
+        "flush block not gated on backwards_in_cycle"
+    )
+    # Look for the actual except clause (colon + indent), NOT comment mentions.
+    import re
+    active_except = re.search(r"except AssertionError\s+as\s+\w+\s*:", src)
+    assert active_except is None, (
+        "try/except AssertionError still present as active code; "
+        "bug-fix not applied cleanly"
+    )
+    print("  OK: flush path now counter-gated; AssertionError swallow removed")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -366,6 +402,7 @@ def main():
         test_rollback_halves_growth_interval,
         test_rollback_scaler_optional,
         test_log_line_includes_scale_field,
+        test_flush_guarded_by_backwards_in_cycle,
     ]
     for t in tests:
         print(f"[TEST] {t.__name__}")
