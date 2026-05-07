@@ -79,6 +79,20 @@ FrankenMoE-Flat v1 L9 before implementation:
   iter-1 KV, experts see tokens 3×, routing happens once) that each creative
   addition exploits for free throughput or quality.
 
+- **v3 speculative research catalogue** (2026-05-07) — 18 ideas documented at
+  spec-quality depth in
+  [knowledge/architectures/v3_speculative_directions_2026.md](knowledge/architectures/v3_speculative_directions_2026.md).
+  Categories: A (structural: complex MoE, reversible Parcae, shared workspace,
+  path superposition, Kolmogorov routing), B (training dynamics: hidden-state
+  diffusion, temporal-contrastive, forward-forward, entropy conservation,
+  momentum teacher), C (exotic: mycelial graph, cross-example attn,
+  self-CoT recycling, hypernet weights, Lyapunov iteration), D (meta:
+  static prefill, adaptive mix, grad-norm gating). Includes 18×18 compatibility
+  matrix, "if-only-one" ranking, and dream-stack composition sketch. Design-
+  only research menu — no implementation. First-v3-experiment recommendation:
+  **B4 Entropy Conservation + B1 Hidden-State Diffusion** (~1.5 weeks combined,
+  lowest risk, clean research story).
+
 No code yet. Specs document the architecture, training curriculum,
 scorecard additions, risk register, and rollout L0-L11.
 
@@ -145,6 +159,73 @@ docs/perf/eval-scorecards/sprint3-smoke-dolma-step-{250,500,750,1000}.json
 checkpoints/sprint3-smoke-dolma/rank0.log      — full training log
 scripts/analyze_activation_stats.py            — helper for progression tables
 scripts/run_sprint3_smoke.sh                   — reproducible runner
+```
+
+---
+
+## Sprint 3 Stage 1: LR + kernel + sanity (2026-05-07, SHIPPED)
+
+**Status:** COMPLETE (autonomous session). Stage 1 settles the pre-flight
+knobs for Sprint 3A/3B via 5 short runs. Landed commits `c8d8225`,
+`717cdc3`, `cd58416`, `ea0aaff`, `0c899e6`.
+
+### Results matrix
+
+| Run | LR 2d | Model | Data | Steps | Final loss | maxabs (final) | Verdict |
+|---|---:|---|---|---:|---:|---:|:---:|
+| S1.1 | 2e-3 | OdinHalo | dolma | 400 | 4.72 | 38.4 | PASS |
+| S1.2 | 3e-3 | OdinHalo | dolma | 400 | 4.58 | 86.9 | PASS-W (late re-accel) |
+| S1.2b | 2.5e-3 | OdinHalo | dolma | 400 | 4.64 | 52.3 | PASS (clean) |
+| S1.3 | 2.5e-3 | OdinHalo | dolma | **700** | 2.72 | **238** | **FAIL gate #2** |
+| S1.4 | 2e-3 | OdinHalo | dolma | — | — | — | SKIP (kernel crash) |
+| S1.5 | 5e-3 | OdinFlat | dolma | 400 | 4.57 | 41.1 | PASS |
+
+### Decision
+
+- **Sprint 3B (OdinHalo dolma-10B)**: `lr_2d=2e-3` per S1.3 halt rule.
+  S1.1's 400-step trajectory projects to safe step-700 maxabs ~89
+  (well under 200 gate). Full-epoch risk re-evaluated at first save.
+- **Sprint 3A (OdinFlat dolma-10B)**: `lr_2d=5e-3` per S1.5.
+- **--optimize-kernels DISABLED** for both models. autokernel pattern
+  matcher incompatible with Sprint 1 kwargs (`depth_kvs`, `doc_mask`,
+  `v_prev`, `head_gate_active`). Throughput baselines: OdinHalo 25K tok/s,
+  OdinFlat 30K tok/s. Unlocking needs
+  `autokernel/_patterns.py` kwarg forwarding (deferred).
+
+### Phase A' convergence diagnostic (side-effect of Stage 1)
+
+LEAP-inspired convergence evaluator `halo_training/eval/convergence_stats.py`
+(new). Retroactively scored 7 checkpoints. Gate decision doc:
+`docs/perf/phase_a_prime_gate_decision.md`.
+
+- **OdinHalo adaptive-iter Phase B: KILL.** All 5 checkpoints frac
+  `cos(iter_1, iter_2) > 0.95` = 0.001-0.002 (gate >= 0.95). Values
+  *decrease* with training (0.61 at step 200 -> 0.41 at step 700).
+  Parcae iters do substantively independent work.
+- **OdinFlat layer-skip Phase B: GREENLIGHT (scoped smaller).** Layer 12
+  -> final `frac_high_cos = 0.31`. Realistic 5-10% inference speedup,
+  not the plan's 15-25%.
+
+Caveat: 700 steps is < 2% of a full epoch. Re-score at Sprint 3B end
+for definitive call.
+
+### Artifacts
+
+```
+scripts/run_sprint3_s1_3.sh                             S1.3 launcher (FAIL)
+scripts/run_sprint3_s1_4.sh                             S1.4 launcher (SKIP)
+scripts/run_sprint3_s1_5.sh                             S1.5 launcher (PASS)
+scripts/run_sprint3_iter2b.sh                           S1.2b launcher (PASS)
+halo_training/eval/convergence_stats.py                 Phase A' evaluator (NEW)
+scripts/test_convergence_stats.py                       12 tests, all pass
+scripts/score_convergence_retroactive.py                Phase A' batch CLI
+scripts/phase_a_prime_manifest.txt                      7-ckpt scoring spec
+docs/perf/phase_a_prime_convergence_summary.{json,md}   raw + markdown results
+docs/perf/phase_a_prime_gate_decision.md                user-facing decision
+docs/perf/eval-scorecards/sprint3-{iter2b,s1_3,s1_5}-*  per-checkpoint scores
+docs/perf/sprint3-{iter2b,s1_3,s1_5}-activation-stats.jsonl
+docs/perf/sprint3-{iter2b,s1_3,s1_5}-train-log.jsonl
+docs/superpowers/sessions/2026-05-07-autonomous-session.md
 ```
 
 ---
