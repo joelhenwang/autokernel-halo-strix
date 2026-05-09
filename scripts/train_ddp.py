@@ -565,6 +565,16 @@ def main():
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--optimize-kernels", action="store_true")
+    # Phase II throughput investigation (2026-05-09) — allow selective
+    # enable/disable of individual autokernel patterns. Accepts comma-
+    # separated pattern names (e.g. 'rmsnorm,fused_silu_gate_mul').
+    parser.add_argument("--autokernel-include", type=str, default="",
+                        help="Comma-separated autokernel pattern names to "
+                             "include (empty = all registered). Only has "
+                             "effect with --optimize-kernels.")
+    parser.add_argument("--autokernel-exclude", type=str, default="",
+                        help="Comma-separated autokernel pattern names to "
+                             "exclude. Only has effect with --optimize-kernels.")
     parser.add_argument("--log-interval", type=int, default=100)
     parser.add_argument("--time-budget", type=float, default=0, help="Minutes, 0=unlimited")
     parser.add_argument("--max-steps", type=int, default=0, help="Stop after N optimizer steps, 0=unlimited")
@@ -783,9 +793,31 @@ def main():
     if args.optimize_kernels:
         try:
             import autokernel
-            model = autokernel.optimize(model, training=True)
+            # Phase II: optionally filter autokernel patterns via include/exclude lists.
+            inc = [s.strip() for s in args.autokernel_include.split(",") if s.strip()]
+            exc = [s.strip() for s in args.autokernel_exclude.split(",") if s.strip()]
+            ak_kwargs = {"training": True}
+            if inc:
+                ak_kwargs["include"] = inc
+            if exc:
+                ak_kwargs["exclude"] = exc
+            model = autokernel.optimize(model, **ak_kwargs)
             if rank == 0:
-                print("autokernel optimizations applied")
+                tag_parts = []
+                if inc:
+                    tag_parts.append(f"include={inc}")
+                if exc:
+                    tag_parts.append(f"exclude={exc}")
+                tag = f" ({', '.join(tag_parts)})" if tag_parts else ""
+                print(f"autokernel optimizations applied{tag}")
+                # Emit the applied-patterns report so bisect logs capture ground truth
+                try:
+                    report = autokernel.report(model)
+                    for pn, info in report["patterns"].items():
+                        print(f"  [autokernel] {pn}: "
+                              f"{info['modules_replaced']} modules")
+                except Exception:
+                    pass
         except Exception as e:
             if rank == 0:
                 print(f"autokernel skipped: {e}")
