@@ -42,6 +42,13 @@ class NoPEMoDAGQABlock(nn.Module):
     for length generalization.
     """
 
+    # Phase 0 (2026-05-08): opt out of autokernel's FusedResidualRMSNorm
+    # pattern replacement. That wrapper's forward signature is
+    # `forward(x, freqs_cis)` and does not accept the `depth_kvs` kwarg
+    # MoDA uses. `autokernel/_patterns.py:_find_block_attrs` honors this
+    # flag. See docs/perf/autokernel-probe-*.md.
+    _skip_autokernel = True
+
     def __init__(self, d_model: int, ffn_inner: int,
                  n_heads: int = 12, n_kv_heads: int = 4,
                  use_xsa: bool = True):

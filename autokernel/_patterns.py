@@ -75,7 +75,16 @@ def _has_linear_attrs(module: nn.Module, attrs: tuple) -> bool:
 
 
 def _find_qkv_attrs(module: nn.Module) -> Optional[tuple]:
-    """Return (q, k, v, o) attribute names if module has QKV projections."""
+    """Return (q, k, v, o) attribute names if module has QKV projections.
+
+    Honors ``_skip_autokernel = True`` on attention modules whose forward
+    signature is incompatible with ``_FusedQKVAttentionReplacement.forward
+    (self, x, freqs_cis, ...)``.  Concretely: NoPE attentions have no
+    ``freqs_cis`` argument, and Sprint 1 kwargs (``doc_mask``, ``v_prev``,
+    ``head_gate_active``, ``return_v``) are not forwarded by the wrapper.
+    """
+    if getattr(module, "_skip_autokernel", False):
+        return None
     for alias in _QKV_ALIASES:
         if _has_linear_attrs(module, alias):
             return alias

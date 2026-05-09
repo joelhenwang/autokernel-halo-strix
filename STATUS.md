@@ -163,7 +163,39 @@ scripts/run_sprint3_smoke.sh                   — reproducible runner
 
 ---
 
-## Sprint 3 Stage 1: LR + kernel + sanity (2026-05-07, SHIPPED)
+## Phase 0: autokernel escape-hatch + throughput probes (2026-05-08, SHIPPED)
+
+**Status:** COMPLETE. Fix + regression test + 2 probes. Sprint 3A/3B
+compute budgets revised.
+
+### Fix
+
+- `_skip_autokernel = True` class attribute on `NoPEMoDAGQABlock`
+  (odin_halo.py), `NoPEGQABlock` (odin_flat.py), `NoPECodaAttention`
+  (components/attention.py).
+- `autokernel/_patterns.py:_find_qkv_attrs` now honors
+  `_skip_autokernel` (previously only block matcher did).
+- `scripts/test_autokernel_compat.py` (6 tests, all pass).
+
+### Probe results
+
+| Model | Baseline tok/s | + `--optimize-kernels` | Lift | Loss delta @ 200 | Verdict |
+|---|---:|---:|---:|---:|:---:|
+| OdinHalo | 25,171 | **34,717** | **+37.9%** | +0.17 | **PASS** |
+| OdinFlat | 32,582 | 58,690 | +80% | **+1.16** | **FAIL** (loss parity) |
+
+### Decision
+
+- **Sprint 3B (OdinHalo): use `--optimize-kernels`**. Projected ~48h
+  wall (was 77h).
+- **Sprint 3A (OdinFlat): do NOT use**. Loss regression too large. Keep
+  ~50h wall at 30.5K tok/s.
+
+Full analysis: `docs/perf/autokernel-probe-2026-05-08.md`.
+
+---
+
+
 
 **Status:** COMPLETE (autonomous session). Stage 1 settles the pre-flight
 knobs for Sprint 3A/3B via 5 short runs. Landed commits `c8d8225`,

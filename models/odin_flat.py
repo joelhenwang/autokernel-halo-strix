@@ -44,6 +44,13 @@ class NoPEGQABlock(nn.Module):
     tensor to the next GQA layer as its ``v_prev``.
     """
 
+    # Phase 0 (2026-05-08): opt out of autokernel's FusedResidualRMSNorm
+    # pattern replacement. That wrapper's forward signature is
+    # `forward(x, freqs_cis)` and does not accept the Sprint 1 kwargs
+    # (`doc_mask`, `v_prev`, `head_gate_active`, `return_v`).
+    # `autokernel/_patterns.py:_find_block_attrs` honors this flag.
+    _skip_autokernel = True
+
     def __init__(self, d_model: int, ffn_inner: int,
                  n_heads: int = 12, n_kv_heads: int = 4,
                  use_xsa: bool = True):

@@ -220,6 +220,13 @@ class NoPECodaAttention(Attention):
     Sprint 1 loader's ``strict=False`` with init-values.
     """
 
+    # Phase 0 (2026-05-08): opt out of autokernel's FusedQKV pattern.
+    # The QKV replacement assumes RoPE attention with forward signature
+    # `forward(x, freqs_cis)`, but NoPE attention's forward takes
+    # `depth_kvs` + Sprint 1 kwargs and has no freqs_cis. Honoring
+    # this flag in autokernel._patterns._find_qkv_attrs.
+    _skip_autokernel = True
+
     def __init__(self, dim: int, n_heads: int, n_kv_heads: int,
                  exclusive: bool = False):
         super().__init__(dim, n_heads, n_kv_heads, qk_norm=True)
