@@ -195,6 +195,60 @@ Full analysis: `docs/perf/autokernel-probe-2026-05-08.md`.
 
 ---
 
+## Sprint 1.5: SPECTRA + μP ablation (2026-05-08, SHIPPED)
+
+**Status:** COMPLETE (Phases A–C + F). Phases D (SPECTRA pre-clip) and
+E (full μP with 1/d_head attention scaling) deferred pending Sprint 3
+results.
+
+### Results
+
+| Config | Loss @ step 400 | Δ vs S1 | Throughput |
+|---|---:|---:|---:|
+| S1 baseline | 4.57 | 0 | 32.6K tok/s |
+| C1 SPECTRA-only | 4.5751 | +0.005 (noise) | 31.9K |
+| C2 μP-only | 4.3745 | **−0.20** | 31.4K |
+| **C3 SPECTRA + μP** | **4.1955** | **−0.38** | 31.0K |
+
+### What's new
+
+- `halo_training/spectra.py` — `apply_post_clip` via power-iteration + 2% safety margin
+- `halo_training/mup.py` — `apply_mup_init` + `build_mup_param_groups` (3-way split)
+- `models/odin_flat_30m.py` — OdinFlat30M proportional probe (33M, head_dim=64)
+- CLI flags: `--spectra-post`, `--spectra-clip-norm`, `--spectra-ns-iter`,
+  `--spectra-pre` (wired/inactive), `--mup`, `--mup-base-width`,
+  `--mup-attn` (wired/inactive)
+- `scripts/test_sprint1_5.py` — 15/15 tests
+
+### Sprint 3A recipe LOCKED (per Phase C C3 winner)
+
+```bash
+EXTRA_FLAGS='--imu1-groups --normuon --lr-2d 5e-3 --lr-1d 8e-4 \
+  --intra-doc-mask --value-residuals --head-gating \
+  --z-loss 1e-4 --z-loss-fraction 1.0 --attn-softcap 50.0 \
+  --activation-monitor --activation-monitor-interval 200 \
+  --mup --mup-base-width 256 \
+  --spectra-post --spectra-clip-norm 1.0 \
+  --auto-eval'
+```
+
+Expected wall: ~52h on dolma-10B.
+
+### Sprint 3B recipe UNCHANGED (OdinHalo not μP-wired per spec)
+
+Continues with Phase 0 `--optimize-kernels` + Stage 1 lr_2d=2e-3 config.
+Expected wall: ~48h on dolma-10B.
+
+### Deferred
+
+- 1.D SPECTRA pre-clip: flag declared, not active
+- 1.E full μP (1/d_head): flag declared, not active
+- OdinHalo port of SPECTRA/μP: post-Sprint-3 decision per spec
+
+Full analysis: `docs/perf/sprint1.5-phase-{B,C}-findings.md`.
+
+---
+
 
 
 **Status:** COMPLETE (autonomous session). Stage 1 settles the pre-flight
