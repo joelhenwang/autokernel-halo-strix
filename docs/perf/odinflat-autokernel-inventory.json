@@ -1,0 +1,692 @@
+{
+  "odin_flat_mup": {
+    "model": "models/odin_flat.py::OdinFlat",
+    "n_params_M": 121.68,
+    "use_mup": true,
+    "patterns_applied": {
+      "rmsnorm": {
+        "modules_replaced": 29,
+        "op_speedup": "3.3x"
+      },
+      "fused_silu_gate_mul": {
+        "modules_replaced": 14,
+        "op_speedup": "1.6x"
+      }
+    },
+    "changed_modules": [
+      {
+        "name": "final_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.0.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.0.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.0.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.1.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.1.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.1.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.2.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.2.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.2.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.3.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.3.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.3.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.4.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.4.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.4.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.5.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.5.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.5.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.6.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.6.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.6.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.7.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.7.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.7.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.8.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.8.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.8.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.9.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.9.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.9.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.10.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.10.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.10.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.11.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.11.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.11.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.12.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.12.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.12.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.13.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.13.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.13.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      }
+    ],
+    "n_changed": 43
+  },
+  "odin_flat_base": {
+    "model": "models/odin_flat.py::OdinFlat",
+    "n_params_M": 121.68,
+    "use_mup": false,
+    "patterns_applied": {
+      "rmsnorm": {
+        "modules_replaced": 29,
+        "op_speedup": "3.3x"
+      },
+      "fused_silu_gate_mul": {
+        "modules_replaced": 14,
+        "op_speedup": "1.6x"
+      }
+    },
+    "changed_modules": [
+      {
+        "name": "final_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.0.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.0.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.0.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.1.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.1.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.1.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.2.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.2.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.2.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.3.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.3.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.3.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.4.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.4.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.4.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.5.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.5.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.5.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.6.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.6.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.6.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.7.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.7.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.7.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.8.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.8.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.8.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.9.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.9.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.9.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.10.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.10.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.10.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.11.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.11.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.11.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.12.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.12.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.12.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "layers.13.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.13.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "layers.13.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      }
+    ],
+    "n_changed": 43
+  },
+  "odin_halo_base": {
+    "model": "models/odin_halo.py::OdinHalo",
+    "n_params_M": 57.57,
+    "use_mup": false,
+    "patterns_applied": {
+      "rmsnorm": {
+        "modules_replaced": 14,
+        "op_speedup": "3.3x"
+      },
+      "fused_silu_gate_mul": {
+        "modules_replaced": 6,
+        "op_speedup": "1.6x"
+      }
+    },
+    "changed_modules": [
+      {
+        "name": "final_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.0.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.0.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.0.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "shared_layers.1.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.1.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.1.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "shared_layers.2.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.2.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.2.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "shared_layers.3.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.3.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.3.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "shared_layers.4.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.4.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.4.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "shared_layers.5.pre_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.5.ffn_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      },
+      {
+        "name": "shared_layers.5.ffn",
+        "before": "SwiGLU",
+        "after": "_FusedSwiGLUReplacement",
+        "own_params": 0
+      },
+      {
+        "name": "iter_norm",
+        "before": "RMSNorm",
+        "after": "_RMSNormReplacement",
+        "own_params": 768
+      }
+    ],
+    "n_changed": 20
+  }
+}
