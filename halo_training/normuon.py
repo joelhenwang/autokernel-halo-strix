@@ -116,6 +116,13 @@ class NorMuon(torch.optim.Optimizer):
         cautious_wd: bool = True,
         neuron_wise_norm: bool = True,
         neuron_norm_min_dim: int = 0,
+        # Sprint 1.5 Phase A: optional SPECTRA post-clipping on the final
+        # weight delta. When enabled, each 2D update is rescaled so its
+        # spectral norm is at most ``spectra_clip_norm``. Default OFF to
+        # preserve Sprint 1 baseline.
+        spectra_post: bool = False,
+        spectra_clip_norm: float = 1.0,
+        spectra_ns_iter: int = 5,
     ):
         if betas is not None:
             # Treat betas=(0.9, 0.95) as AdamW-side configuration override,
@@ -129,6 +136,10 @@ class NorMuon(torch.optim.Optimizer):
         # normalization is skipped on 2D params where min(rows, cols) <
         # this threshold. Default 0 = always apply (matches Phase 2 behavior).
         self.neuron_norm_min_dim = neuron_norm_min_dim
+        # Sprint 1.5 Phase A: SPECTRA knobs
+        self.spectra_post = bool(spectra_post)
+        self.spectra_clip_norm = float(spectra_clip_norm)
+        self.spectra_ns_iter = int(spectra_ns_iter)
 
         if isinstance(muon_params, dict):
             muon_params = [muon_params]
@@ -240,6 +251,19 @@ class NorMuon(torch.optim.Optimizer):
             # Built-in muP-style scaling matches Muon convention
             scale = max(m_orth.shape[0], m_orth.shape[1]) ** 0.5 * 0.2
             m_orth.mul_(scale)
+
+            # Sprint 1.5 Phase A: SPECTRA post-clipping on the actual
+            # weight delta (lr * m_orth). We implement by clipping m_orth
+            # to (spectra_clip_norm / lr) so that ||lr * m_orth||_2 <=
+            # spectra_clip_norm. Only 2D updates (already guaranteed by
+            # the ndim check above).
+            if self.spectra_post and lr > 0:
+                from halo_training.spectra import apply_post_clip
+                m_orth = apply_post_clip(
+                    m_orth,
+                    clip_norm=self.spectra_clip_norm / lr,
+                    ns_iterations=self.spectra_ns_iter,
+                )
 
             # Cautious / standard decoupled weight decay
             if wd > 0:

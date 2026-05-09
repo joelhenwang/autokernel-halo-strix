@@ -85,12 +85,28 @@ def build_scheduler(optimizer, total_steps, warmup_steps=100, min_lr_ratio=0.1):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
-def load_model_from_file(model_path: str, class_name: str):
+def load_model_from_file(model_path: str, class_name: str, **kwargs):
+    """Load model class from a .py file and instantiate it.
+
+    Keyword args are forwarded to the model constructor. Any kwarg the
+    model ctor doesn't accept is silently dropped, so Sprint 1.5 flags
+    (use_mup, mup_base_width) can be passed without breaking older model
+    classes whose ctor predates them.
+    """
     spec = importlib.util.spec_from_file_location("user_model", model_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["user_model"] = mod
     spec.loader.exec_module(mod)
-    return getattr(mod, class_name)()
+    cls = getattr(mod, class_name)
+    if kwargs:
+        # Filter to only those kwargs this ctor accepts.
+        import inspect
+        sig = inspect.signature(cls.__init__)
+        accepted = {name for name, p in sig.parameters.items()
+                    if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)}
+        filtered = {k: v for k, v in kwargs.items() if k in accepted}
+        return cls(**filtered)
+    return cls()
 
 
 def save_checkpoint(model, optimizer, step, checkpoint_dir, total_tokens=0):
@@ -615,6 +631,45 @@ def main():
                         help="Sprint 1.1: disable cautious WD (use standard decoupled WD).")
     parser.set_defaults(cautious_wd=True)
 
+    # Sprint 1.5 Phase A: SPECTRA + μP plumbing (default OFF; opt-in flags).
+    # See docs/superpowers/specs/2026-05-06-sprint1.5-spectra-mup-design.md.
+    parser.add_argument("--spectra-post", dest="spectra_post", action="store_true",
+                        help="Sprint 1.5: enable SPECTRA post-clipping on NorMuon updates. "
+                             "Default OFF. Requires --normuon. Clip threshold via "
+                             "--spectra-clip-norm (default 1.0).")
+    parser.add_argument("--no-spectra-post", dest="spectra_post", action="store_false")
+    parser.set_defaults(spectra_post=False)
+    parser.add_argument("--spectra-clip-norm", type=float, default=1.0,
+                        help="Spectral-norm ceiling per step for SPECTRA post-clip. "
+                             "Default 1.0.")
+    parser.add_argument("--spectra-ns-iter", type=int, default=5,
+                        help="Newton-Schulz iterations for SPECTRA spectral-norm "
+                             "estimate (API forward-compat; currently unused by "
+                             "the power-iteration implementation).")
+    # Phase D pre-decl: wired but no effect in Phase A
+    parser.add_argument("--spectra-pre", dest="spectra_pre", action="store_true",
+                        help="[Phase D] SPECTRA pre-clipping on gradients. "
+                             "Not yet active in Phase A.")
+    parser.add_argument("--no-spectra-pre", dest="spectra_pre", action="store_false")
+    parser.set_defaults(spectra_pre=False)
+
+    parser.add_argument("--mup", dest="mup", action="store_true",
+                        help="Sprint 1.5: enable μP 3-way LR scaling (embedding / "
+                             "hidden / readout). Default OFF. With --mup, "
+                             "--lr-2d sets the embedding LR; hidden/readout "
+                             "derive from d_base via the μP transfer rules.")
+    parser.add_argument("--no-mup", dest="mup", action="store_false")
+    parser.set_defaults(mup=False)
+    parser.add_argument("--mup-base-width", type=int, default=256,
+                        help="μP base width d_base (default 256; matches the "
+                             "30M probe's d_model).")
+    # Phase E pre-decl: wired but no effect in Phase A
+    parser.add_argument("--mup-attn", dest="mup_attn", action="store_true",
+                        help="[Phase E] μP 1/d_head attention scale. Not yet "
+                             "active in Phase A.")
+    parser.add_argument("--no-mup-attn", dest="mup_attn", action="store_false")
+    parser.set_defaults(mup_attn=False)
+
     # fp16 stability hardening (2026-05-07, post-dolma-10B NaN incident)
     # See knowledge/training/fp16_stability_gfx1151.md for details.
     parser.add_argument("--z-loss", type=float, default=0.0,
@@ -659,7 +714,14 @@ def main():
 
     # --- Model ---
     sys.path.insert(0, ".")
-    model = load_model_from_file(args.model, args.class_name)
+    # Sprint 1.5 Phase A: pass μP construction-time kwargs when --mup is set.
+    # load_model_from_file filters kwargs per ctor signature so older models
+    # whose ctor predates these flags are unaffected.
+    model_ctor_kwargs = {}
+    if getattr(args, "mup", False):
+        model_ctor_kwargs["use_mup"] = True
+        model_ctor_kwargs["mup_base_width"] = getattr(args, "mup_base_width", 256)
+    model = load_model_from_file(args.model, args.class_name, **model_ctor_kwargs)
     model = model.to(device)
 
     # Sprint 1: honor --intra-doc-mask / --value-residuals / --head-gating by
@@ -787,6 +849,12 @@ def main():
                 ns_dtype=ns_dtype,
                 neuron_norm_min_dim=args.neuron_norm_min_dim,
                 cautious_wd=args.cautious_wd,
+                # Sprint 1.5 Phase A: opt-in SPECTRA + μP
+                use_mup=getattr(args, "mup", False),
+                mup_base_width=getattr(args, "mup_base_width", 256),
+                spectra_post=getattr(args, "spectra_post", False),
+                spectra_clip_norm=getattr(args, "spectra_clip_norm", 1.0),
+                spectra_ns_iter=getattr(args, "spectra_ns_iter", 5),
             )
             # build_imu1_optimizer prints on rank 0 already; no duplicate log
         else:

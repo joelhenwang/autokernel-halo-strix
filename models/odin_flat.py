@@ -129,6 +129,9 @@ class OdinFlatBase(nn.Module):
         use_intra_doc_mask: bool = False,
         use_value_residuals: bool = False,
         use_head_gating: bool = False,
+        # Sprint 1.5 Phase A: μP init scaling (opt-in)
+        use_mup: bool = False,
+        mup_base_width: int = 256,
     ):
         super().__init__()
         self.d_model = d_model
@@ -146,6 +149,10 @@ class OdinFlatBase(nn.Module):
         #: Sprint 1: when True, each GQA layer gates its attention output
         #: via ``sigmoid(head_gate)`` (per-head learned scalar).
         self.use_head_gating = use_head_gating
+        #: Sprint 1.5 Phase A: when True, apply μP init scaling after the
+        #: standard _init_weights pass. ``mup_base_width`` is the d_base.
+        self.use_mup = use_mup
+        self.mup_base_width = mup_base_width
         self.logit_softcap = 30.0 if use_softcap else 0.0
         self.head_dim = d_model // n_heads
 
@@ -174,8 +181,18 @@ class OdinFlatBase(nn.Module):
         self.register_buffer("freqs_sin", freqs_cis.imag.float(), persistent=False)
 
         self._init_weights()
+
+        # Sprint 1.5 Phase A: optional μP init scaling. Applied AFTER the
+        # Sprint 1 init so the μP correction multiplies the
+        # (Xavier × depth-scaled × LN-re-gamma'd) result. Embedding params
+        # are left untouched by apply_mup_init.
+        if self.use_mup:
+            from halo_training.mup import apply_mup_init
+            apply_mup_init(self, d_base=self.mup_base_width)
+
         n_params = sum(p.numel() for p in self.parameters())
-        print(f"{self.__class__.__name__}: {n_params / 1e6:.1f}M params")
+        print(f"{self.__class__.__name__}: {n_params / 1e6:.1f}M params"
+              + (f" [μP, d_base={self.mup_base_width}]" if self.use_mup else ""))
 
     def _init_weights(self):
         n_layers = len(self.layers)

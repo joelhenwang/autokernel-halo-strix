@@ -91,6 +91,13 @@ def build_imu1_optimizer(
     ns_dtype: Optional[torch.dtype] = None,
     neuron_norm_min_dim: int = 0,
     cautious_wd: bool = True,
+    # Sprint 1.5 Phase A: μP 3-way LR split (disabled by default)
+    use_mup: bool = False,
+    mup_base_width: int = 256,
+    # Sprint 1.5 Phase A: SPECTRA post-clip (disabled by default)
+    spectra_post: bool = False,
+    spectra_clip_norm: float = 1.0,
+    spectra_ns_iter: int = 5,
 ) -> torch.optim.Optimizer:
     """Sprint 1 entry point: build a two-group optimizer per IMU-1 recipe.
 
@@ -101,6 +108,18 @@ def build_imu1_optimizer(
 
     With ``use_normuon=True`` (Phase 2+), the 2D group is routed to NorMuon
     and the 1D group stays on AdamW no-WD.
+
+    Sprint 1.5 Phase A additions
+    ----------------------------
+    ``use_mup=True`` replaces the flat 2D group with a μP 3-way split
+    (embedding / hidden / readout) with per-group LR scaling:
+
+        embedding LR = lr_2d
+        hidden   LR = lr_2d / d_ratio     where d_ratio = d_model / mup_base_width
+        readout  LR = lr_2d / d_ratio**2
+
+    ``spectra_post=True`` threads SPECTRA post-clipping into NorMuon when
+    ``use_normuon`` is also True. Combines with μP transparently.
 
     Sprint 1.1 Phase B throughput knobs (only meaningful with use_normuon=True):
 
@@ -119,10 +138,81 @@ def build_imu1_optimizer(
     cautious_wd : bool
         Toggle cautious weight decay (per IMU-1 paper). False = standard
         decoupled WD. True is IMU-1 default and matches Phase 2 behavior.
+    use_mup : bool
+        Sprint 1.5 Phase A. Replaces the 2-way 2D/1D split with a 3-way μP
+        split on 2D params (embedding / hidden / readout) with per-group LR
+        scaling. 1D params continue through AdamW at ``lr_1d``.
+    mup_base_width : int
+        μP base width ``d_base`` used for LR scaling. Default 256 (matches
+        the 30M probe's d_model).
+    spectra_post : bool
+        Sprint 1.5 Phase A. Enable SPECTRA post-clipping on the optimizer
+        update inside NorMuon. No effect when use_normuon=False.
+    spectra_clip_norm : float
+        Spectral-norm ceiling for the weight delta per step. Default 1.0.
+    spectra_ns_iter : int
+        Kept for API forward-compat with future Newton-Schulz spectral
+        estimators; unused by the current power-iteration implementation.
     """
     group_2d, group_1d = split_params_2d_vs_1d(model)
     n_2d = sum(p.numel() for _, p in group_2d)
     n_1d = sum(p.numel() for _, p in group_1d)
+
+    # --- Sprint 1.5 Phase A: resolve μP groups if enabled ----------------
+    mup_groups = None
+    if use_mup:
+        from halo_training.mup import build_mup_param_groups
+        # build_mup_param_groups returns ONLY 2D params split 3-way. We use
+        # weight_decay=0 here and let NorMuon/AdamW apply weight_decay_2d
+        # per-group below (so the Sprint 1 knob semantics are preserved).
+        mup_raw = build_mup_param_groups(
+            model, base_lr=lr_2d, d_base=mup_base_width,
+            weight_decay=weight_decay_2d,
+        )
+        mup_groups = mup_raw
+        # Collect ids to resolve the 1D set under μP, which differs from
+        # Sprint 1's 1D set because the μP classifier routes tok_embeddings.*
+        # and lm_head.* (all of them, not just .embed./.proj.) into the 2D
+        # μP groups. We reconstruct the 1D set as "any param with ndim<2 or
+        # matching _1D_NAME_MARKERS, that is NOT already in a μP group".
+        mup_2d_ids = set()
+        for grp in mup_groups:
+            for p in grp["params"]:
+                mup_2d_ids.add(id(p))
+
+        mup_1d_named: List[Tuple[str, torch.nn.Parameter]] = []
+        seen_ids: set = set()
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if id(p) in mup_2d_ids:
+                continue  # already routed to a μP 2D group
+            if id(p) in seen_ids:
+                continue
+            seen_ids.add(id(p))
+            if p.ndim < 2 or any(marker in name for marker in _1D_NAME_MARKERS):
+                mup_1d_named.append((name, p))
+            else:
+                # 2D param that didn't fall into μP's classification AND
+                # isn't 1D — this is unexpected under OdinFlat/OdinHalo.
+                # Fall back to treating as hidden so nothing is silently dropped.
+                print(f"[μP] NOTE: unclassified 2D param {name} routed to hidden group")
+                # Append to hidden group
+                for grp in mup_groups:
+                    if grp["_mup_group"] == "hidden":
+                        grp["params"].append(p)
+                        break
+
+        # Override group_1d with the μP-consistent 1D set.
+        group_1d = mup_1d_named
+        n_1d = sum(p.numel() for _, p in group_1d)
+
+        for grp in mup_groups:
+            print(f"[μP] group={grp['_mup_group']:10s} "
+                  f"n_params={sum(p.numel() for p in grp['params']):>10,} "
+                  f"lr={grp['lr']:.6f}")
+        print(f"[μP] group={'1D':10s} "
+              f"n_params={n_1d:>10,} lr={lr_1d:.6f} (AdamW)")
 
     if use_normuon:
         # Phase 2+: NorMuon for 2D, AdamW for 1D.
@@ -134,47 +224,91 @@ def build_imu1_optimizer(
                 "build_imu1_optimizer(use_normuon=True) requires "
                 "halo_training/normuon.py; this ships in Sprint 1 Phase 2."
             ) from exc
-        opt = NorMuon(
-            muon_params=[{"params": [p for _, p in group_2d]}],
-            adamw_params=[
-                {"params": [p for _, p in group_1d], "lr": lr_1d, "weight_decay": 0.0},
-            ],
-            lr=lr_2d,
-            weight_decay=weight_decay_2d,
-            betas=betas,
-            ns_dtype=ns_dtype,
-            neuron_norm_min_dim=neuron_norm_min_dim,
-            cautious_wd=cautious_wd,
-        )
+        if use_mup and mup_groups is not None:
+            # When μP is active, feed the 3-way split to NorMuon as separate
+            # muon_params groups so each retains its per-group LR.
+            muon_groups_for_normuon = [
+                {"params": grp["params"], "lr": grp["lr"],
+                 "weight_decay": weight_decay_2d,
+                 "_mup_group": grp["_mup_group"]}
+                for grp in mup_groups if grp["params"]
+            ]
+            opt = NorMuon(
+                muon_params=muon_groups_for_normuon,
+                adamw_params=[
+                    {"params": [p for _, p in group_1d], "lr": lr_1d, "weight_decay": 0.0},
+                ],
+                lr=lr_2d,  # default LR; per-group lrs above override
+                weight_decay=weight_decay_2d,
+                betas=betas,
+                ns_dtype=ns_dtype,
+                neuron_norm_min_dim=neuron_norm_min_dim,
+                cautious_wd=cautious_wd,
+                spectra_post=spectra_post,
+                spectra_clip_norm=spectra_clip_norm,
+                spectra_ns_iter=spectra_ns_iter,
+            )
+        else:
+            opt = NorMuon(
+                muon_params=[{"params": [p for _, p in group_2d]}],
+                adamw_params=[
+                    {"params": [p for _, p in group_1d], "lr": lr_1d, "weight_decay": 0.0},
+                ],
+                lr=lr_2d,
+                weight_decay=weight_decay_2d,
+                betas=betas,
+                ns_dtype=ns_dtype,
+                neuron_norm_min_dim=neuron_norm_min_dim,
+                cautious_wd=cautious_wd,
+                spectra_post=spectra_post,
+                spectra_clip_norm=spectra_clip_norm,
+                spectra_ns_iter=spectra_ns_iter,
+            )
         # Phase 2 logging + Phase B throughput-knob trail so scorecard runs
         # record exactly which config was used.
         ns_tag = (str(ns_dtype).split(".")[-1] if ns_dtype is not None
                   else "fp32")
+        mup_tag = "mup3x" if use_mup else "flat"
+        spectra_tag = (f"spectra({spectra_clip_norm})" if spectra_post else "no-spectra")
         print(f"IMU-1 optimizer: NorMuon(2D, n={n_2d:,}, lr={lr_2d}, "
               f"ns_dtype={ns_tag}, neuron_norm_min_dim={neuron_norm_min_dim}, "
-              f"cautious_wd={cautious_wd}) "
+              f"cautious_wd={cautious_wd}, {mup_tag}, {spectra_tag}) "
               f"+ AdamW(1D, n={n_1d:,}, lr={lr_1d}, wd=0)")
         return opt
 
     # Phase 1 default: AdamW for both groups, per-group LR/WD
-    opt = torch.optim.AdamW(
-        [
-            {
-                "params": [p for _, p in group_2d],
-                "lr": lr_2d,
-                "weight_decay": weight_decay_2d,
-            },
-            {
-                "params": [p for _, p in group_1d],
-                "lr": lr_1d,
-                "weight_decay": 0.0,
-            },
-        ],
-        lr=lr_2d,
-        betas=betas,
-        fused=True,
-    )
-    print(f"IMU-1 optimizer (Phase 1): AdamW two-group — "
+    if use_mup and mup_groups is not None:
+        # AdamW path with μP: feed 3-way groups + 1D group separately.
+        adamw_groups = [
+            {"params": grp["params"], "lr": grp["lr"],
+             "weight_decay": weight_decay_2d,
+             "_mup_group": grp["_mup_group"]}
+            for grp in mup_groups if grp["params"]
+        ] + [
+            {"params": [p for _, p in group_1d], "lr": lr_1d,
+             "weight_decay": 0.0},
+        ]
+        opt = torch.optim.AdamW(
+            adamw_groups, lr=lr_2d, betas=betas, fused=True)
+    else:
+        opt = torch.optim.AdamW(
+            [
+                {
+                    "params": [p for _, p in group_2d],
+                    "lr": lr_2d,
+                    "weight_decay": weight_decay_2d,
+                },
+                {
+                    "params": [p for _, p in group_1d],
+                    "lr": lr_1d,
+                    "weight_decay": 0.0,
+                },
+            ],
+            lr=lr_2d,
+            betas=betas,
+            fused=True,
+        )
+    print(f"IMU-1 optimizer (Phase 1): AdamW {'μP-3way' if use_mup else 'two-group'} — "
           f"2D(n={n_2d:,}, lr={lr_2d}, wd={weight_decay_2d}) + "
           f"1D(n={n_1d:,}, lr={lr_1d}, wd=0)")
     return opt
