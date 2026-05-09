@@ -670,6 +670,26 @@ def main():
     parser.add_argument("--no-mup-attn", dest="mup_attn", action="store_false")
     parser.set_defaults(mup_attn=False)
 
+    # Phase 3 (LEAP layer-exit aux loss) — arXiv 2605.01058. Opt-in flag.
+    # Applies a sigmoid(10 * (tau - cos(h_layer_i, sg(h_final)))) aux loss
+    # at the specified intermediate layers; pushes them toward h_final so
+    # inference-time early exit becomes viable. See
+    # halo_training/leap_layer_exit.py for details.
+    parser.add_argument("--leap-layers", type=str, default="",
+                        help="Comma-separated layer indices for LEAP aux loss "
+                             "(e.g. '11,12'). Empty (default) disables LEAP.")
+    parser.add_argument("--leap-weights", type=str, default="",
+                        help="Comma-separated weights for each --leap-layers "
+                             "entry (e.g. '0.3,0.5'). If empty, defaults to "
+                             "uniform 1.0 per layer.")
+    parser.add_argument("--leap-tau", type=float, default=0.98,
+                        help="LEAP training-time cosine threshold. "
+                             "Default 0.98 (paper validated).")
+    parser.add_argument("--leap-layers-attr", type=str, default="layers",
+                        help="Attribute on the model holding the ModuleList "
+                             "of layers LEAP should hook. 'layers' for "
+                             "OdinFlat, 'shared_layers' for OdinHalo.")
+
     # fp16 stability hardening (2026-05-07, post-dolma-10B NaN incident)
     # See knowledge/training/fp16_stability_gfx1151.md for details.
     parser.add_argument("--z-loss", type=float, default=0.0,
@@ -815,6 +835,34 @@ def main():
                 print(f"Compiling model ({compile_mode})...")
             model = torch.compile(model, mode=compile_mode)
 
+    # Phase 3 LEAP: construct aux-loss handler AFTER compile_zones so hooks
+    # attach to the OptimizedModule wrappers (compile_zones replaces
+    # `model.layers[i]` in-place, which severs hooks registered beforehand).
+    leap = None
+    if args.leap_layers.strip():
+        from halo_training.leap_layer_exit import LeapAuxLoss
+        layer_idx_list = [int(x) for x in args.leap_layers.split(",") if x.strip()]
+        if args.leap_weights.strip():
+            weight_list = [float(x) for x in args.leap_weights.split(",") if x.strip()]
+        else:
+            weight_list = None
+        leap_target = model.module if hasattr(model, "module") else model
+        if hasattr(leap_target, "_orig_mod"):
+            leap_target = leap_target._orig_mod
+        try:
+            leap = LeapAuxLoss(
+                leap_target, layer_indices=layer_idx_list,
+                weights=weight_list, tau=args.leap_tau,
+                layers_attr=args.leap_layers_attr,
+            )
+            if rank == 0:
+                print(f"[LEAP] aux loss ON: layers={layer_idx_list} "
+                      f"weights={weight_list or 'uniform 1.0'} tau={args.leap_tau}")
+        except Exception as exc:  # noqa: BLE001
+            if rank == 0:
+                print(f"[LEAP] init failed ({exc}); running without LEAP")
+            leap = None
+
     # --- Data ---
     dataset = PreTokenizedDataset(args.dataset, block_size=args.block_size)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
@@ -950,6 +998,7 @@ def main():
 
     # fp16-stability guards initialization
     _z_loss_warned = False  # one-shot warning when z-loss skipped
+    _leap_warned = False    # one-shot warning when LEAP disabled mid-run
     # Ring buffer of recent grad norms — surfaced in NaN forensics dump (R1).
     from collections import deque
     recent_grad_norms: deque = deque(maxlen=50)
@@ -1039,6 +1088,21 @@ def main():
                                 z_logits = output.float()
                                 z_loss_val = args.z_loss * z_logits.logsumexp(dim=-1).pow(2).mean()
                                 loss = loss + z_loss_val / args.accum_steps
+
+                        # Phase 3 LEAP: add layer-exit aux loss if enabled.
+                        # `leap` is None unless --leap-layers was passed.
+                        # Uses auto-captured h_final from final_norm hook.
+                        if leap is not None:
+                            try:
+                                leap_loss = leap.compute_aux_loss()
+                                loss = loss + leap_loss / args.accum_steps
+                            except RuntimeError as exc:
+                                # e.g. torch.compile bypassed hooks → disable.
+                                if rank == 0 and not _leap_warned:
+                                    print(f"  [LEAP] disabled: {exc}")
+                                leap.close()
+                                leap = None
+                                _leap_warned = True
 
                     scaler.scale(loss).backward()
                     # Bug-fix (2026-05-07): track microbatch backwards in
