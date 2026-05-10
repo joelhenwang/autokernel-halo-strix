@@ -1,0 +1,331 @@
+{
+  "results": {
+    "odin_flat-V0": {
+      "n_params": 120,
+      "counts": {
+        "always_finite": 119,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.6._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat-V1": {
+      "n_params": 120,
+      "counts": {
+        "always_finite": 1,
+        "occasionally_finite": 118,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.6._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat-V3": {
+      "n_params": 120,
+      "counts": {
+        "always_finite": 1,
+        "occasionally_finite": 118,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.6._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat_30m-V0": {
+      "n_params": 72,
+      "counts": {
+        "always_finite": 71,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat_30m-V1": {
+      "n_params": 72,
+      "counts": {
+        "always_finite": 1,
+        "occasionally_finite": 70,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat_30m-V3": {
+      "n_params": 72,
+      "counts": {
+        "always_finite": 71,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat_ablation-V0": {
+      "n_params": 70,
+      "counts": {
+        "always_finite": 69,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.4._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat_ablation-V1": {
+      "n_params": 70,
+      "counts": {
+        "always_finite": 1,
+        "occasionally_finite": 68,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.4._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat_ablation-V3": {
+      "n_params": 70,
+      "counts": {
+        "always_finite": 69,
+        "always_none": 1
+      },
+      "frozen_params": [
+        [
+          "module.layers.4._orig_mod.attn.v_res_scale",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_flat_mini-V0": {
+      "n_params": 0,
+      "counts": {},
+      "frozen_params": []
+    },
+    "odin_flat_mini-V1": {
+      "n_params": 0,
+      "counts": {},
+      "frozen_params": []
+    },
+    "odin_flat_mini-V3": {
+      "n_params": 0,
+      "counts": {},
+      "frozen_params": []
+    },
+    "odin_halo-V0": {
+      "n_params": 61,
+      "counts": {
+        "always_finite": 58,
+        "occasionally_finite": 1,
+        "always_none": 2
+      },
+      "frozen_params": [
+        [
+          "module.shared_layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ],
+        [
+          "module.shared_layers.3._orig_mod.attn.head_gate",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_halo-V1": {
+      "n_params": 61,
+      "counts": {
+        "always_finite": 59,
+        "always_none": 2
+      },
+      "frozen_params": [
+        [
+          "module.shared_layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ],
+        [
+          "module.shared_layers.3._orig_mod.attn.head_gate",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_halo-V3": {
+      "n_params": 61,
+      "counts": {
+        "always_finite": 59,
+        "always_none": 2
+      },
+      "frozen_params": [
+        [
+          "module.shared_layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ],
+        [
+          "module.shared_layers.3._orig_mod.attn.head_gate",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_halo_ablation-V0": {
+      "n_params": 61,
+      "counts": {
+        "always_finite": 58,
+        "occasionally_finite": 1,
+        "always_none": 2
+      },
+      "frozen_params": [
+        [
+          "module.shared_layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ],
+        [
+          "module.shared_layers.3._orig_mod.attn.head_gate",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_halo_ablation-V1": {
+      "n_params": 61,
+      "counts": {
+        "always_finite": 59,
+        "always_none": 2
+      },
+      "frozen_params": [
+        [
+          "module.shared_layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ],
+        [
+          "module.shared_layers.3._orig_mod.attn.head_gate",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_halo_ablation-V3": {
+      "n_params": 61,
+      "counts": {
+        "always_finite": 59,
+        "always_none": 2
+      },
+      "frozen_params": [
+        [
+          "module.shared_layers.3._orig_mod.attn.v_res_scale",
+          "always_none"
+        ],
+        [
+          "module.shared_layers.3._orig_mod.attn.head_gate",
+          "always_none"
+        ]
+      ]
+    },
+    "odin_halo_mini-V0": {
+      "n_params": 0,
+      "counts": {},
+      "frozen_params": []
+    },
+    "odin_halo_mini-V1": {
+      "n_params": 0,
+      "counts": {},
+      "frozen_params": []
+    },
+    "odin_halo_mini-V3": {
+      "n_params": 0,
+      "counts": {},
+      "frozen_params": []
+    }
+  },
+  "deltas": {
+    "odin_flat-V1": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 1
+    },
+    "odin_flat-V3": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 1
+    },
+    "odin_flat_30m-V1": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 1
+    },
+    "odin_flat_30m-V3": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 1
+    },
+    "odin_flat_ablation-V1": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 1
+    },
+    "odin_flat_ablation-V3": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 1
+    },
+    "odin_flat_mini-V1": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 0
+    },
+    "odin_flat_mini-V3": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 0
+    },
+    "odin_halo-V1": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 2
+    },
+    "odin_halo-V3": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 2
+    },
+    "odin_halo_ablation-V1": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 2
+    },
+    "odin_halo_ablation-V3": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 2
+    },
+    "odin_halo_mini-V1": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 0
+    },
+    "odin_halo_mini-V3": {
+      "newly_frozen_count": 0,
+      "newly_frozen_params": [],
+      "total_frozen_count": 0
+    }
+  }
+}
