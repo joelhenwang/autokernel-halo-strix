@@ -1,0 +1,146 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               aten::mm         1.91%     787.655ms         2.33%     960.840ms      40.627us       15.234s        37.85%       15.234s     644.144us         23650  
+autograd::engine::evaluate_function: CompiledFunctio...         0.12%      49.128ms         6.63%        2.729s     656.018us       0.000us         0.00%       14.317s       3.442ms          4160  
+                               CompiledFunctionBackward         1.48%     609.810ms         6.48%        2.667s     641.066us       0.000us         0.00%       14.213s       3.417ms          4160  
+                        DistributedDataParallel.forward         0.00%       0.000us         0.00%       0.000us       0.000us        9.051s        22.49%        9.051s     113.134ms            80  
+                        DistributedDataParallel.forward         0.35%     142.377ms         8.20%        3.378s      42.228ms       0.000us         0.00%        8.886s     111.078ms            80  
+## Call CompiledFxGraph fyr2nq6mlyxonqwdp437bbwvi5r4...         0.00%       0.000us         0.00%       0.000us       0.000us        7.055s        17.53%        7.055s       7.349ms           960  
+## Call CompiledFxGraph fyr2nq6mlyxonqwdp437bbwvi5r4...         0.88%     361.871ms         1.64%     677.156ms     705.371us       0.000us         0.00%        7.028s       7.321ms           960  
+                                       CompiledFunction         1.02%     419.702ms         4.69%        1.930s     464.021us       0.000us         0.00%        6.523s       1.568ms          4160  
+                             Torch-Compiled Region: 0/0         0.51%     210.112ms         6.58%        2.709s       2.822ms      98.020ms         0.24%        5.690s       5.927ms           960  
+Cijk_Ailk_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT96x96...         0.00%       0.000us         0.00%       0.000us       0.000us        5.487s        13.63%        5.487s     723.888us          7580  
+                             Torch-Compiled Region: 1/0         0.20%      82.917ms         4.30%        1.769s       1.843ms       0.000us         0.00%        4.917s       5.121ms           960  
+                             Torch-Compiled Region: 7/0         0.46%     189.880ms         2.73%        1.123s       1.170ms       0.000us         0.00%        4.468s       4.654ms           960  
+                                        aten::logsumexp         0.01%       3.602ms         0.08%      30.932ms     193.324us       0.000us         0.00%        4.456s      27.853ms           160  
+Cijk_Alik_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT128x8...         0.00%       0.000us         0.00%       0.000us       0.000us        3.448s         8.57%        3.448s       1.539ms          2240  
+## Call CompiledFxGraph f2o6hymasih562kfjkjl3c4ncknq...         0.00%       0.000us         0.00%       0.000us       0.000us        3.371s         8.38%        3.371s       3.512ms           960  
+## Call CompiledFxGraph f2o6hymasih562kfjkjl3c4ncknq...         0.64%     264.682ms         1.18%     486.103ms     506.358us       0.000us         0.00%        3.351s       3.491ms           960  
+## Call CompiledFxGraph fewfypjtmguqdjrg2ax2ptdsu4rk...         0.00%       0.000us         0.00%       0.000us       0.000us        3.171s         7.88%        3.171s       2.832ms          1120  
+## Call CompiledFxGraph fewfypjtmguqdjrg2ax2ptdsu4rk...         0.41%     167.329ms         0.77%     316.493ms     282.583us       0.000us         0.00%        3.159s       2.821ms          1120  
+Cijk_Ailk_Bjlk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT64x96...         0.00%       0.000us         0.00%       0.000us       0.000us        2.988s         7.42%        2.988s     939.616us          3180  
+                            Optimizer.step#NorMuon.step         0.00%       0.000us         0.00%       0.000us       0.000us        2.863s         7.12%        2.863s     286.341ms            10  
+                           triton_tem_fused_mm_t_view_1         0.05%      21.374ms         0.07%      30.101ms      26.875us        2.710s         6.73%        2.710s       2.419ms          1120  
+                           triton_tem_fused_mm_t_view_1         0.00%       0.000us         0.00%       0.000us       0.000us        2.710s         6.73%        2.710s       2.419ms          1120  
+                                            aten::copy_         0.04%      16.924ms         0.14%      58.027ms      14.616us        2.490s         6.19%        2.490s     627.307us          3970  
+                                               aten::to         0.02%       8.646ms         0.22%      91.608ms       8.775us       0.000us         0.00%        2.468s     236.363us         10440  
+                                         aten::_to_copy         0.04%      16.624ms         0.20%      82.962ms      21.775us       0.000us         0.00%        2.468s     647.672us          3810  
+autograd::engine::evaluate_function: LogsumexpBackwa...         0.00%     493.117us         0.01%       5.904ms      73.802us       0.000us         0.00%        2.256s      28.205ms            80  
+                                     LogsumexpBackward0         0.00%       1.187ms         0.01%       5.411ms      67.638us       0.000us         0.00%        2.256s      28.205ms            80  
+                            Optimizer.step#NorMuon.step         1.16%     476.403ms         6.96%        2.867s     286.674ms       0.000us         0.00%        2.184s     218.363ms            10  
+       autograd::engine::evaluate_function: MmBackward0         0.01%       2.175ms         0.09%      35.946ms     149.774us       0.000us         0.00%        2.077s       8.655ms           240  
+                                            MmBackward0         0.01%       2.311ms         0.08%      33.770ms     140.710us       0.000us         0.00%        2.077s       8.655ms           240  
+                                              aten::mul         0.17%      68.912ms         0.30%     124.036ms       7.845us        1.853s         4.60%        1.853s     117.213us         15810  
+autograd::engine::evaluate_function: CausalConv1dFnB...         0.02%      10.006ms         0.57%     233.772ms     243.512us       0.000us         0.00%        1.831s       1.907ms           960  
+                                 CausalConv1dFnBackward         0.17%      70.965ms         0.54%     223.766ms     233.090us       0.000us         0.00%        1.831s       1.907ms           960  
+                       DaoAILab::_causal_conv1d_bwd_cpp         0.24%      98.729ms         0.25%     104.613ms     108.972us        1.828s         4.54%        1.828s       1.904ms           960  
+void causal_conv1d_channellast_bwd_kernel<Causal_con...         0.00%       0.000us         0.00%       0.000us       0.000us        1.828s         4.54%        1.828s       1.904ms           960  
+                                           aten::matmul         0.07%      30.686ms         1.37%     565.791ms      20.771us       0.000us         0.00%        1.598s      58.671us         27240  
+## Call CompiledFxGraph f7ozq7duz6rb3bh3ewilir6zajec...         0.00%       0.000us         0.00%       0.000us       0.000us        1.549s         3.85%        1.549s       1.613ms           960  
+## Call CompiledFxGraph f7ozq7duz6rb3bh3ewilir6zajec...         0.52%     213.504ms         0.88%     362.440ms     377.541us       0.000us         0.00%        1.540s       1.604ms           960  
+                                              aten::sub         0.00%       1.660ms         0.01%       2.567ms      16.043us        1.507s         3.74%        1.507s       9.416ms           160  
+void at::native::elementwise_kernel_manual_unroll<12...         0.00%       0.000us         0.00%       0.000us       0.000us        1.507s         3.74%        1.507s       9.416ms           160  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 41.174s
+Self CUDA time total: 40.244s
+
+
+=== sort by cpu_time_total ===
+
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                    hipMemcpyWithStream        79.05%       32.547s        79.05%       32.547s      29.322ms       0.000us         0.00%       0.000us       0.000us          1110  
+                                             aten::item         0.00%       1.689ms        79.02%       32.537s      37.398ms       0.000us         0.00%       2.237ms       2.571us           870  
+                              aten::_local_scalar_dense         0.01%       5.443ms        79.02%       32.535s      37.396ms       2.237ms         0.01%       2.237ms       2.571us           870  
+                        DistributedDataParallel.forward         0.35%     142.377ms         8.20%        3.378s      42.228ms       0.000us         0.00%        8.886s     111.078ms            80  
+                            Optimizer.step#NorMuon.step         1.16%     476.403ms         6.96%        2.867s     286.674ms       0.000us         0.00%        2.184s     218.363ms            10  
+autograd::engine::evaluate_function: CompiledFunctio...         0.12%      49.128ms         6.63%        2.729s     656.018us       0.000us         0.00%       14.317s       3.442ms          4160  
+                             Torch-Compiled Region: 0/0         0.51%     210.112ms         6.58%        2.709s       2.822ms      98.020ms         0.24%        5.690s       5.927ms           960  
+                               CompiledFunctionBackward         1.48%     609.810ms         6.48%        2.667s     641.066us       0.000us         0.00%       14.213s       3.417ms          4160  
+                                       CompiledFunction         1.02%     419.702ms         4.69%        1.930s     464.021us       0.000us         0.00%        6.523s       1.568ms          4160  
+                             Torch-Compiled Region: 1/0         0.20%      82.917ms         4.30%        1.769s       1.843ms       0.000us         0.00%        4.917s       5.121ms           960  
+                             Torch-Compiled Region: 7/0         0.46%     189.880ms         2.73%        1.123s       1.170ms       0.000us         0.00%        4.468s       4.654ms           960  
+                                               aten::mm         1.91%     787.655ms         2.33%     960.840ms      40.627us       15.234s        37.85%       15.234s     644.144us         23650  
+## Call CompiledFxGraph fyr2nq6mlyxonqwdp437bbwvi5r4...         0.88%     361.871ms         1.64%     677.156ms     705.371us       0.000us         0.00%        7.028s       7.321ms           960  
+                                           aten::matmul         0.07%      30.686ms         1.37%     565.791ms      20.771us       0.000us         0.00%        1.598s      58.671us         27240  
+                                        hipLaunchKernel         1.33%     547.458ms         1.33%     547.458ms       4.172us       0.000us         0.00%       0.000us       0.000us        131230  
+## Call CompiledFxGraph f2o6hymasih562kfjkjl3c4ncknq...         0.64%     264.682ms         1.18%     486.103ms     506.358us       0.000us         0.00%        3.351s       3.491ms           960  
+                             Torch-Compiled Region: 2/0         0.08%      31.567ms         0.95%     391.107ms     407.403us       0.000us         0.00%     409.347ms     426.403us           960  
+## Call CompiledFxGraph f7ozq7duz6rb3bh3ewilir6zajec...         0.52%     213.504ms         0.88%     362.440ms     377.541us       0.000us         0.00%        1.540s       1.604ms           960  
+                                         CausalConv1dFn         0.04%      17.296ms         0.87%     359.540ms     374.521us       0.000us         0.00%     409.347ms     426.403us           960  
+                             Torch-Compiled Region: 3/0         0.16%      67.692ms         0.81%     332.780ms     346.646us       0.000us         0.00%     409.347ms     426.403us           960  
+## Call CompiledFxGraph fewfypjtmguqdjrg2ax2ptdsu4rk...         0.41%     167.329ms         0.77%     316.493ms     282.583us       0.000us         0.00%        3.159s       2.821ms          1120  
+## Call CompiledFxGraph ftyssnehntynueijjpv4kuhssqut...         0.44%     181.606ms         0.75%     310.601ms     323.543us       0.000us         0.00%     634.012ms     660.429us           960  
+## Call CompiledFxGraph f25v7jwuvyzkbdcdom2tokznj2yz...         0.41%     167.428ms         0.67%     275.292ms     245.796us       0.000us         0.00%        1.316s       1.175ms          1120  
+                             Torch-Compiled Region: 4/0         0.19%      78.065ms         0.59%     241.588ms     251.654us       0.000us         0.00%     409.347ms     426.403us           960  
+## Call CompiledFxGraph fj7s2hbbdzuac4zgfma6sy2z2r7l...         0.33%     137.899ms         0.57%     234.180ms       2.927ms       0.000us         0.00%        1.098s      13.721ms            80  
+autograd::engine::evaluate_function: CausalConv1dFnB...         0.02%      10.006ms         0.57%     233.772ms     243.512us       0.000us         0.00%        1.831s       1.907ms           960  
+                                 CausalConv1dFnBackward         0.17%      70.965ms         0.54%     223.766ms     233.090us       0.000us         0.00%        1.831s       1.907ms           960  
+## Call CompiledFxGraph f6q6tl5nmhsxkdwtnypkqjxl77kt...         0.33%     136.541ms         0.53%     217.788ms     226.863us       0.000us         0.00%     186.391ms     194.157us           960  
+                             Torch-Compiled Region: 8/1         0.05%      18.990ms         0.52%     215.647ms       2.696ms       0.000us         0.00%     706.289ms       8.829ms            80  
+## Call CompiledFxGraph fkjbjyjmsaltxpshse7z7m3ojsi7...         0.31%     126.618ms         0.52%     215.566ms       2.695ms       0.000us         0.00%        1.170s      14.620ms            80  
+                             Torch-Compiled Region: 8/0         0.04%      18.273ms         0.51%     209.943ms       2.624ms       0.000us         0.00%     672.562ms       8.407ms            80  
+                                  hipModuleLaunchKernel         0.46%     189.470ms         0.46%     189.470ms       6.299us       0.000us         0.00%       0.000us       0.000us         30080  
+                                               aten::mv         0.10%      39.877ms         0.42%     173.112ms      10.991us       0.000us         0.00%     260.575ms      16.544us         15750  
+                               aten::linalg_vector_norm         0.22%      89.932ms         0.42%     170.991ms       9.494us      71.678ms         0.18%      71.678ms       3.980us         18010  
+autograd::engine::evaluate_function: torch::autograd...         0.11%      46.021ms         0.38%     156.734ms      15.928us       0.000us         0.00%     369.186ms      37.519us          9840  
+                               hipExtModuleLaunchKernel         0.38%     154.789ms         0.38%     154.789ms       6.436us       0.000us         0.00%       0.000us       0.000us         24050  
+enumerate(DataLoader)#_MultiProcessingDataLoaderIter...         0.36%     148.374ms         0.36%     150.084ms       1.876ms       0.000us         0.00%       0.000us       0.000us            80  
+## Call CompiledFxGraph fp6wt4t4dgtwpj2c3xjidd3vxnq6...         0.26%     108.762ms         0.35%     144.335ms     150.349us       0.000us         0.00%      41.520ms      43.250us           960  
+## Call CompiledFxGraph fj5bxb2uujbrixxccodxisrilnpc...         0.20%      83.344ms         0.35%     143.744ms       1.797ms       0.000us         0.00%     600.757ms       7.509ms            80  
+## Call CompiledFxGraph f25hmoyulivhos6inhntkluxzlvl...         0.20%      80.720ms         0.35%     142.237ms       1.778ms       0.000us         0.00%     579.327ms       7.242ms            80  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 41.174s
+Self CUDA time total: 40.244s
+
+
+=== sort by self_cuda_time_total ===
+
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               aten::mm         1.91%     787.655ms         2.33%     960.840ms      40.627us       15.234s        37.85%       15.234s     644.144us         23650  
+                        DistributedDataParallel.forward         0.00%       0.000us         0.00%       0.000us       0.000us        9.051s        22.49%        9.051s     113.134ms            80  
+## Call CompiledFxGraph fyr2nq6mlyxonqwdp437bbwvi5r4...         0.00%       0.000us         0.00%       0.000us       0.000us        7.055s        17.53%        7.055s       7.349ms           960  
+Cijk_Ailk_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT96x96...         0.00%       0.000us         0.00%       0.000us       0.000us        5.487s        13.63%        5.487s     723.888us          7580  
+Cijk_Alik_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT128x8...         0.00%       0.000us         0.00%       0.000us       0.000us        3.448s         8.57%        3.448s       1.539ms          2240  
+## Call CompiledFxGraph f2o6hymasih562kfjkjl3c4ncknq...         0.00%       0.000us         0.00%       0.000us       0.000us        3.371s         8.38%        3.371s       3.512ms           960  
+## Call CompiledFxGraph fewfypjtmguqdjrg2ax2ptdsu4rk...         0.00%       0.000us         0.00%       0.000us       0.000us        3.171s         7.88%        3.171s       2.832ms          1120  
+Cijk_Ailk_Bjlk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT64x96...         0.00%       0.000us         0.00%       0.000us       0.000us        2.988s         7.42%        2.988s     939.616us          3180  
+                            Optimizer.step#NorMuon.step         0.00%       0.000us         0.00%       0.000us       0.000us        2.863s         7.12%        2.863s     286.341ms            10  
+                           triton_tem_fused_mm_t_view_1         0.05%      21.374ms         0.07%      30.101ms      26.875us        2.710s         6.73%        2.710s       2.419ms          1120  
+                           triton_tem_fused_mm_t_view_1         0.00%       0.000us         0.00%       0.000us       0.000us        2.710s         6.73%        2.710s       2.419ms          1120  
+                                            aten::copy_         0.04%      16.924ms         0.14%      58.027ms      14.616us        2.490s         6.19%        2.490s     627.307us          3970  
+                                              aten::mul         0.17%      68.912ms         0.30%     124.036ms       7.845us        1.853s         4.60%        1.853s     117.213us         15810  
+                       DaoAILab::_causal_conv1d_bwd_cpp         0.24%      98.729ms         0.25%     104.613ms     108.972us        1.828s         4.54%        1.828s       1.904ms           960  
+void causal_conv1d_channellast_bwd_kernel<Causal_con...         0.00%       0.000us         0.00%       0.000us       0.000us        1.828s         4.54%        1.828s       1.904ms           960  
+## Call CompiledFxGraph f7ozq7duz6rb3bh3ewilir6zajec...         0.00%       0.000us         0.00%       0.000us       0.000us        1.549s         3.85%        1.549s       1.613ms           960  
+                                              aten::sub         0.00%       1.660ms         0.01%       2.567ms      16.043us        1.507s         3.74%        1.507s       9.416ms           160  
+void at::native::elementwise_kernel_manual_unroll<12...         0.00%       0.000us         0.00%       0.000us       0.000us        1.507s         3.74%        1.507s       9.416ms           160  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us        1.471s         3.66%        1.471s       9.194ms           160  
+## Call CompiledFxGraph f25v7jwuvyzkbdcdom2tokznj2yz...         0.00%       0.000us         0.00%       0.000us       0.000us        1.323s         3.29%        1.323s       1.181ms          1120  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us        1.221s         3.03%        1.221s     878.674us          1390  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us        1.212s         3.01%        1.212s     871.862us          1390  
+## Call CompiledFxGraph fkjbjyjmsaltxpshse7z7m3ojsi7...         0.00%       0.000us         0.00%       0.000us       0.000us        1.178s         2.93%        1.178s      14.724ms            80  
+triton_poi_fused__unsafe_view_cat_mul_silu_silu_back...         0.06%      25.128ms         0.09%      36.319ms      32.427us        1.175s         2.92%        1.175s       1.049ms          1120  
+triton_poi_fused__unsafe_view_cat_mul_silu_silu_back...         0.00%       0.000us         0.00%       0.000us       0.000us        1.175s         2.92%        1.175s       1.049ms          1120  
+                                             aten::add_         0.14%      57.815ms         0.29%     117.398ms       9.475us        1.172s         2.91%        1.172s      94.591us         12390  
+## Call CompiledFxGraph fj7s2hbbdzuac4zgfma6sy2z2r7l...         0.00%       0.000us         0.00%       0.000us       0.000us        1.106s         2.75%        1.106s      13.822ms            80  
+Cijk_Ailk_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT64x96...         0.00%       0.000us         0.00%       0.000us       0.000us        1.096s         2.72%        1.096s       1.442ms           760  
+void at::native::elementwise_kernel_manual_unroll<12...         0.00%       0.000us         0.00%       0.000us       0.000us     822.900ms         2.04%     822.900ms       2.057ms           400  
+                                              aten::div         0.16%      67.123ms         0.32%     133.376ms       7.276us     801.539ms         1.99%     801.539ms      43.728us         18330  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us     801.312ms         1.99%     801.312ms      65.897us         12160  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us     742.925ms         1.85%     742.925ms       4.643ms           160  
+                                              aten::exp         0.00%     783.796us         0.00%       1.165ms      14.565us     741.889ms         1.84%     741.889ms       9.274ms            80  
+                                             aten::exp_         0.00%     564.601us         0.00%       1.012ms      12.651us     729.103ms         1.81%     729.103ms       9.114ms            80  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us     702.410ms         1.75%     702.410ms     118.251us          5940  
+                       triton_tem_fused_cat_mm_t_view_1         0.04%      17.576ms         0.06%      24.248ms      25.259us     681.778ms         1.69%     681.778ms     710.186us           960  
+                       triton_tem_fused_cat_mm_t_view_1         0.00%       0.000us         0.00%       0.000us       0.000us     681.778ms         1.69%     681.778ms     710.186us           960  
+## Call CompiledFxGraph ftyssnehntynueijjpv4kuhssqut...         0.00%       0.000us         0.00%       0.000us       0.000us     651.815ms         1.62%     651.815ms     678.974us           960  
+## Call CompiledFxGraph fj5bxb2uujbrixxccodxisrilnpc...         0.00%       0.000us         0.00%       0.000us       0.000us     606.472ms         1.51%     606.472ms       7.581ms            80  
+Cijk_Alik_Bljk_HHS_BH_Bias_HA_S_SAV_UserArgs_MT96x12...         0.00%       0.000us         0.00%       0.000us       0.000us     605.099ms         1.50%     605.099ms     630.312us           960  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 41.174s
+Self CUDA time total: 40.244s
