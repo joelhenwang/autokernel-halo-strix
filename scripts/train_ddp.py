@@ -526,11 +526,18 @@ def average_grads(model, world_size):
 
 _consecutive_skips = 0
 
-def _complete_step(model, optimizer, scaler, scheduler, world_size, max_grad_norm, rank):
-    """Unscale, clip, step optimizer, update scaler. Returns grad_norm."""
+def _complete_step(model, optimizer, scaler, scheduler, world_size, max_grad_norm, rank, diag_writer=None):
+    """Unscale, clip, step optimizer, update scaler. Returns grad_norm.
+
+    If ``diag_writer`` is not None, it is invoked with ``model`` after clip
+    and before ``optimizer.zero_grad`` — grads are populated and (in finite
+    cases) post-clip. Used by the --diag-frozen-params diagnostic.
+    """
     global _consecutive_skips
     scaler.unscale_(optimizer)
     grad_norm = nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+    if diag_writer is not None:
+        diag_writer(model)
     if torch.isfinite(grad_norm):
         scaler.step(optimizer)
         _consecutive_skips = 0
@@ -726,6 +733,26 @@ def main():
     parser.add_argument("--activation-monitor-interval", type=int, default=100,
                         help="Sampling interval (optimizer steps) for "
                              "--activation-monitor. Default 100.")
+
+    # Track 1.1 (2026-05-10): step profiler. Writes torch.profiler Chrome
+    # trace + flat op table over the specified opt-step range. Rank-0 only.
+    # See docs/superpowers/plans/2026-05-10-odinflat-throughput-investigation-plan.md
+    parser.add_argument("--profile-steps", type=str, default="",
+                        help="Profile optimizer-step range 'start:end' "
+                             "(e.g. '30:40' profiles 10 steps). Writes "
+                             "profile.json (Chrome trace) and "
+                             "profile-summary.txt under $CKPT_DIR. "
+                             "Rank-0 only; empty=no profiling.")
+
+    # Track 3.A (2026-05-10): per-parameter grad-norm recorder for the
+    # frozen-blast-radius diagnostic. On each optimizer step, writes a
+    # JSONL line {step, params: [{name, grad_norm, is_none, is_zero}]}.
+    # Rank-0 only, before zero_grad, after clip. Intended for short
+    # (~50-step) diagnostic runs. See same plan doc.
+    parser.add_argument("--diag-frozen-params", type=str, default="",
+                        help="Path to JSONL file for per-param grad norms "
+                             "(Track 3.A diagnostic). Empty=disabled.")
+
     args = parser.parse_args()
 
     use_async = not args.no_async
@@ -1046,12 +1073,99 @@ def main():
     backwards_in_cycle = 0
 
     _rollback_restart = False
+
+    # Track 1.1: step profiler state. Rank-0 only.
+    _prof = None
+    _prof_start_step = -1
+    _prof_end_step = -1
+    if args.profile_steps and rank == 0:
+        try:
+            _prof_start_step, _prof_end_step = [int(x) for x in args.profile_steps.split(":")]
+        except ValueError as exc:
+            raise ValueError(
+                f"--profile-steps must be 'start:end' with ints, got "
+                f"{args.profile_steps!r}"
+            ) from exc
+        if _prof_end_step <= _prof_start_step:
+            raise ValueError(
+                f"--profile-steps end ({_prof_end_step}) must be > start "
+                f"({_prof_start_step})"
+            )
+        print(f"  [profiler] Armed for opt steps "
+              f"[{_prof_start_step}, {_prof_end_step})")
+
+    # Track 3.A: --diag-frozen-params JSONL writer. Rank-0 only.
+    _diag_fh = None
+    diag_writer = None
+    if args.diag_frozen_params and rank == 0:
+        os.makedirs(os.path.dirname(os.path.abspath(args.diag_frozen_params)) or ".",
+                    exist_ok=True)
+        _diag_fh = open(args.diag_frozen_params, "w")
+        print(f"  [diag-frozen-params] Writing per-param grads to "
+              f"{args.diag_frozen_params}")
+
+        def diag_writer(m):
+            """Closure over `global_step` + `_diag_fh`. Invoked post-clip,
+            pre-zero_grad by _complete_step."""
+            rec = {"step": global_step, "params": []}
+            for name, p in m.named_parameters():
+                if p.grad is None:
+                    rec["params"].append({
+                        "name": name, "grad_norm": None,
+                        "is_none": True, "is_zero": False,
+                    })
+                else:
+                    g = p.grad.detach()
+                    gn = float(g.norm().item())
+                    rec["params"].append({
+                        "name": name, "grad_norm": gn,
+                        "is_none": False, "is_zero": (gn == 0.0),
+                    })
+            _diag_fh.write(json.dumps(rec) + "\n")
+            _diag_fh.flush()
+
     try:
         for epoch in range(args.epochs):
             if _rollback_restart:
                 _rollback_restart = False
             sampler.set_epoch(epoch)
             for batch_idx, batch in enumerate(dataloader):
+                # Track 1.1: manage profiler lifecycle at opt-step boundaries.
+                # Only fires between microsteps when global_step has advanced.
+                if rank == 0 and _prof_start_step >= 0:
+                    if _prof is None and global_step == _prof_start_step:
+                        from torch.profiler import profile, ProfilerActivity
+                        _prof = profile(
+                            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+                            record_shapes=True,
+                            with_stack=True,
+                        )
+                        _prof.__enter__()
+                        print(f"  [profiler] Started capture at opt step "
+                              f"{global_step}")
+                    elif _prof is not None and global_step >= _prof_end_step:
+                        _prof.__exit__(None, None, None)
+                        out_dir = args.checkpoint_dir or "."
+                        os.makedirs(out_dir, exist_ok=True)
+                        try:
+                            _prof.export_chrome_trace(os.path.join(out_dir, "profile.json"))
+                        except Exception as exc:
+                            print(f"  [profiler] export_chrome_trace failed: {exc}")
+                        summary_path = os.path.join(out_dir, "profile-summary.txt")
+                        with open(summary_path, "w") as _fh:
+                            _fh.write(_prof.key_averages().table(
+                                sort_by="cuda_time_total", row_limit=40))
+                            _fh.write("\n\n=== sort by cpu_time_total ===\n\n")
+                            _fh.write(_prof.key_averages().table(
+                                sort_by="cpu_time_total", row_limit=40))
+                            _fh.write("\n\n=== sort by self_cuda_time_total ===\n\n")
+                            _fh.write(_prof.key_averages().table(
+                                sort_by="self_cuda_time_total", row_limit=40))
+                        print(f"  [profiler] Wrote {summary_path} and "
+                              f"{out_dir}/profile.json at opt step {global_step}")
+                        _prof = None
+                        _prof_start_step = -1  # disable re-entry
+
                 # Dataloader yields (input_ids, targets, doc_ids) post-Sprint-1.
                 # Accept legacy 2-tuples as well, synthesizing zero doc_ids.
                 if len(batch) == 3:
@@ -1165,6 +1279,7 @@ def main():
                     last_grad_norm = _complete_step(
                         model, optimizer, scaler, scheduler,
                         world_size, args.max_grad_norm, rank,
+                        diag_writer=diag_writer,
                     )
                     global_step += 1
                     # Bug-fix: completed optimizer step consumed this cycle's
@@ -1325,6 +1440,7 @@ def main():
                     last_grad_norm = _complete_step(
                         model, optimizer, scaler, scheduler,
                         world_size, args.max_grad_norm, rank,
+                        diag_writer=diag_writer,
                     )
                     global_step += 1
                     pending_handles = None
@@ -1354,7 +1470,8 @@ def main():
                 if use_fp16:
                     decompress_grads_fp32(model)
                 _complete_step(model, optimizer, scaler, scheduler,
-                               world_size, args.max_grad_norm, rank)
+                               world_size, args.max_grad_norm, rank,
+                               diag_writer=diag_writer)
                 global_step += 1
                 backwards_in_cycle = 0
             else:
@@ -1366,6 +1483,35 @@ def main():
     except KeyboardInterrupt:
         if rank == 0:
             print(f"\nInterrupted at step {global_step}")
+
+    # Track 1.1: close profile if training ended mid-capture (flushes trace).
+    if rank == 0 and _prof is not None:
+        try:
+            _prof.__exit__(None, None, None)
+            out_dir = args.checkpoint_dir or "."
+            os.makedirs(out_dir, exist_ok=True)
+            try:
+                _prof.export_chrome_trace(os.path.join(out_dir, "profile.json"))
+            except Exception as exc:
+                print(f"  [profiler] export_chrome_trace failed at shutdown: {exc}")
+            with open(os.path.join(out_dir, "profile-summary.txt"), "w") as _fh:
+                _fh.write(_prof.key_averages().table(
+                    sort_by="cuda_time_total", row_limit=40))
+                _fh.write("\n\n=== sort by cpu_time_total ===\n\n")
+                _fh.write(_prof.key_averages().table(
+                    sort_by="cpu_time_total", row_limit=40))
+            print(f"  [profiler] Flushed profile on shutdown ({out_dir})")
+        except Exception as exc:
+            print(f"  [profiler] shutdown error: {exc}")
+
+    # Track 3.A: close diag JSONL.
+    if _diag_fh is not None:
+        try:
+            _diag_fh.close()
+            print(f"  [diag-frozen-params] Closed "
+                  f"{args.diag_frozen_params}")
+        except Exception:
+            pass
 
     # Final checkpoint
     if rank == 0 and args.checkpoint_dir:
