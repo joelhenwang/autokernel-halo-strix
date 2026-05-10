@@ -91,12 +91,27 @@ eager-fallback for fp32. Ship-gate measurement pending.
 - **Sprint 3A (OdinFlat)**: DROP `--optimize-kernels`. Use Sprint
   3A-confirm recipe (validated at loss 3.15 @ step 2000). Expected
   ~61h wall.
-- **Sprint 3B (OdinHalo)**: needs 500-step verification probe with
-  post-fix `--optimize-kernels` before committing. Three options:
-  1. Conservative: drop `--optimize-kernels`, ~77h wall
-  2. Pre-fix-buggy: keep broken silu path, 48h wall, suboptimal model
-  3. Post-fix-validated: run 500-step probe, ship if stable, 48h wall
+- **Sprint 3B (OdinHalo)**: DROP `--optimize-kernels`. Phase G 1000-step
+  verification diverged at step 750 despite reaching 0.76 BETTER loss
+  than B4 pre-fix through step 700. Ship recipe: lr_2d=2e-3, no
+  `--optimize-kernels`. Expected ~77h wall (vs 48h with OK).
 - **`--use-fused-zloss`**: remains opt-in, not validated end-to-end.
+- **Triton fused SwiGLU (Phase D.B)**: isolated bench shows 0.99× vs
+  autograd-safe HIP at production shape (FAIL ship gate >= 1.05×).
+  Kept as infrastructure for future kernels.
+
+### Phase I + G findings
+
+- **Phase I** (Triton ship-gate): Triton 1.43× vs eager, 0.99× vs HIP.
+  HIP itself is 1.45× eager. If Sprint 3A could stabilize with
+  `--optimize-kernels`, there would be ~5-7% total step wall gain from
+  HIP path alone. But Phase C/G divergence blocks this at production
+  LRs. See `docs/perf/triton-swiglu-ship-gate-bench.md`.
+- **Phase G** (OdinHalo 1000-step verify): diverged step 750 at
+  lr_2d=2e-3. Same class of problem as Phase C OdinFlat at 5e-3 (3×
+  later due to lower LR). Root cause: unfrozen 44M params at init
+  produce out-of-equilibrium gradients that interact with NorMuon+fp16.
+  See `docs/perf/phase-g-findings.md`.
 
 ### Shipped despite Phase C outcome
 
