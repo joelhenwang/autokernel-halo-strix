@@ -151,10 +151,28 @@ class _RMSNormReplacement(nn.Module):
         self.weight = original.weight
         self.eps = getattr(original, "eps", 1e-6)
         self.kernel_fn = kernel_fn
+        # Phase III fix (2026-05-09): register the autograd-backed custom op
+        # and use it instead of calling kernel_fn directly. Direct calls to
+        # the pybind HIP kernel return tensors with no grad_fn, silently
+        # blocking gradient flow through this node during training — which
+        # manifested as "forward is correct but training frozen" (see
+        # docs/perf/odinflat-bisect-findings.md).
+        try:
+            import kernels.hip._torch_ops  # noqa: F401  — triggers registration
+            self._autograd_op = torch.ops.autokernel.rmsnorm
+        except Exception:  # noqa: BLE001
+            self._autograd_op = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         orig_shape = x.shape
         if x.dtype == torch.float16:
+            if self._autograd_op is not None:
+                # Autograd-registered path (production, training-safe).
+                flat = x.reshape(-1, x.shape[-1])
+                out = self._autograd_op(flat, self.weight)
+                return out.view(orig_shape)
+            # Fallback: raw kernel call. UNSAFE for training — use only for
+            # inference or benchmarking where autograd isn't needed.
             return self.kernel_fn(x.view(-1, x.shape[-1]), self.weight).view(orig_shape)
         norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
         return x * norm * self.weight
@@ -183,6 +201,9 @@ class _SiluGateMulReplacement(nn.Module):
         self.down_proj = getattr(original, down_attr)
         self.up_proj = getattr(original, up_attr)
         self.kernel_fn = kernel_fn
+        # See note on _FusedSwiGLUReplacement: the autograd-registered
+        # silu_gate_mul op causes gradient explosion on OdinFlat despite
+        # the forward matching reference. Keep the original raw-kernel path.
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate = self.gate_proj(x)
@@ -536,6 +557,16 @@ class _FusedSwiGLUReplacement(nn.Module):
         self.w_gate_up = original.w_gate_up
         self.w_down = original.w_down
         self.kernel_fn = kernel_fn
+        # Phase III note (2026-05-09): we DO NOT route this through the
+        # autograd-registered torch.ops.autokernel.silu_gate_mul op despite
+        # the same pattern existing. Empirically (P3-FIXED-v2 probe 2026-05-09)
+        # using the autograd op caused gradient explosion on OdinFlat via
+        # compile_zones+fp16 autocast (scale collapses to 1e-2, maxabs
+        # explodes to 10000+). The raw kernel_fn path (original) trains
+        # correctly at loss parity (Phase II P2: 4.67 vs baseline 4.70).
+        # Hypothesis: the HIP silu_gate_mul_backward kernel has subtly
+        # wrong gradient math that triggers on OdinFlat's deep SwiGLU
+        # chain. Leaving original; TODO: investigate backward numerics.
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate, up = self.w_gate_up(x).chunk(2, dim=-1)
