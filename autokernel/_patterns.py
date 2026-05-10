@@ -185,12 +185,22 @@ class _LayerNormReplacement(nn.Module):
         self.bias = original.bias
         self.eps = original.eps
         self.normalized_shape = original.normalized_shape
-        self.kernel_fn = kernel_fn
+        self.kernel_fn = kernel_fn       # retained for inference/debug
+        # Phase B.3 fix (2026-05-11): no HIP LayerNorm backward exists in
+        # kernels/hip/ (only layernorm.py forward; no layernorm_backward.py).
+        # Using raw self.kernel_fn(...) severed gradient flow to the inputs
+        # of every LayerNorm's upstream projection. Route through
+        # F.layer_norm, which Inductor can fuse under torch.compile. We
+        # lose any HIP forward speedup, but correctness is restored.
+        #
+        # If a HIP LayerNorm backward is added later, register the
+        # autokernel::layernorm custom op in kernels/hip/_torch_ops.py and
+        # swap this forward to use it.
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.dtype == torch.float16:
-            return self.kernel_fn(x, self.weight, self.bias)
-        return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
+        return F.layer_norm(
+            x, self.normalized_shape, self.weight, self.bias, self.eps
+        )
 
 
 class _SiluGateMulReplacement(nn.Module):
@@ -200,16 +210,24 @@ class _SiluGateMulReplacement(nn.Module):
         self.gate_proj = getattr(original, gate_attr)
         self.down_proj = getattr(original, down_attr)
         self.up_proj = getattr(original, up_attr)
-        self.kernel_fn = kernel_fn
-        # See note on _FusedSwiGLUReplacement: the autograd-registered
-        # silu_gate_mul op causes gradient explosion on OdinFlat despite
-        # the forward matching reference. Keep the original raw-kernel path.
+        self.kernel_fn = kernel_fn       # retained for inference/debug
+        # Phase B.2 fix (2026-05-11): wire the autograd-safe custom op.
+        # See _FusedSwiGLUReplacement (B.1) for the mechanism. The previous
+        # comment claiming "autograd op causes gradient explosion" was an
+        # artifact of broken LR/init for V2 probes in the prior investigation;
+        # direct autograd tests in test_silu_gate_mul_backward.py show the
+        # backward is numerically correct. Re-enabled.
+        try:
+            import kernels.hip._torch_ops  # noqa: F401  — register side-effect
+            self._autograd_op = torch.ops.autokernel.silu_gate_mul
+        except Exception:  # noqa: BLE001
+            self._autograd_op = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate = self.gate_proj(x)
         up = self.up_proj(x)
-        if gate.dtype == torch.float16:
-            activated = self.kernel_fn(gate.contiguous(), up.contiguous())
+        if gate.dtype == torch.float16 and self._autograd_op is not None:
+            activated = self._autograd_op(gate.contiguous(), up.contiguous())
         else:
             activated = F.silu(gate) * up
         return self.down_proj(activated)
@@ -249,6 +267,15 @@ class _FusedQKVAttentionReplacement(nn.Module):
             self._cos = None
             self._sin = None
 
+        # Phase B.4 fix (2026-05-11): autograd-safe RoPE handle. The registered
+        # custom op wraps the HIP kernel AND its backward. Calling it instead
+        # of the raw rotary_fn preserves gradient flow to q/k/v upstream.
+        try:
+            import kernels.hip._torch_ops  # noqa: F401  — register side-effect
+            self._autograd_rotary = torch.ops.autokernel.rotary_emb_fp32
+        except Exception:  # noqa: BLE001
+            self._autograd_rotary = None
+
         # CodaAttention extensions: XSA + QK-Norm
         self.exclusive = getattr(original, "exclusive", False)
         self.qk_norm = getattr(original, "qk_norm", False)
@@ -273,8 +300,17 @@ class _FusedQKVAttentionReplacement(nn.Module):
                 cos, sin = self._cos[:T], self._sin[:T]
             else:
                 raise RuntimeError("No complex freqs_cis available for rotary")
-            q = self.rotary_fn(q, cos, sin)
-            k = self.rotary_fn(k, cos, sin)
+            # Phase B.4 fix (2026-05-11): route RoPE through the autograd-
+            # registered custom op instead of the raw rotary_fn pybind call.
+            # See docs/perf/autokernel-deep-analysis.md §3 for mechanism.
+            # Fallback to self.rotary_fn only if the autograd op isn't
+            # available (e.g. missing HIP module).
+            if self._autograd_rotary is not None:
+                q = self._autograd_rotary(q, cos, sin)
+                k = self._autograd_rotary(k, cos, sin)
+            else:
+                q = self.rotary_fn(q, cos, sin)
+                k = self.rotary_fn(k, cos, sin)
         else:
             try:
                 from models.llama_7b import apply_rotary_emb
@@ -350,12 +386,22 @@ class _FusedResidualRMSNormBlockReplacement(nn.Module):
         self.attention_norm = getattr(original, attn_norm_attr)
         self.feed_forward = getattr(original, ffn_attr)
         self.ffn_norm_weight = getattr(original, ffn_norm_attr).weight
-        self.kernel_fn_dual = kernel_fn_dual
+        self.kernel_fn_dual = kernel_fn_dual     # retained for inference/debug
+        # Phase B.4b fix (2026-05-11): route through the autograd-registered
+        # custom op so gradients flow back through the fused add+rmsnorm.
+        # Without this, `normed` had grad_fn=None and severed the gradient
+        # chain into feed_forward → ffn_norm_weight, and back through the
+        # residual path to attention. Similar blast radius to the SwiGLU bug.
+        try:
+            import kernels.hip._torch_ops  # noqa: F401  — register side-effect
+            self._autograd_dual = torch.ops.autokernel.fused_res_rmsnorm
+        except Exception:  # noqa: BLE001
+            self._autograd_dual = None
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         attn_out = self.attention(self.attention_norm(x), freqs_cis)
-        if attn_out.dtype == torch.float16:
-            hidden, normed = self.kernel_fn_dual(
+        if attn_out.dtype == torch.float16 and self._autograd_dual is not None:
+            hidden, normed = self._autograd_dual(
                 attn_out.view(-1, attn_out.shape[-1]),
                 x.view(-1, x.shape[-1]),
                 self.ffn_norm_weight,
@@ -556,34 +602,39 @@ class _FusedSwiGLUReplacement(nn.Module):
         super().__init__()
         self.w_gate_up = original.w_gate_up
         self.w_down = original.w_down
-        self.kernel_fn = kernel_fn
-        # IMPORTANT (2026-05-10 Phase V finding): this replacement has
-        # two failure modes, both bad:
-        #   - If self.kernel_fn is called directly (current code): the
-        #     output has no grad_fn. w_gate_up silently freezes. Forward
-        #     is +30% faster but training quality degrades over long
-        #     horizons (Phase V V1: loss +0.65 at step 2000 vs baseline).
-        #   - If routed through torch.ops.autokernel.silu_gate_mul (which
-        #     has proper autograd): training is correct but throughput
-        #     DROPS BELOW baseline (~31K → ~30.9K tok/s) because the
-        #     save-for-backward + HIP backward overhead exceeds the
-        #     forward savings (Phase V V2 measurement).
+        self.kernel_fn = kernel_fn       # retained for inference/debug only
+        # Phase B.1 fix (2026-05-11): wire autograd-safe custom op.
         #
-        # Conclusion: this replacement provides no net benefit for
-        # OdinFlat. Use autokernel ONLY for other models (e.g. OdinHalo
-        # where iter_norm resets mask the silent-freeze effect) or
-        # investigate a better Triton-based rewrite.
+        # History:
+        #   - Pre-fix: `self.kernel_fn(gate, up)` returned a tensor with
+        #     grad_fn=None, silently severing gradient flow to w_gate_up.
+        #     Resulted in 14 x w_gate_up.weight frozen (~44 M params) and
+        #     14 x ffn_norm.weight receiving grad=0 (Track 3.A evidence).
+        #   - Phase V V2: routing through torch.ops.autokernel.silu_gate_mul
+        #     (which has registered autograd) dropped throughput below
+        #     baseline by ~1 % because the HIP forward savings don't
+        #     compensate for the backward-kernel launch + save-for-backward
+        #     overhead. See docs/perf/autokernel-deep-analysis.md §5.
         #
-        # Keeping the raw-kernel path (the "wrong but fast" one) for
-        # backward compatibility with models that don't care about
-        # w_gate_up gradient flow. OdinFlat's Sprint 3A recipe should
-        # NOT enable --optimize-kernels.
+        # Decision: ship correctness over raw throughput. The autograd-safe
+        # path is now the default. Models that want the illusory +30 % at
+        # the cost of frozen params can fall back via a Triton-fused rewrite
+        # (Phase D.B) when it ships. Raw kernel_fn path remains callable
+        # via `self.kernel_fn(...)` for isolated-bench use, but forward()
+        # no longer invokes it.
+        try:
+            import kernels.hip._torch_ops  # noqa: F401  — register side-effect
+            self._autograd_op = torch.ops.autokernel.silu_gate_mul
+        except Exception:  # noqa: BLE001
+            self._autograd_op = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate, up = self.w_gate_up(x).chunk(2, dim=-1)
-        if gate.dtype == torch.float16:
-            activated = self.kernel_fn(gate.contiguous(), up.contiguous())
+        if gate.dtype == torch.float16 and self._autograd_op is not None:
+            # Autograd-safe path (Phase B.1 fix).
+            activated = self._autograd_op(gate.contiguous(), up.contiguous())
         else:
+            # Eager / fp32 fallback — Inductor can fuse this well under compile.
             activated = F.silu(gate) * up
         return self.w_down(activated)
 

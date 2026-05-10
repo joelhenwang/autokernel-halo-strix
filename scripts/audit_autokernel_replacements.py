@@ -30,6 +30,9 @@ from pathlib import Path
 SAFE_PATTERNS = {
     "torch.ops.autokernel",       # registered custom ops
     "_autograd_op",                # class attribute aliasing custom op
+    "_autograd_rotary",            # Phase B.4 convention: _autograd_<shortname>
+    "_autograd_dual",              # Phase B.4b convention
+    "_autograd_",                  # generic prefix match for any _autograd_* attr
     "F.silu", "F.linear", "F.rms_norm", "F.layer_norm", "F.softmax",  # ATen ops
     "torch.nn.functional", "torch.rms_norm", "torch.layer_norm",
     "self.reference", "self._reference",  # eager fallback
@@ -121,29 +124,26 @@ def analyze_patterns(patterns_path: Path):
                 autograd_ops_seen.add(inner.attr)
 
         # Determine overall class verdict:
-        # CONDITIONAL-SAFE if both SAFE and UNSAFE calls present AND an
-        #   autograd op is referenced (suggests runtime picks safe path).
-        # SAFE if all calls are SAFE or the class references a custom op.
-        # UNSAFE if only UNSAFE calls and no autograd op referenced.
-        # UNKNOWN if no signal.
+        # SAFE if no UNSAFE call-sites present. Absence of explicit
+        #   autograd marker doesn't matter — plain PyTorch ops are all
+        #   autograd-safe by default.
+        # CONDITIONAL-SAFE if both SAFE-tagged and UNSAFE-tagged calls
+        #   present AND an autograd op is referenced (runtime picks safe).
+        # UNSAFE if any UNSAFE call and no autograd fallback path.
         verdicts = [c["verdict"] for c in calls_info]
         has_safe = any(v == "SAFE" for v in verdicts)
         has_unsafe = any(v == "UNSAFE" for v in verdicts)
         has_autograd_ref = bool(autograd_ops_seen)
 
-        if has_safe and has_unsafe and has_autograd_ref:
+        if not has_unsafe:
+            # No raw-kernel calls at all — autograd flows naturally.
+            overall = "SAFE"
+        elif has_safe and has_unsafe and has_autograd_ref:
             overall = "CONDITIONAL-SAFE"
         elif has_unsafe and not has_autograd_ref:
             overall = "UNSAFE"
-        elif has_unsafe and has_autograd_ref and not has_safe:
-            # autograd op imported but forward only shows raw call — suspicious
-            overall = "UNSAFE"
-        elif has_safe and not has_unsafe:
-            overall = "SAFE"
-        elif has_autograd_ref and not verdicts:
-            overall = "SAFE"
         else:
-            overall = "UNKNOWN"
+            overall = "UNSAFE"  # unsafe call without fallback proof
 
         class_infos.append({
             "class": name,

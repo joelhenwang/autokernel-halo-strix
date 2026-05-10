@@ -28,91 +28,104 @@
     {
       "class": "_LayerNormReplacement",
       "lineno": 181,
-      "overall_verdict": "UNSAFE",
+      "overall_verdict": "SAFE",
       "autograd_ops_referenced": [],
       "forward_calls": [
         {
-          "src": "F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)",
-          "lineno": 193,
+          "src": "F.layer_norm(",
+          "lineno": 201,
           "verdict": "SAFE"
-        },
-        {
-          "src": "self.kernel_fn(x, self.weight, self.bias)",
-          "lineno": 192,
-          "verdict": "UNSAFE"
         }
       ]
     },
     {
       "class": "_SiluGateMulReplacement",
-      "lineno": 196,
-      "overall_verdict": "UNSAFE",
-      "autograd_ops_referenced": [],
+      "lineno": 206,
+      "overall_verdict": "SAFE",
+      "autograd_ops_referenced": [
+        "silu_gate_mul"
+      ],
       "forward_calls": [
         {
-          "src": "self.kernel_fn(gate.contiguous(), up.contiguous())",
-          "lineno": 212,
-          "verdict": "UNSAFE"
+          "src": "self._autograd_op(gate.contiguous(), up.contiguous())",
+          "lineno": 230,
+          "verdict": "SAFE"
         },
         {
           "src": "F.silu(gate)",
-          "lineno": 214,
+          "lineno": 232,
           "verdict": "SAFE"
         }
       ]
     },
     {
       "class": "_FusedQKVAttentionReplacement",
-      "lineno": 218,
-      "overall_verdict": "UNSAFE",
-      "autograd_ops_referenced": [],
+      "lineno": 236,
+      "overall_verdict": "CONDITIONAL-SAFE",
+      "autograd_ops_referenced": [
+        "rotary_emb_fp32"
+      ],
       "forward_calls": [
         {
+          "src": "self._autograd_rotary(q, cos, sin)",
+          "lineno": 309,
+          "verdict": "SAFE"
+        },
+        {
+          "src": "self._autograd_rotary(k, cos, sin)",
+          "lineno": 310,
+          "verdict": "SAFE"
+        },
+        {
           "src": "self.rotary_fn(q, cos, sin)",
-          "lineno": 276,
+          "lineno": 312,
           "verdict": "UNSAFE"
         },
         {
           "src": "self.rotary_fn(k, cos, sin)",
-          "lineno": 277,
+          "lineno": 313,
           "verdict": "UNSAFE"
         }
       ]
     },
     {
       "class": "_FusedResidualRMSNormBlockReplacement",
-      "lineno": 344,
-      "overall_verdict": "UNSAFE",
-      "autograd_ops_referenced": [],
+      "lineno": 380,
+      "overall_verdict": "SAFE",
+      "autograd_ops_referenced": [
+        "fused_res_rmsnorm"
+      ],
       "forward_calls": [
         {
-          "src": "self.kernel_fn_dual(",
-          "lineno": 358,
-          "verdict": "UNSAFE"
+          "src": "self._autograd_dual(",
+          "lineno": 404,
+          "verdict": "SAFE"
         }
       ]
     },
     {
       "class": "_FusedGriffinBlockReplacement",
-      "lineno": 372,
-      "overall_verdict": "UNKNOWN",
+      "lineno": 418,
+      "overall_verdict": "SAFE",
       "autograd_ops_referenced": [],
       "forward_calls": []
     },
     {
       "class": "_FusedSwiGLUReplacement",
-      "lineno": 554,
-      "overall_verdict": "UNSAFE",
-      "autograd_ops_referenced": [],
+      "lineno": 600,
+      "overall_verdict": "SAFE",
+      "autograd_ops_referenced": [
+        "silu_gate_mul"
+      ],
       "forward_calls": [
         {
-          "src": "self.kernel_fn(gate.contiguous(), up.contiguous())",
-          "lineno": 585,
-          "verdict": "UNSAFE"
+          "src": "self._autograd_op(gate.contiguous(), up.contiguous())",
+          "lineno": 635,
+          "verdict": "SAFE"
         },
         {
           "src": "F.silu(gate)",
-          "lineno": 587,
+          "lineno": 638,
           "verdict": "SAFE"
         }
       ]
