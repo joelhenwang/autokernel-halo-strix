@@ -5,6 +5,102 @@
 
 ---
 
+## Autokernel Remediation (2026-05-11, IN PROGRESS)
+
+**Context:** OdinFlat throughput investigation (2026-05-10) revealed that
+`--optimize-kernels` silently froze 44M of OdinFlat's 121M params via
+raw pybind11 HIP kernel calls that returned `grad_fn=None`. This section
+tracks the multi-phase remediation.
+
+### Completed phases
+
+**Phase A.1 (static audit)** — `scripts/audit_autokernel_replacements.py`:
+AST-based classifier for every `_*Replacement` class. Pre-fix: 5 of 7
+UNSAFE. Post-Phase-B: 0 UNSAFE, 5 SAFE, 2 CONDITIONAL-SAFE. Committed.
+
+**Phase A.2 (coverage tool)** — `scripts/autokernel_coverage_matrix.py`:
+iterates 14 production-candidate models, outputs pattern-firing matrix.
+Runs on Machine B post-B4.
+
+**Phase A.3 (batch runner)** — `scripts/audit_phase_a3_batch.sh` +
+`scripts/analyze_audit_phase_a3.py`: 14-model × 3-config (V0/V1/V3)
+diagnostic probes with `--diag-frozen-params`. Awaiting Machine B.
+
+**Phase B (fixes)** — all 5 UNSAFE replacements wired through registered
+custom ops:
+
+| Replacement | Fix | Route |
+|---|---|---|
+| `_FusedSwiGLUReplacement` | B.1 | `torch.ops.autokernel.silu_gate_mul` |
+| `_SiluGateMulReplacement` | B.2 | `torch.ops.autokernel.silu_gate_mul` |
+| `_LayerNormReplacement` | B.3 | `F.layer_norm` (no HIP backward exists) |
+| `_FusedQKVAttentionReplacement` | B.4 | `torch.ops.autokernel.rotary_emb_fp32` |
+| `_FusedResidualRMSNormBlockReplacement` | B.4b | `torch.ops.autokernel.fused_res_rmsnorm` |
+
+**Phase B.5 (fused z-loss)** — `_CrossEntropyHIP` extended with
+`z_loss_weight` parameter. Forces tiny mode (saves logits for softmax
+recompute); backward adds `z_w*2*lse[i]/N * softmax[i,:]` to grad_logits.
+`ce_full` + `train_ddp.py --use-fused-zloss` opt-in flag. Eliminates the
+16.7% z-loss overhead identified in Track 1.3 profile.
+
+**Phase B.6 (tests)** — `scripts/test_phase_b_autograd_safety.py`:
+7 tests (5 per-replacement grad-flow + CE z-loss grad parity vs eager).
+
+**Phase D.A (Triton harness)** — foundation for Phase D kernels:
+  - `autokernel/triton_base.py`: TritonAutogradFunction base
+  - `autokernel/triton_autotune.py`: shape-keyed, git-SHA-salted cache
+  - `scripts/kernel_parity_harness.py`: fwd+bwd parity runner
+  - `scripts/kernel_bench_harness.py`: isolated throughput bench
+  - `knowledge/kernels/triton_author_guide.md`: authoring rules
+
+**Phase D.B (first kernel)** — `kernels/triton/fused_swiglu.py`:
+Triton fwd + bwd for `silu(gate) * up`, wrapped in autograd.Function,
+eager-fallback for fp32. Ship-gate measurement pending.
+
+**Phase E (runtime guardrails)**:
+  - E.2 `scripts/test_autokernel_autograd_safety.py`: CI smoke test on
+    OdinFlatMini with --optimize-kernels. CUDA-only.
+  - E.3 `train_ddp.py` preflight: auto-dispatches dummy batch on launch,
+    aborts if any param fails grad check.
+  - E.4 `CONSTRAINTS.md`: autograd-safety rule + Triton authoring rules.
+
+**Phase F (docs)**:
+  - `knowledge/training/autograd_safety_hip_kernels.md` (principle + workflow)
+  - `AGENTS.md` training-gotchas updated
+  - `docs/perf/autokernel-deep-analysis.md` (from 2026-05-10)
+
+### In progress / pending
+
+- **B4 probe (OdinHalo 2000-step `--optimize-kernels`)** — running since
+  ~10:31. Currently step 1700, loss 2.76, tok/s ~30K. Uses pre-B code
+  (launched before B.1-B.4 committed). If loss @ 2000 < 3.8 → OdinHalo
+  is NOT affected by the silent-freeze (iter_norm resets mask it).
+- **Phase A.3 batch** — queues after B4 completes on Machine B.
+- **Phase A.4 synthesis** — waits on A.3.
+- **Phase C (verification probes with Phase B fixes)** — 2000-step
+  probes on OdinFlat + OdinHalo with new code. Determines Sprint 3A/3B
+  final recipes.
+- **Sprint 3A + 3B launch** — blocked on Phase C.
+- **Phase D.B-D kernels** — ship-gate measurements after Phase C
+  establishes baseline.
+
+### Commit history (this remediation)
+
+| Commit | Phase | Summary |
+|---|---|---|
+| 5b5ccaf | Track 1.1+3.A prereq | --profile-steps + --diag-frozen-params flags |
+| 85f937e | Track 1.2-1.3 | OdinFlat step profile (attn 7.5%, zloss 16.7%) |
+| 63de5be | Track 2.a | QKV fusion committed |
+| 0e4c23b | Track 3.F (earlier) | Original deep-analysis doc |
+| 5ebe594 | Phase B.1-B.4 | 5 UNSAFE replacements fixed |
+| f24d8dd | Phase B.5+6 | Fused z-loss in _CrossEntropyHIP + tests |
+| Phase D.A | D.A commit | Triton kernel harness + guide |
+| Phase D.B | D.B commit | Triton fused SwiGLU |
+| 404b140 | Phase E | CI test + runtime preflight + CONSTRAINTS |
+| 2a4dcb4 | Phase F.2-3 | autograd_safety doc + AGENTS.md update |
+
+---
+
 ## Research: ZAYA1-8B Findings for Odin (2026-05-07)
 
 **Status:** Research dive complete; synthesis doc + AP-trimming recipe shipped.
