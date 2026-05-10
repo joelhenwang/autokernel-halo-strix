@@ -47,6 +47,7 @@ LR=1e-3 BLOCK=256 BATCH=16 ACCUM=8 \
 WARMUP_STEPS=300 CHECKPOINT_INTERVAL=500 MAX_GRAD_NORM=0.8 \
 NUM_WORKERS=12 \
 CKPT_DIR="$CKPT" \
+MASTER_PORT=29511 \
 EXTRA_FLAGS='--max-steps 2000 --optimize-kernels --imu1-groups --normuon --lr-2d 2e-3 --lr-1d 8e-4 --intra-doc-mask --value-residuals --head-gating --z-loss 1e-4 --z-loss-fraction 1.0 --attn-softcap 50.0 --activation-monitor --activation-monitor-interval 200 --auto-eval --diag-frozen-params checkpoints/odinhalo-b4-probe/diag.jsonl' \
 bash scripts/launch_ddp.sh > "$CKPT/launch.log" 2>&1
 
