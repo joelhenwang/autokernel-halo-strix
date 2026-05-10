@@ -27,10 +27,16 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
+        # Cache the normalized-shape tuple expected by F.rms_norm.
+        self._normalized_shape = (dim,)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * norm * self.weight
+        # Use torch.nn.functional.rms_norm which Inductor sees as a single
+        # native op and fuses with neighboring operations (residual add,
+        # downstream projections). Switched from manual x*rsqrt(mean(x^2))
+        # 2026-05-10: native path is equivalent numerically and unlocks
+        # Inductor-level fusion under compile_zones.
+        return F.rms_norm(x, self._normalized_shape, self.weight, self.eps)
 
 
 class SwiGLU(nn.Module):
