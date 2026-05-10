@@ -507,6 +507,10 @@ def allreduce_grads_async(model):
         if p.grad is not None:
             handle = dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM, async_op=True)
             handles.append(handle)
+    # v3 T-0.6 DDP trace: count this call; bytes estimated from param grads.
+    _ddp_trace_record_allreduce(
+        model, count_mode="async",
+    )
     return handles
 
 
@@ -515,6 +519,117 @@ def allreduce_grads_sync(model):
     for p in model.parameters():
         if p.grad is not None:
             dist.all_reduce(p.grad.data, op=dist.ReduceOp.SUM)
+    _ddp_trace_record_allreduce(
+        model, count_mode="sync",
+    )
+
+
+# v3 T-0.6 DDP allreduce trace state (rank-0 emission; see _ddp_trace_emit
+# called from optimizer-step boundary).
+_DDP_TRACE_STATE = {
+    "step": 0,
+    "allreduce_count": 0,
+    "allreduce_bytes": 0,
+    "first_allreduce_wall_ms": -1.0,
+    "last_allreduce_wall_ms": -1.0,
+    "backward_start_wall_ms": -1.0,
+    "backward_end_wall_ms": -1.0,
+    "accum_steps": 8,
+    "bucket_cap_mb": 25,
+    "gradient_as_bucket_view": False,
+    "static_graph": False,
+    "enabled": False,      # set True by trainer main() when DDP is in use
+    "path": None,          # JSONL path
+    "assert_no_sync": False,
+}
+
+
+def _ddp_trace_record_allreduce(model, count_mode: str):
+    """Called from the two allreduce helpers to count + time each call."""
+    import time as _t
+    state = _DDP_TRACE_STATE
+    if not state["enabled"]:
+        return
+    wall_ms = _t.perf_counter() * 1000.0
+    state["allreduce_count"] += 1
+    if state["first_allreduce_wall_ms"] < 0:
+        state["first_allreduce_wall_ms"] = wall_ms
+    state["last_allreduce_wall_ms"] = wall_ms
+    # Bytes estimate: sum of grad.numel() * 2 (fp16 compressed if use_fp16)
+    # or *4 (fp32). We approximate as fp16 since that's our default compress path.
+    if state["allreduce_bytes"] == 0:
+        nbytes = 0
+        for p in model.parameters():
+            if p.grad is not None:
+                nbytes += p.grad.numel() * 2  # fp16-compressed grad
+        state["allreduce_bytes"] = nbytes
+
+
+def _ddp_trace_emit(world_size: int, rank: int):
+    """v3 T-0.6 emit one JSONL record per opt step (rank 0 only)."""
+    import json as _json
+    state = _DDP_TRACE_STATE
+    if not state["enabled"] or rank != 0 or state["path"] is None:
+        return
+    # Only emit if at least one allreduce happened this step (otherwise it's
+    # an empty cycle after max-steps flush).
+    if state["allreduce_count"] == 0:
+        return
+    total_ms = (state["last_allreduce_wall_ms"]
+                - state["first_allreduce_wall_ms"])
+    bwd_start = state["backward_start_wall_ms"]
+    first_ar_offset = (state["first_allreduce_wall_ms"] - bwd_start
+                       if bwd_start > 0 else 0.0)
+    bwd_window = (state["backward_end_wall_ms"] - bwd_start
+                  if bwd_start > 0 and state["backward_end_wall_ms"] > 0 else 0.0)
+    overlap_est = 0.0
+    if bwd_window > 0 and total_ms > 0:
+        # Overlap = fraction of allreduce that happens during backward window
+        ar_end_offset = state["last_allreduce_wall_ms"] - bwd_start
+        overlapping = max(0.0, min(bwd_window, ar_end_offset)
+                          - max(0.0, first_ar_offset))
+        overlap_est = overlapping / total_ms if total_ms > 0 else 0.0
+    record = {
+        "step": int(state["step"]),
+        "accum_steps": int(state["accum_steps"]),
+        "no_sync_expected_microsteps": int(state["accum_steps"] - 1),
+        "allreduce_count": int(state["allreduce_count"]),
+        "allreduce_total_ms": float(total_ms),
+        "first_allreduce_start_ms_after_backward_start": float(first_ar_offset),
+        "last_allreduce_end_ms": float(state["last_allreduce_wall_ms"]),
+        "overlap_ratio_estimate": float(overlap_est),
+        "bucket_cap_mb": int(state["bucket_cap_mb"]),
+        "gradient_as_bucket_view": bool(state["gradient_as_bucket_view"]),
+        "static_graph": bool(state["static_graph"]),
+        "allreduce_bytes": int(state["allreduce_bytes"]),
+        "world_size": int(world_size),
+    }
+    try:
+        with open(state["path"], "a", buffering=1) as fh:
+            fh.write(_json.dumps(record) + "\n")
+    except Exception:
+        pass  # telemetry should never break training
+
+    # v3 T-0.6 tripwire: if --assert-no-sync and allreduce_count > 1, abort.
+    # manual-allreduce path: expect exactly 1 allreduce_count per opt step.
+    if state["assert_no_sync"] and state["allreduce_count"] > 1:
+        raise RuntimeError(
+            f"[--assert-no-sync] step {state['step']}: "
+            f"allreduce_count={state['allreduce_count']} > 1. "
+            f"Accumulation no_sync() regressed."
+        )
+
+
+def _ddp_trace_reset_step(next_step: int):
+    """Clear per-step counters AFTER emission, before the next opt step."""
+    state = _DDP_TRACE_STATE
+    state["step"] = next_step
+    state["allreduce_count"] = 0
+    state["allreduce_bytes"] = 0
+    state["first_allreduce_wall_ms"] = -1.0
+    state["last_allreduce_wall_ms"] = -1.0
+    state["backward_start_wall_ms"] = -1.0
+    state["backward_end_wall_ms"] = -1.0
 
 
 def average_grads(model, world_size):
@@ -993,6 +1108,20 @@ def main():
         else:
             print("[ak-manifest] no --ak-* flags active (baseline mode)")
 
+        # v3 T-0.6 DDP trace: always-on per-opt-step JSONL.
+        # Populate shared trace state; activate if checkpoint_dir available.
+        if args.checkpoint_dir:
+            _DDP_TRACE_STATE["enabled"] = True
+            _DDP_TRACE_STATE["accum_steps"] = args.accum_steps
+            _DDP_TRACE_STATE["path"] = os.path.join(
+                args.checkpoint_dir, f"ddp_trace_rank{rank}.jsonl"
+            )
+            _DDP_TRACE_STATE["assert_no_sync"] = getattr(args, "assert_no_sync", False)
+            print(f"[ddp-trace] enabled: writing to {_DDP_TRACE_STATE['path']}")
+            if _DDP_TRACE_STATE["assert_no_sync"]:
+                print(f"[ddp-trace] --assert-no-sync active: "
+                      f"will abort if allreduce_count > 1 per opt step")
+
     # --- Model ---
     sys.path.insert(0, ".")
     # Sprint 1.5 Phase A: pass μP construction-time kwargs when --mup is set.
@@ -1433,6 +1562,37 @@ def main():
                             _fh.write("\n\n=== sort by self_cuda_time_total ===\n\n")
                             _fh.write(_prof.key_averages().table(
                                 sort_by="self_cuda_time_total", row_limit=40))
+                        # v3 T-0.8 sync counter: extract aten::item count + hipMemcpyWithStream
+                        # CPU wall from profile and emit JSONL per v3 §9.4 schema.
+                        try:
+                            import json as _json
+                            _prof_window = _prof_end_step - _prof_start_step
+                            _item_count = 0
+                            _memcpy_cpu_s = 0.0
+                            for _ev in _prof.key_averages():
+                                if _ev.key == "aten::item":
+                                    _item_count = _ev.count
+                                elif _ev.key == "hipMemcpyWithStream":
+                                    _memcpy_cpu_s = _ev.cpu_time_total / 1_000_000.0
+                            _sync_record = {
+                                "profile_window_steps": _prof_window,
+                                "aten_item_count": int(_item_count),
+                                "hipMemcpyWithStream_cpu_wall_s": float(_memcpy_cpu_s),
+                                "known_hot_syncs": {
+                                    "spectra_sigma1_item": "unknown",
+                                    "loss_item": "unknown",
+                                    "valid_global_sum_item": "unknown",
+                                    "jsonl_logging": "unknown",
+                                },
+                            }
+                            _sync_path = os.path.join(out_dir, "sync-counter.jsonl")
+                            with open(_sync_path, "a", buffering=1) as _sf:
+                                _sf.write(_json.dumps(_sync_record) + "\n")
+                            print(f"  [profiler] sync counter: aten::item={_item_count} "
+                                  f"calls over {_prof_window} opt steps "
+                                  f"(~{_item_count / max(_prof_window, 1):.0f}/step)")
+                        except Exception as _e:
+                            print(f"  [profiler] sync counter extraction failed: {_e}")
                         print(f"  [profiler] Wrote {summary_path} and "
                               f"{out_dir}/profile.json at opt step {global_step}")
                         _prof = None
@@ -1602,6 +1762,9 @@ def main():
                         diag_writer=diag_writer,
                     )
                     global_step += 1
+                    # v3 T-0.6 DDP trace: emit JSONL for this step + reset state.
+                    _ddp_trace_emit(world_size, rank)
+                    _ddp_trace_reset_step(global_step)
                     # Bug-fix: completed optimizer step consumed this cycle's
                     # accumulated backwards; reset counter for next cycle.
                     backwards_in_cycle = 0
@@ -1763,6 +1926,9 @@ def main():
                         diag_writer=diag_writer,
                     )
                     global_step += 1
+                    # v3 T-0.6 DDP trace emit + reset on sync path
+                    _ddp_trace_emit(world_size, rank)
+                    _ddp_trace_reset_step(global_step)
                     pending_handles = None
                     # Bug-fix: sync path also consumed the accum cycle.
                     backwards_in_cycle = 0
