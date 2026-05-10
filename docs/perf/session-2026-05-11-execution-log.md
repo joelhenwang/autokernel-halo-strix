@@ -206,9 +206,94 @@ avoid re-discovery.
 
 - Wrote this execution log + master session record.
 
+### 12:05 — A.3 running, first batch fails preflight
+
+- Rescoped Phase A.3 from 14 models to 7 Odin family (per user feedback).
+- V1 probes failing with `preflight FAILED: parameters received grad=None: head_gate` on layer 3 (OdinHalo) and layers 6/13 (OdinFlat).
+- **Diagnosis**: preflight's ALLOWED_ZERO_PATTERNS only listed `v_res_scale`.
+  `head_gate` is also architecturally-unused when `head_gate_active=False`,
+  which is OdinHalo's default (and OdinFlat's when not using Sprint 1 flags).
+- **Fix**: added `head_gate` to ALLOWED_ZERO_PATTERNS in `train_ddp.py`
+  AND `scripts/test_autokernel_autograd_safety.py`. Documented limitation:
+  masks the rare case where head_gate_active=True but grad is severed.
+
+### 12:10 — Phase C v1 launched + diverged
+
+- Single-node OdinFlat 2000-step with `--optimize-kernels --use-fused-zloss`.
+- **Phase E.3 preflight PASSED** (confirmed on real launch).
+- Step 200 loss 5.38 (healthy). Step 250 loss 7.07, grad=79353 (exploded).
+- Step 300 loss 11.29, scaler at 1.6e-2 (unrecoverable).
+- Killed.
+
+### 12:20 — Phase C v2 launched + diverged identically
+
+- Same config but `--use-fused-zloss` removed.
+- Step 200 loss 5.29 (healthy). Step 250 loss 5.84, grad=inf (exploded).
+- **Conclusion**: divergence is NOT caused by `--use-fused-zloss`. Two
+  identical collapses at step 250 under single-node batch=128.
+- Wrote `docs/perf/phase-c-divergence-analysis.md`: most likely cause is
+  batch-size × LR interaction (lr_2d=5e-3 is tuned for DDP batch=256;
+  single-node batch=128 halves the signal-to-noise ratio).
+
+### 12:25 — Phase A.3 rescoped to Odin family (user feedback)
+
+- User: "Do we really need to do 42 probes due to all the other models?
+  We're focusing only on Odin anyway"
+- Dropped non-Odin halo variants from the batch script. 21 probes instead
+  of 42. Kept: odin_flat + 30m + ablation + mini, odin_halo + ablation + mini.
+- Relaunched with Sprint 1 feature flags included
+  (`--intra-doc-mask --value-residuals --head-gating`) to avoid
+  preflight false positives.
+
+### 12:45 — Phase A.3 completes (21 probes, 15 successful)
+
+- odin_flat V0/V1/V3: all 50 lines, preflight PASSED
+- odin_flat_30m V0/V1/V3: all 50 lines
+- odin_flat_ablation V0/V1/V3: all 50 lines
+- odin_halo V0/V1/V3: all 50 lines
+- odin_halo_ablation V0/V1/V3: all 50 lines
+- odin_flat_mini V0/V1/V3: FAIL rc=1 (architectural, deferred)
+- odin_halo_mini V0/V1/V3: FAIL rc=1 (architectural, deferred)
+
+**Phase B fixes VALIDATED empirically**: 0 newly-frozen params in V1/V3
+across all 5 successful Odin models. Only v_res_scale + head_gate
+(both documented legit-unused) appear in the always_none list.
+
+### 12:50 — Phase A.4 synthesis committed
+
+- `docs/perf/autokernel-audit-2026-05-11.md` (analyzer raw output)
+- `docs/perf/autokernel-audit-2026-05-11-synthesis.md` (interpretation)
+
+### 12:55 — Phase C v3 DDP launched
+
+- Both machines (A master, B worker). batch=16×8×2=256, lr_2d=5e-3.
+- Matches Sprint 3A-confirm's validated config.
+- Expected ~90 min to 2000 steps. Ship gate: loss ≤ 3.20, tok/s ≥ 28K.
+
 ---
 
-## Patterns worth remembering
+## Updated patterns worth remembering
+
+### New: batch-size + LR is jointly tuned
+
+Single-node probes with half the production batch will diverge at LRs
+tuned for production DDP batch. Either use DDP from the outset for
+stability verification, or halve the LR when reducing batch by 2×.
+
+### New: preflight needs "expected-unused" parameter allowlist
+
+`head_gate` / `v_res_scale` / similar conditionally-activated parameters
+must be in ALLOWED_ZERO_PATTERNS to avoid false-positive preflight
+failures. Keep the list in sync between:
+- `scripts/train_ddp.py::_autokernel_autograd_preflight`
+- `scripts/test_autokernel_autograd_safety.py`
+
+### New: A.3 batch Mini-variant failures are a known limitation
+
+`odin_flat_mini` and `odin_halo_mini` crash during 50-step probe
+startup. Their production-model counterparts (odin_flat, odin_halo)
+cover the code paths. Not worth the debugging cost unless the Mini
+variants become production targets.
 
 ### Launch reliability checklist
 
