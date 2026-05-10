@@ -1221,18 +1221,23 @@ def main():
                             # fp16-stability P1: z-loss auxiliary regularization.
                             # Penalizes drift of log-partition-function magnitudes.
                             # Active during first z_loss_fraction of training only.
+                            # Track 2.b (2026-05-10): compute logsumexp in fp16
+                            # (safe with --attn-softcap 50 → lse ≤ ~60.4, well
+                            # within fp16 range) then promote the small [B*T]
+                            # vector to fp32 for the pow(2).mean() reduction.
+                            # Avoids a 1 GB fp32 copy of the [B, T, V] logits
+                            # tensor — previously the #3 op by wall time (11%).
                             if args.z_loss > 0 and global_step < total_steps * args.z_loss_fraction:
-                                z_logits = logits.float()
-                                z_loss_val = args.z_loss * z_logits.logsumexp(dim=-1).pow(2).mean()
+                                z_loss_val = args.z_loss * logits.logsumexp(dim=-1).float().pow(2).mean()
                                 loss = loss + z_loss_val / args.accum_steps
                         else:
                             loss = ce_loss_fn(
                                 output.view(-1, output.size(-1)), targets.view(-1)
                             ) / args.accum_steps
                             # fp16-stability P1: z-loss on raw-logits tensor path.
+                            # Track 2.b (2026-05-10): see note above.
                             if args.z_loss > 0 and global_step < total_steps * args.z_loss_fraction:
-                                z_logits = output.float()
-                                z_loss_val = args.z_loss * z_logits.logsumexp(dim=-1).pow(2).mean()
+                                z_loss_val = args.z_loss * output.logsumexp(dim=-1).float().pow(2).mean()
                                 loss = loss + z_loss_val / args.accum_steps
 
                         # Phase 3 LEAP: add layer-exit aux loss if enabled.

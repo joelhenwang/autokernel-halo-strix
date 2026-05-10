@@ -1,0 +1,34 @@
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+DDP: world_size=1, backend=gloo, async=True, fp16_compress=True
+OdinFlat: 121.7M params [μP, d_base=256]
+/home/joelwang-ai-2/Desktop/ai_lab/autokernel-halo-strix/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py:1367: UserWarning: expandable_segments not supported on this platform (Triggered internally at /__w/rockrel/rockrel/external-builds/pytorch/pytorch/c10/hip/HIPAllocatorConfig.h:40.)
+  return t.to(
+[Sprint 1] feature flags on OdinFlat: {'use_intra_doc_mask': 'ON', 'use_value_residuals': 'ON', 'use_head_gating': 'ON'}
+[fp16-stability] attn_score_softcap=50.0 applied to 2 Attention modules
+Compiling model (per-zone for looped model)...
+compile_zones: per-layer torch.compile mode=max-autotune-no-cudagraphs (14 layers)
+PreTokenizedDataset: 6,839,359,091 tokens -> 13,332,083 chunks of 512
+[μP] group=embedding  n_params= 8,585,216 lr=0.005000
+[μP] group=hidden     n_params=112,871,456 lr=0.001667
+[μP] group=readout    n_params=   196,608 lr=0.000556
+[μP] group=1D         n_params=    28,442 lr=0.000800 (AdamW)
+IMU-1 optimizer: NorMuon(2D, n=52,512,768, lr=0.005, ns_dtype=float16, neuron_norm_min_dim=0, cautious_wd=True, mup3x, spectra(1.0)) + AdamW(1D, n=28,442, lr=0.0008, wd=0)
+Training: 121.7M params, batch=16x8x1=128, block=512, lr=0.0008
+Steps/epoch: 833255, optimizer steps: 104156, epochs: 1
+[fp16-stability] activation monitor ON: interval=100, out=checkpoints/qkv-prefusion-probe/activation_stats.jsonl, tracked=17 layers
+/home/joelwang-ai-2/Desktop/ai_lab/autokernel-halo-strix/.venv/lib/python3.12/site-packages/torch/_dynamo/utils.py:3694: UserWarning: Mismatch dtype between input and weight: input dtype = c10::Half, weight dtype = float, Cannot dispatch to fused implementation. (Triggered internally at /__w/rockrel/rockrel/external-builds/pytorch/pytorch/aten/src/ATen/native/layer_norm.cpp:344.)
+  return node.target(*args, **kwargs)  # type: ignore[operator]
+[92mSuccessfully preprocessed all matching files.[0m
+[step     25] loss=9.9529 bpb=3.989 lr=1.25e-03 grad=2.21 tok/s=13,306 mfu=8.2% mem=13.5GB scale=1.0e+03
+[step     50] loss=7.3734 bpb=2.955 lr=2.50e-03 grad=1.69 tok/s=15,921 mfu=9.8% mem=13.5GB scale=1.0e+03
+[step     75] loss=5.6238 bpb=2.254 lr=3.75e-03 grad=1.49 tok/s=15,902 mfu=9.8% mem=13.5GB scale=1.0e+03
+[step    100] loss=5.1993 bpb=2.084 lr=5.00e-03 grad=1.29 tok/s=15,886 mfu=9.8% mem=13.5GB scale=1.0e+03
+[step    125] loss=4.9869 bpb=1.999 lr=5.00e-03 grad=1.31 tok/s=15,888 mfu=9.8% mem=13.5GB scale=1.0e+03
+[step    150] loss=4.8532 bpb=1.945 lr=5.00e-03 grad=1.29 tok/s=15,885 mfu=9.8% mem=13.5GB scale=1.0e+03
+[step    175] loss=4.8197 bpb=1.931 lr=5.00e-03 grad=0.90 tok/s=15,885 mfu=9.8% mem=13.5GB scale=1.0e+03
+[step    200] loss=4.7041 bpb=1.885 lr=5.00e-03 grad=0.71 tok/s=15,870 mfu=9.8% mem=13.5GB scale=1.0e+03
+Max steps reached: 200
+[rank 0] Flush skipped _complete_step (backwards_in_cycle=0 after early termination); handles waited cleanly
+[rank 0] Checkpoint saved: checkpoints/qkv-prefusion-probe/step_200.pt
+
+Done: 200 steps, 13,172,736 tokens in 850s (15,493 tok/s), best loss=4.7041
