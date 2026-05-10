@@ -16,11 +16,13 @@
 
 set -euo pipefail
 
-# Path resolver (same as diag_frozen_params_run.sh).
+# Path resolver + venv activation (handles both Machine A and B layouts).
 if [ -d ~/Desktop/comfyui-rocm7.12/autokernel-halo-strix ]; then
     cd ~/Desktop/comfyui-rocm7.12/autokernel-halo-strix
+    source ~/Desktop/comfyui-rocm7.12/.venv/bin/activate
 elif [ -d ~/Desktop/ai_lab/autokernel-halo-strix ]; then
     cd ~/Desktop/ai_lab/autokernel-halo-strix
+    source .venv/bin/activate
 fi
 
 CKPT="${CKPT:-checkpoints/qkv-fusion-probe}"

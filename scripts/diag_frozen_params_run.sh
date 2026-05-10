@@ -27,11 +27,13 @@ set -euo pipefail
 CONFIG="${CONFIG:?CONFIG must be V0, V1, or V3}"
 
 # The host may invoke this under run_remote_b.sh (chdir already done) or
-# directly on Machine A (chdir required). Resolve either.
+# directly on Machine A (chdir required). Resolve either + activate venv.
 if [ -d ~/Desktop/comfyui-rocm7.12/autokernel-halo-strix ]; then
     cd ~/Desktop/comfyui-rocm7.12/autokernel-halo-strix
+    source ~/Desktop/comfyui-rocm7.12/.venv/bin/activate
 elif [ -d ~/Desktop/ai_lab/autokernel-halo-strix ]; then
     cd ~/Desktop/ai_lab/autokernel-halo-strix
+    source .venv/bin/activate
 fi
 
 CKPT="checkpoints/diag-frozen-$CONFIG"
