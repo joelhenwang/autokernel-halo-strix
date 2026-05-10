@@ -86,7 +86,9 @@ New models: import from `from models.components import X`, never from other mode
 
 ## Training gotchas
 
-- `--optimize-kernels` is ~3x throughput (35K vs 10K tok/s). Always use for real training. Breaks at `d <= 256` — skip for small hidden dims.
+- `--optimize-kernels` was previously ~3x throughput but after Phase B (2026-05-11) routes through autograd-safe custom ops. Expect throughput parity or slightly below raw HIP baseline. **Pre-launch preflight auto-validates** autograd flow; training aborts if any pattern severs gradients. See `knowledge/training/autograd_safety_hip_kernels.md`. Breaks at `d <= 256` — skip for small hidden dims.
+- **Kernel authoring rule (2026-05-11+)**: any HIP/Triton kernel in the training path MUST use `torch.library.custom_op + register_autograd` OR `torch.autograd.Function`. Raw pybind calls silently sever gradient flow. Pre-merge: run `python scripts/audit_autokernel_replacements.py`. CI gate: `scripts/test_autokernel_autograd_safety.py`. Full principle doc: `knowledge/training/autograd_safety_hip_kernels.md`. Triton author guide: `knowledge/kernels/triton_author_guide.md`.
+- **Fused z-loss (2026-05-11+, opt-in)**: `--use-fused-zloss` routes logits through `kernel.ce_full(z_loss_weight=...)` which bakes z-loss into the HIP CE kernel AND adds the gradient contribution in backward. Eliminates the separate `aten::logsumexp` pass (16.7% of step wall per 2026-05-10 profile). Default OFF pending Phase C 2000-step validation; enable via `--use-fused-zloss` in EXTRA_FLAGS.
 - `--compile` the model only, never the optimizer (29 GB memory blowup).
 - Looped models: trainer auto-uses `model.compile_zones()` for per-layer compilation when available. Velocity clamp `±8.0` required for fp16 Parcae loops (prevents NaN at cost of ~22% tok/s).
 - `--ema` always: free +7.5% generalization, decay 0.999.
