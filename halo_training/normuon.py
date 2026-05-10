@@ -123,6 +123,22 @@ class NorMuon(torch.optim.Optimizer):
         spectra_post: bool = False,
         spectra_clip_norm: float = 1.0,
         spectra_ns_iter: int = 5,
+        # v3 T-0.2 per-param telemetry (docs/research/autokernel-40k-v3-
+        # execution-plan.md section 5.1). Emits JSONL per 2D param.
+        telemetry_enabled: bool = False,
+        telemetry_path: Optional[str] = None,
+        telemetry_sample_policy: str = "v3",  # 'v3' = 1..20 every, then every 50
+        # v3 T-5.3 post-NorMuon trust cap on ||lr*update|| / ||w||.
+        # 0.0 disables. Typical diagnostic: 0.02.
+        trust_cap: float = 0.0,
+        trust_cap_scope: str = "none",  # none | w_gate_up | spiking | all_2d
+        # v3 T-5.2 w_gate_up update-scale staging for hidden-kernel recovery.
+        # Initial scale ramps to 1.0 over ramp_steps.
+        w_gate_up_scale: float = 1.0,
+        w_gate_up_ramp_steps: int = 0,
+        # v3 T-2.3 / NorMuon impl optimization: branchless SPECTRA
+        # (eliminates sigma1.item() per-param-per-opt-step sync).
+        spectra_branchless: bool = False,
     ):
         if betas is not None:
             # Treat betas=(0.9, 0.95) as AdamW-side configuration override,
@@ -140,6 +156,22 @@ class NorMuon(torch.optim.Optimizer):
         self.spectra_post = bool(spectra_post)
         self.spectra_clip_norm = float(spectra_clip_norm)
         self.spectra_ns_iter = int(spectra_ns_iter)
+        # v3 T-0.2 telemetry
+        self.telemetry_enabled = bool(telemetry_enabled)
+        self.telemetry_path = telemetry_path
+        self.telemetry_sample_policy = telemetry_sample_policy
+        self._telem_file = None  # opened lazily in _should_sample
+        self._telem_step = 0
+        self._telem_warned = False  # set True after first warning to increase sample rate
+        # v3 T-5.3 trust cap
+        self.trust_cap = float(trust_cap)
+        self.trust_cap_scope = trust_cap_scope
+        self._spiking_param_names = set()  # names added when trust_cap_scope == "spiking"
+        # v3 T-5.2 w_gate_up staging
+        self.w_gate_up_scale_init = float(w_gate_up_scale)
+        self.w_gate_up_ramp_steps = int(w_gate_up_ramp_steps)
+        # v3 T-2.3 branchless SPECTRA
+        self.spectra_branchless = bool(spectra_branchless)
 
         if isinstance(muon_params, dict):
             muon_params = [muon_params]
@@ -189,6 +221,76 @@ class NorMuon(torch.optim.Optimizer):
                         ns_steps=ns_steps, weight_decay=weight_decay)
         super().__init__(all_groups, defaults)
 
+        # v3 T-0.2 build name map AFTER super().__init__() populates self.param_groups.
+        # Map param tensor id() -> readable name if provided via muon_params as a
+        # list of dicts each with optional 'param_names'. Otherwise names are synthetic.
+        self._param_names: dict = {}
+        for g in self.param_groups:
+            names = g.get("param_names", None)
+            plist = g.get("params", [])
+            for i, p in enumerate(plist):
+                if names is not None and i < len(names):
+                    self._param_names[id(p)] = names[i]
+                else:
+                    # synthesize: shape + index for stable identification
+                    self._param_names[id(p)] = f"{tuple(p.shape)}#{id(p) % 1000000}"
+
+    def set_param_names(self, mapping):
+        """Allow trainer to provide param_id -> readable_name mapping after init.
+
+        v3 T-0.2: called once by halo_training/optimizer.py::build_imu1_optimizer
+        after attaching param_names to param groups. This replaces any synthetic
+        names built during __init__.
+        """
+        self._param_names.update(mapping)
+
+    def _telemetry_should_sample(self):
+        """v3 T-0.2 sample policy:
+           - every step for first 20
+           - every 50 after that
+           - after first warning: every 10
+           - always on non-finite (handled in caller)
+        """
+        if not self.telemetry_enabled:
+            return False
+        s = self._telem_step
+        if s < 20:
+            return True
+        if self._telem_warned:
+            return (s % 10) == 0
+        return (s % 50) == 0
+
+    def _telemetry_emit(self, record):
+        """Write one JSONL record to self.telemetry_path."""
+        import json
+        if self.telemetry_path is None:
+            return
+        if self._telem_file is None:
+            self._telem_file = open(self.telemetry_path, "a", buffering=1)
+        self._telem_file.write(json.dumps(record) + "\n")
+
+    def _w_gate_up_scale_current(self):
+        """v3 T-5.2: return current w_gate_up post-NorMuon scale (ramps to 1.0)."""
+        if self.w_gate_up_ramp_steps <= 0:
+            return self.w_gate_up_scale_init
+        progress = min(1.0, self._telem_step / max(1, self.w_gate_up_ramp_steps))
+        return self.w_gate_up_scale_init + progress * (1.0 - self.w_gate_up_scale_init)
+
+    def _should_apply_trust_cap(self, param_name):
+        """v3 T-5.3: return True if trust cap should apply to this param."""
+        if self.trust_cap <= 0.0:
+            return False
+        scope = self.trust_cap_scope
+        if scope == "none":
+            return False
+        if scope == "all_2d":
+            return True
+        if scope == "w_gate_up":
+            return "w_gate_up" in param_name
+        if scope == "spiking":
+            return param_name in self._spiking_param_names
+        return False
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = None
@@ -202,6 +304,10 @@ class NorMuon(torch.optim.Optimizer):
                 self._normuon_step(group)
             else:
                 self._adamw_step(group)
+
+        # v3 T-0.2 advance telemetry step counter after all param groups
+        if self.telemetry_enabled:
+            self._telem_step += 1
 
         return loss
 
@@ -235,8 +341,21 @@ class NorMuon(torch.optim.Optimizer):
             else:
                 m = buf.clone()
 
+            # v3 T-0.2 telemetry: capture raw grad / momentum stats (tensor-side)
+            _telem = self._telemetry_should_sample()
+            if _telem:
+                _raw_grad_norm = grad.float().norm()
+                _momentum_norm = buf.float().norm()
+                _param_norm = p.data.float().norm()
+                _maxabs_grad = grad.abs().max()
+                _maxabs_param = p.data.abs().max()
+                _grad_finite = bool(torch.isfinite(grad).all())
+
             # Newton-Schulz orthogonalization
             m_orth = _newton_schulz_polar_express(m, steps=ns_steps, dtype=self.ns_dtype)
+
+            if _telem:
+                _post_ns_norm = m_orth.float().norm()
 
             # Neuron-wise normalization (NorMuon innovation).
             # Sprint 1.1 Phase B2: optionally skip on small matrices via
@@ -257,13 +376,41 @@ class NorMuon(torch.optim.Optimizer):
             # to (spectra_clip_norm / lr) so that ||lr * m_orth||_2 <=
             # spectra_clip_norm. Only 2D updates (already guaranteed by
             # the ndim check above).
+            _spectra_scale_tensor = None  # for telemetry
             if self.spectra_post and lr > 0:
-                from halo_training.spectra import apply_post_clip
-                m_orth = apply_post_clip(
-                    m_orth,
-                    clip_norm=self.spectra_clip_norm / lr,
-                    ns_iterations=self.spectra_ns_iter,
-                )
+                if self.spectra_branchless:
+                    # v3 T-1.1 / T-2.3: branchless SPECTRA (no sigma1.item()).
+                    # Eliminates per-2D-param-per-opt-step CPU sync.
+                    from halo_training.spectra import (
+                        _estimate_spectral_norm,
+                    )
+                    effective_clip = self.spectra_clip_norm / lr
+                    safety_margin = 1.02
+                    sigma1_t = _estimate_spectral_norm(
+                        m_orth,
+                        ns_iterations=self.spectra_ns_iter,
+                        dtype=None,
+                    )
+                    if not torch.is_tensor(sigma1_t):
+                        sigma1_t = torch.tensor(
+                            float(sigma1_t),
+                            device=m_orth.device,
+                            dtype=m_orth.dtype,
+                        )
+                    _scale = torch.clamp(
+                        effective_clip * safety_margin
+                        / torch.clamp(sigma1_t, min=1e-12),
+                        max=1.0,
+                    ).to(m_orth.dtype)
+                    m_orth = m_orth * _scale
+                    _spectra_scale_tensor = _scale
+                else:
+                    from halo_training.spectra import apply_post_clip
+                    m_orth = apply_post_clip(
+                        m_orth,
+                        clip_norm=self.spectra_clip_norm / lr,
+                        ns_iterations=self.spectra_ns_iter,
+                    )
 
             # Cautious / standard decoupled weight decay
             if wd > 0:
@@ -274,8 +421,89 @@ class NorMuon(torch.optim.Optimizer):
                 else:
                     p.data.mul_(1 - lr * wd)
 
+            # v3 T-5.2: w_gate_up update-scale staging (apply before trust cap).
+            # Identified by param name containing "w_gate_up".
+            _param_name = self._param_names.get(id(p), "")
+            if ("w_gate_up" in _param_name
+                    and (self.w_gate_up_scale_init != 1.0
+                         or self.w_gate_up_ramp_steps > 0)):
+                _wgu_scale = self._w_gate_up_scale_current()
+                m_orth = m_orth * _wgu_scale
+
+            # Compute effective update (lr * m_orth) for trust cap + telemetry.
+            _effective_update = m_orth * lr  # float-dtype-dependent; tensor-side only
+
+            # v3 T-5.3: post-NorMuon trust cap on ||lr*update|| / ||w||.
+            _trust_ratio_pre = None
+            _trust_ratio_post = None
+            _trust_cap_triggered = False
+            if self._should_apply_trust_cap(_param_name):
+                _param_norm_f = p.data.float().norm().clamp_min(1e-12)
+                _update_norm_f = _effective_update.float().norm()
+                _trust_ratio_pre = _update_norm_f / _param_norm_f
+                _cap_scale = torch.clamp(
+                    self.trust_cap / (_trust_ratio_pre + 1e-12),
+                    max=1.0,
+                ).to(m_orth.dtype)
+                m_orth = m_orth * _cap_scale
+                _effective_update = m_orth * lr
+                _trust_ratio_post = _effective_update.float().norm() / _param_norm_f
+                # NB: tensor-side comparison; keep off CPU to avoid sync
+                _trust_cap_triggered = bool((_cap_scale < 1.0).item())
+                if _trust_cap_triggered:
+                    # If in 'spiking' scope mode, remember this param
+                    if self.trust_cap_scope == "spiking":
+                        self._spiking_param_names.add(_param_name)
+
             # Update
             p.data.add_(m_orth, alpha=-lr)
+
+            # v3 T-0.2 telemetry: emit JSONL record AFTER update applied.
+            # Also emit unconditionally if any non-finite detected (warning).
+            _update_finite = bool(torch.isfinite(m_orth).all())
+            _force_emit = not (_grad_finite if _telem else True) or not _update_finite
+
+            if _telem or _force_emit:
+                if _force_emit and not self._telem_warned:
+                    self._telem_warned = True  # switch to every-10 sampling
+                # Only compute the full record if actually emitting
+                if not _telem:
+                    # Compute the fields we skipped for the force-emit path
+                    _raw_grad_norm = grad.float().norm()
+                    _momentum_norm = buf.float().norm()
+                    _param_norm = p.data.float().norm()
+                    _maxabs_grad = grad.abs().max()
+                    _maxabs_param = p.data.abs().max()
+                    _grad_finite = bool(torch.isfinite(grad).all())
+                    _post_ns_norm = torch.tensor(float("nan"))
+                _maxabs_update = m_orth.abs().max()
+                record = {
+                    "step": int(self._telem_step),
+                    "param_name": _param_name,
+                    "shape": list(p.shape),
+                    "dtype_param": str(p.dtype),
+                    "dtype_grad": str(grad.dtype),
+                    "dtype_update": str(m_orth.dtype),
+                    "param_norm": float(_param_norm.item()),
+                    "raw_grad_norm": float(_raw_grad_norm.item()),
+                    "momentum_norm": float(_momentum_norm.item()),
+                    "post_ns_norm": float(_post_ns_norm.item()) if torch.isfinite(_post_ns_norm).item() else float("nan"),
+                    "spectra_sigma1": float("nan"),  # tensor-side sigma1 not materialized in branchless path
+                    "spectra_scale": float(_spectra_scale_tensor.item()) if _spectra_scale_tensor is not None else 1.0,
+                    "effective_lr": float(lr),
+                    "update_norm_pre_trust": float(_effective_update.float().norm().item()),
+                    "update_norm_post_trust": float(_effective_update.float().norm().item()),  # same as pre if no cap
+                    "trust_ratio_pre": float(_trust_ratio_pre.item()) if _trust_ratio_pre is not None else float("nan"),
+                    "trust_ratio_post": float(_trust_ratio_post.item()) if _trust_ratio_post is not None else float("nan"),
+                    "trust_cap_triggered": bool(_trust_cap_triggered),
+                    "maxabs_param": float(_maxabs_param.item()),
+                    "maxabs_grad": float(_maxabs_grad.item()),
+                    "maxabs_update": float(_maxabs_update.item()),
+                    "grad_isfinite": bool(_grad_finite),
+                    "update_isfinite": bool(_update_finite),
+                }
+                self._telemetry_emit(record)
+
 
     def _adamw_step(self, group):
         lr = group["lr"]

@@ -98,6 +98,14 @@ def build_imu1_optimizer(
     spectra_post: bool = False,
     spectra_clip_norm: float = 1.0,
     spectra_ns_iter: int = 5,
+    # v3 40k campaign additions (all default OFF for baseline parity)
+    telemetry_enabled: bool = False,
+    telemetry_path: Optional[str] = None,
+    trust_cap: float = 0.0,
+    trust_cap_scope: str = "none",
+    w_gate_up_scale: float = 1.0,
+    w_gate_up_ramp_steps: int = 0,
+    spectra_branchless: bool = False,
 ) -> torch.optim.Optimizer:
     """Sprint 1 entry point: build a two-group optimizer per IMU-1 recipe.
 
@@ -227,8 +235,13 @@ def build_imu1_optimizer(
         if use_mup and mup_groups is not None:
             # When μP is active, feed the 3-way split to NorMuon as separate
             # muon_params groups so each retains its per-group LR.
+            # v3 T-0.2: attach param_names for telemetry readability.
             muon_groups_for_normuon = [
-                {"params": grp["params"], "lr": grp["lr"],
+                {"params": grp["params"],
+                 "param_names": grp.get("param_names",
+                                         [f"mup_{grp['_mup_group']}_{i}"
+                                          for i in range(len(grp["params"]))]),
+                 "lr": grp["lr"],
                  "weight_decay": weight_decay_2d,
                  "_mup_group": grp["_mup_group"]}
                 for grp in mup_groups if grp["params"]
@@ -247,10 +260,18 @@ def build_imu1_optimizer(
                 spectra_post=spectra_post,
                 spectra_clip_norm=spectra_clip_norm,
                 spectra_ns_iter=spectra_ns_iter,
+                telemetry_enabled=telemetry_enabled,
+                telemetry_path=telemetry_path,
+                trust_cap=trust_cap,
+                trust_cap_scope=trust_cap_scope,
+                w_gate_up_scale=w_gate_up_scale,
+                w_gate_up_ramp_steps=w_gate_up_ramp_steps,
+                spectra_branchless=spectra_branchless,
             )
         else:
             opt = NorMuon(
-                muon_params=[{"params": [p for _, p in group_2d]}],
+                muon_params=[{"params": [p for _, p in group_2d],
+                              "param_names": [n for n, _ in group_2d]}],
                 adamw_params=[
                     {"params": [p for _, p in group_1d], "lr": lr_1d, "weight_decay": 0.0},
                 ],
@@ -263,6 +284,13 @@ def build_imu1_optimizer(
                 spectra_post=spectra_post,
                 spectra_clip_norm=spectra_clip_norm,
                 spectra_ns_iter=spectra_ns_iter,
+                telemetry_enabled=telemetry_enabled,
+                telemetry_path=telemetry_path,
+                trust_cap=trust_cap,
+                trust_cap_scope=trust_cap_scope,
+                w_gate_up_scale=w_gate_up_scale,
+                w_gate_up_ramp_steps=w_gate_up_ramp_steps,
+                spectra_branchless=spectra_branchless,
             )
         # Phase 2 logging + Phase B throughput-knob trail so scorecard runs
         # record exactly which config was used.

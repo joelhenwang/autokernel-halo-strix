@@ -882,7 +882,93 @@ def main():
                         action="store_false")
     parser.set_defaults(use_fused_zloss=False)
 
+    # ======================================================================
+    # v3 40k throughput campaign: granular --ak-* flags
+    # (docs/research/autokernel-40k-v3-execution-plan.md section 4)
+    #
+    # These replace the monolithic --optimize-kernels. All default OFF.
+    # Each flag is independently measurable, auditable, and reversible.
+    # Hidden-kernel flags must pass gradient-flow + dtype audit before
+    # 2000-step gate (see CONSTRAINTS.md).
+    # ======================================================================
+    # Core granular kernel/runtime flags (v3 section 8.1)
+    ak_group = parser.add_argument_group("AK granular kernel/runtime")
+    ak_group.add_argument("--ak-loss-ce", action="store_true",
+                          help="Route logits through kernel.ce_full (safe CE path).")
+    ak_group.add_argument("--ak-loss-zloss", action="store_true",
+                          help="Bake z-loss into fused CE (Phase B.5). Alias of --use-fused-zloss.")
+    ak_group.add_argument("--ak-swiglu-fwd", action="store_true",
+                          help="Use HIP silu_gate_mul forward (autograd-safe).")
+    ak_group.add_argument("--ak-swiglu-bwd", action="store_true",
+                          help="Use HIP silu_gate_mul backward (vs PyTorch fallback).")
+    ak_group.add_argument("--ak-rmsnorm", action="store_true",
+                          help="Use HIP rmsnorm custom_op.")
+    ak_group.add_argument("--ak-res-rmsnorm", action="store_true",
+                          help="Use HIP fused_res_rmsnorm custom_op.")
+    ak_group.add_argument("--ak-rope", action="store_true",
+                          help="Use HIP rotary_emb_fp32 custom_op.")
+    ak_group.add_argument("--ak-rope-gate", action="store_true",
+                          help="Use HIP fused_rope_gate_mul (requires T-3.2 fix).")
+    ak_group.add_argument("--ak-causal-conv", action="store_true",
+                          help="Use DaoAILab causal_conv1d_fn (requires T-3.2 shim).")
+    ak_group.add_argument("--ak-qkv", action="store_true",
+                          help="Use fused QKV custom_op.")
+    ak_group.add_argument("--ak-ple-gate", action="store_true",
+                          help="Use HIP fused_ple_gate custom_op.")
+    # --ak-normuon: alias --normuon (already exists)
+    ak_group.add_argument("--ak-compiled-autograd", action="store_true",
+                          help="Enable torch._dynamo.config.compiled_autograd = True (T-4).")
+    ak_group.add_argument("--ak-triton-visible", action="store_true",
+                          help="Route Triton kernels through torch.library.triton_op "
+                               "(vs custom_op); improves Inductor compile visibility.")
+    ak_group.add_argument("--ak-sync-cleanup", action="store_true",
+                          help="Branchless SPECTRA + deferred .item() aggregation. "
+                               "Alias of --ak-spectra-branchless for now; expand scope in T-1.2.")
+    ak_group.add_argument("--ak-ddp-tune", action="store_true",
+                          help="gradient_as_bucket_view=True + tuned bucket_cap_mb.")
+
+    # v3 add-on flags (v3 section 8.2)
+    ak_group.add_argument("--ak-spectra-branchless", action="store_true",
+                          help="Use branchless SPECTRA (no sigma1.item()). T-1.1.")
+    ak_group.add_argument("--ak-autocast-tier",
+                          choices=["none", "tier1", "all"], default="none",
+                          help="Autocast rule application: none (default), tier1 "
+                               "(rope_gate_mul + causal_conv1d only), or all "
+                               "(register_autocast on every training-path custom op).")
+    ak_group.add_argument("--ak-dtype-trace", action="store_true",
+                          help="Emit dtype/autocast trace JSONL for custom ops (T-0.7).")
+    ak_group.add_argument("--ak-fix-rope-gate-op", action="store_true",
+                          help="Use fixed rope_gate_mul via torch.library.custom_op "
+                               "(vs @torch.compiler.disable wrapper). T-3.2.")
+    ak_group.add_argument("--ak-causal-conv-shim", action="store_true",
+                          help="Use shimmed causal_conv1d via torch.library.custom_op. T-3.2.")
+    ak_group.add_argument("--ak-normuon-telemetry", action="store_true",
+                          help="Emit per-param NorMuon update telemetry JSONL (T-0.2).")
+    ak_group.add_argument("--ak-normuon-impl-opt", action="store_true",
+                          help="Enable NorMuon implementation optimizations: "
+                               "preallocated buffers, grouped NS, branchless SPECTRA. T-2.3.")
+    ak_group.add_argument("--ak-trust-cap", type=float, default=0.0,
+                          help="Post-NorMuon trust cap threshold on ||update*lr|| / ||w||. "
+                               "0.0 (default) = disabled. Typical diagnostic: 0.02. T-5.3.")
+    ak_group.add_argument("--ak-trust-cap-scope",
+                          choices=["none", "w_gate_up", "spiking", "all_2d"],
+                          default="none",
+                          help="Which 2D params get trust-cap applied (T-5.3).")
+    ak_group.add_argument("--ak-w-gate-up-scale", type=float, default=1.0,
+                          help="Initial w_gate_up post-NorMuon update scale (T-5.2). "
+                               "Default 1.0 = no staging. Try 0.25 for warm-ramp.")
+    ak_group.add_argument("--ak-w-gate-up-ramp-steps", type=int, default=0,
+                          help="Steps over which --ak-w-gate-up-scale ramps to 1.0 (T-5.2). "
+                               "0 = no ramp, scale stays at initial value.")
+    ak_group.add_argument("--assert-no-sync", action="store_true",
+                          help="Abort training if DDP allreduce_count > 1 per opt step "
+                               "(catches accumulation no_sync() regression). T-0.6.")
+
     args = parser.parse_args()
+
+    # v3 alias: --ak-loss-zloss implies --use-fused-zloss (single implementation).
+    if getattr(args, "ak_loss_zloss", False):
+        args.use_fused_zloss = True
 
     use_async = not args.no_async
     use_fp16 = not args.no_fp16_compress
@@ -897,6 +983,15 @@ def main():
     if rank == 0:
         print(f"DDP: world_size={world_size}, backend={args.backend}, "
               f"async={use_async}, fp16_compress={use_fp16}")
+
+        # v3 T-0.5 flag manifest: print every active --ak-* flag.
+        # Every flag records itself in the run manifest (Rule 3).
+        _ak_active = {k: v for k, v in vars(args).items()
+                      if k.startswith("ak_") and v not in (False, 0, 0.0, "none", "")}
+        if _ak_active:
+            print(f"[ak-manifest] active: {_ak_active}")
+        else:
+            print("[ak-manifest] no --ak-* flags active (baseline mode)")
 
     # --- Model ---
     sys.path.insert(0, ".")
@@ -1123,6 +1218,22 @@ def main():
                 spectra_post=getattr(args, "spectra_post", False),
                 spectra_clip_norm=getattr(args, "spectra_clip_norm", 1.0),
                 spectra_ns_iter=getattr(args, "spectra_ns_iter", 5),
+                # v3 40k campaign (T-0.2 telemetry + T-5.2/5.3 recovery knobs
+                # + T-2.3 NorMuon implementation optimizations)
+                telemetry_enabled=getattr(args, "ak_normuon_telemetry", False),
+                telemetry_path=(
+                    os.path.join(args.checkpoint_dir or ".", f"normuon_telem_rank{rank}.jsonl")
+                    if getattr(args, "ak_normuon_telemetry", False) else None
+                ),
+                trust_cap=getattr(args, "ak_trust_cap", 0.0),
+                trust_cap_scope=getattr(args, "ak_trust_cap_scope", "none"),
+                w_gate_up_scale=getattr(args, "ak_w_gate_up_scale", 1.0),
+                w_gate_up_ramp_steps=getattr(args, "ak_w_gate_up_ramp_steps", 0),
+                spectra_branchless=(
+                    getattr(args, "ak_spectra_branchless", False)
+                    or getattr(args, "ak_sync_cleanup", False)
+                    or getattr(args, "ak_normuon_impl_opt", False)
+                ),
             )
             # build_imu1_optimizer prints on rank 0 already; no duplicate log
         else:

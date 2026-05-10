@@ -153,6 +153,9 @@ def build_mup_param_groups(
     emb_params: List[nn.Parameter] = []
     hidden_params: List[nn.Parameter] = []
     readout_params: List[nn.Parameter] = []
+    emb_names: List[str] = []
+    hidden_names: List[str] = []
+    readout_names: List[str] = []
 
     for name, p in model.named_parameters():
         if not p.requires_grad:
@@ -164,19 +167,22 @@ def build_mup_param_groups(
         category = _classify_param(name)
         if category == "embedding":
             emb_params.append(p)
+            emb_names.append(name)
         elif category == "readout":
             readout_params.append(p)
+            readout_names.append(name)
         else:
             hidden_params.append(p)
+            hidden_names.append(name)
 
     hidden_lr = base_lr / d_ratio
     readout_lr = base_lr / (d_ratio ** 2)
 
     return [
-        {"params": emb_params, "lr": base_lr,
+        {"params": emb_params, "param_names": emb_names, "lr": base_lr,
          "weight_decay": weight_decay, "_mup_group": "embedding"},
-        {"params": hidden_params, "lr": hidden_lr,
+        {"params": hidden_params, "param_names": hidden_names, "lr": hidden_lr,
          "weight_decay": weight_decay, "_mup_group": "hidden"},
-        {"params": readout_params, "lr": readout_lr,
+        {"params": readout_params, "param_names": readout_names, "lr": readout_lr,
          "weight_decay": weight_decay, "_mup_group": "readout"},
     ]
