@@ -100,6 +100,18 @@ def _rmsnorm_backward(ctx, grad_output):
 rmsnorm_op.register_autograd(_rmsnorm_backward, setup_context=_rmsnorm_setup)
 
 
+# v3 T-3.3 (H11 fix): explicit autocast rule. Under torch.amp.autocast(cuda, fp16)
+# inputs are cast to fp16 at the custom_op boundary. This prevents dtype drift
+# between custom_op path and native Inductor path that Phase C/G divergence
+# analysis suspects (0/7 ops had register_autocast pre-fix).
+try:
+    rmsnorm_op.register_autocast("cuda", torch.float16)
+except AttributeError:
+    # Older PyTorch versions lack register_autocast; harmless skip.
+    pass
+
+
+
 # ---------------------------------------------------------------------------
 # Rotary Embedding (fp32 intermediate — matches LLaMA's .float() promotion)
 # forward: y = x * cos + rotate_half(x) * sin
@@ -153,6 +165,16 @@ def _rotary_backward(ctx, grad_output):
 rotary_emb_fp32_op.register_autograd(_rotary_backward, setup_context=_rotary_setup)
 
 
+# v3 T-3.3 (H11 fix): autocast rule — this op's forward expects fp32 input
+# (it does fp32 sincos math internally; the name says so). Under autocast
+# we explicitly promote to fp32 to preserve precision at the boundary.
+try:
+    rotary_emb_fp32_op.register_autocast("cuda", torch.float32)
+except AttributeError:
+    pass
+
+
+
 # ---------------------------------------------------------------------------
 # SiLU Gate Multiply (SwiGLU activation)
 # forward: y = silu(gate) * up = gate * sigmoid(gate) * up
@@ -199,6 +221,14 @@ def _silu_gate_mul_backward(ctx, grad_output):
 
 
 silu_gate_mul_op.register_autograd(_silu_gate_mul_backward, setup_context=_silu_gate_mul_setup)
+
+
+# v3 T-3.3 (H11 fix): autocast rule for SwiGLU body.
+try:
+    silu_gate_mul_op.register_autocast("cuda", torch.float16)
+except AttributeError:
+    pass
+
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +294,14 @@ def _fused_res_rmsnorm_backward(ctx, grad_hidden, grad_normed):
 fused_res_rmsnorm_op.register_autograd(
     _fused_res_rmsnorm_backward, setup_context=_fused_res_rmsnorm_setup
 )
+
+
+# v3 T-3.3 (H11 fix): autocast rule for fused residual+RMSNorm.
+try:
+    fused_res_rmsnorm_op.register_autocast("cuda", torch.float16)
+except AttributeError:
+    pass
+
 
 
 # ---------------------------------------------------------------------------
@@ -807,4 +845,131 @@ def _fused_rope_gate_mul_backward(ctx, grad_y):
 fused_rope_gate_mul_op.register_autograd(
     _fused_rope_gate_mul_backward, setup_context=_fused_rope_gate_mul_setup
 )
+
+
+# v3 T-3.3 (H11 fix): autocast rule for RoPE*gate fusion.
+try:
+    fused_rope_gate_mul_op.register_autocast("cuda", torch.float16)
+except AttributeError:
+    pass
+
+
+
+# ---------------------------------------------------------------------------
+# causal_conv1d shim — v3 T-3.2 (second half)
+# Wraps DaoAILab's causal_conv1d_fn in a torch.library.custom_op with an
+# explicit register_autograd so Dynamo sees a clean custom_op boundary
+# (eliminates the 2nd of 2 graph-break locations; see T-0.4 inventory).
+#
+# Forward: delegates to causal_conv1d_fn when available.
+# Backward: depthwise grouped-conv1d via F.conv1d with left-only padding,
+# which matches DaoAILab's semantics (groups=D, kernel K, causal padding).
+# This may be a touch slower than DaoAILab's fused CUDA backward, but
+# produces correct gradients under autograd + compiled-autograd.
+# If causal_conv1d exposes an internal autograd.Function we could call,
+# the register_autograd body can be updated to use it (probe first).
+# ---------------------------------------------------------------------------
+
+_CAUSAL_CONV1D_BACKEND = None
+try:
+    from causal_conv1d import causal_conv1d_fn as _causal_conv1d_fn
+    _CAUSAL_CONV1D_BACKEND = _causal_conv1d_fn
+except Exception:  # pragma: no cover
+    _CAUSAL_CONV1D_BACKEND = None
+
+
+@torch.library.custom_op("autokernel::causal_conv1d", mutates_args=())
+def causal_conv1d_shim_op(
+    x: torch.Tensor,       # (B, D, T) contiguous
+    weight: torch.Tensor,  # (D, K)
+    bias: torch.Tensor,    # (D,)
+) -> torch.Tensor:
+    """Forward: causal conv1d via DaoAILab if available, else native.
+
+    Shapes:
+        x      : (B, D, T)
+        weight : (D, K) depthwise-per-channel
+        bias   : (D,)
+        y      : (B, D, T)
+    """
+    if _CAUSAL_CONV1D_BACKEND is not None:
+        return _CAUSAL_CONV1D_BACKEND(x, weight, bias)
+    # Fallback: pure PyTorch depthwise causal conv
+    import torch.nn.functional as F
+    D, K = weight.shape
+    x_padded = F.pad(x, (K - 1, 0))
+    return F.conv1d(x_padded, weight.unsqueeze(1), bias, groups=D)
+
+
+@causal_conv1d_shim_op.register_fake
+def _(x, weight, bias):
+    return x.new_empty(x.shape)
+
+
+def _causal_conv1d_shim_setup(ctx, inputs, output):
+    x, weight, bias = inputs
+    ctx.save_for_backward(x, weight, bias)
+
+
+def _causal_conv1d_shim_backward(ctx, grad_out):
+    """Backward via DaoAILab's own autograd.Function when available (native fast),
+    else pure-PyTorch depthwise conv1d fallback.
+
+    DaoAILab's `causal_conv1d_fn` internally wraps `CausalConv1dFn.apply(...)`,
+    which is a `torch.autograd.Function` with its own fast CUDA/HIP backward.
+    We replay the forward under `torch.enable_grad()` so PyTorch captures that
+    backward via `torch.autograd.grad`, preserving production throughput.
+
+    The F.conv1d fallback is kept for environments without the extension
+    (CPU tests, missing wheels).
+    """
+    import torch.nn.functional as F
+
+    x, weight, bias = ctx.saved_tensors
+    D, K = weight.shape
+
+    x_req = x.detach().requires_grad_(True)
+    w_req = weight.detach().requires_grad_(True)
+    b_req = bias.detach().requires_grad_(True) if bias is not None else None
+
+    if _CAUSAL_CONV1D_BACKEND is not None:
+        with torch.enable_grad():
+            y = _CAUSAL_CONV1D_BACKEND(x_req, w_req, b_req)
+    else:
+        with torch.enable_grad():
+            x_padded = F.pad(x_req, (K - 1, 0))
+            y = F.conv1d(
+                x_padded,
+                w_req.unsqueeze(1),
+                b_req,
+                groups=D,
+            )
+
+    inputs = [x_req, w_req]
+    if b_req is not None:
+        inputs.append(b_req)
+    grads = torch.autograd.grad(
+        outputs=y,
+        inputs=inputs,
+        grad_outputs=grad_out,
+        retain_graph=False,
+        create_graph=False,
+    )
+    grad_x = grads[0]
+    grad_w = grads[1]
+    grad_b = grads[2] if b_req is not None else None
+    return grad_x, grad_w, grad_b
+
+
+causal_conv1d_shim_op.register_autograd(
+    _causal_conv1d_shim_backward, setup_context=_causal_conv1d_shim_setup
+)
+
+
+# v3 T-3.3 (H11 fix): autocast rule for causal conv1d shim.
+try:
+    causal_conv1d_shim_op.register_autocast("cuda", torch.float16)
+except AttributeError:
+    pass
+
 

@@ -308,9 +308,20 @@ class HyPEShortConvBlock(nn.Module):
             # Pure PyTorch conv path — no DaoAILab extension boundary
             z = self._manual_causal_conv1d(y)
         elif _HAS_CAUSAL_CONV1D:
-            z = causal_conv1d_fn(
-                y.transpose(1, 2), self.conv_weight, self.conv_bias
-            ).transpose(1, 2)
+            # v3 T-3.2 (2nd half): route through autokernel::causal_conv1d
+            # custom_op when AUTOKERNEL_CAUSAL_CONV_SHIM=1. This gives Dynamo
+            # a clean op boundary (no graph break) and preserves correct
+            # autograd under compiled-autograd.
+            import os as _os
+            if _os.environ.get("AUTOKERNEL_CAUSAL_CONV_SHIM", "0") in ("1", "true", "True"):
+                import kernels.hip._torch_ops  # noqa: F401 — trigger op registration
+                z = torch.ops.autokernel.causal_conv1d(
+                    y.transpose(1, 2).contiguous(), self.conv_weight, self.conv_bias
+                ).transpose(1, 2)
+            else:
+                z = causal_conv1d_fn(
+                    y.transpose(1, 2), self.conv_weight, self.conv_bias
+                ).transpose(1, 2)
         else:
             z = self.conv(y.transpose(1, 2))[:, :, :T].transpose(1, 2)
         conv_out = self.out_proj(c * z)

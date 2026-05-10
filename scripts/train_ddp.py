@@ -182,8 +182,15 @@ def save_nan_forensics(
     recent_grad_norms,
     monitor=None,
     global_step: int = 0,
+    optimizer=None,
+    args=None,
 ) -> Optional[str]:
-    """fp16-stability R1: dump diagnostic state on first NaN detection.
+    """fp16-stability R1 + v3 T-5 C.0: dump diagnostic state + replay bundle.
+
+    Writes ``{dump_dir}/nan_dump_step_{step}.pt`` AND (when optimizer/args
+    are provided) ``{dump_dir}/replay-bundle-step-{step}/`` containing
+    everything a future replay executor needs to re-run the failing batch
+    offline under alternate configs.
 
     Writes ``{dump_dir}/nan_dump_step_{step}.pt`` capturing everything a
     post-mortem needs:
@@ -250,6 +257,103 @@ def save_nan_forensics(
         torch.save(dump, path)
         print(f"  [fp16-forensics] NaN dump -> {path} "
               f"(trigger={trigger}, scale={scaler_state.get('scale')})")
+
+        # v3 T-5 C.0: replay bundle (optimizer + args present => full bundle).
+        # A future session can add scripts/replay_step.py to re-run the batch
+        # under alternate configs for diagnosis.
+        if optimizer is not None and args is not None:
+            try:
+                bundle_dir = os.path.join(dump_dir, f"replay-bundle-step-{step}")
+                os.makedirs(bundle_dir, exist_ok=True)
+
+                # batch tensors
+                torch.save(
+                    {
+                        "input_ids": input_ids.detach().cpu() if input_ids is not None else None,
+                        "targets": targets.detach().cpu() if targets is not None else None,
+                        "doc_ids": doc_ids.detach().cpu() if doc_ids is not None else None,
+                        "batch_idx": int(batch_idx) if batch_idx is not None else None,
+                    },
+                    os.path.join(bundle_dir, "batch.pt"),
+                )
+
+                # full model state BEFORE the failing step (model is still
+                # pre-optimizer-step state here since we dump before rollback)
+                torch.save(
+                    {"model": raw.state_dict()},
+                    os.path.join(bundle_dir, "model_state.pt"),
+                )
+
+                # optimizer + scaler state
+                optim_bundle = {
+                    "optimizer": optimizer.state_dict(),
+                    "scaler": scaler.state_dict() if scaler is not None else None,
+                }
+                torch.save(optim_bundle, os.path.join(bundle_dir, "optim_state.pt"))
+
+                # RNG state (torch + numpy) for deterministic replay
+                try:
+                    import numpy as _np
+                    rng = {
+                        "torch_cpu": torch.get_rng_state(),
+                        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                        "numpy": _np.random.get_state(),
+                    }
+                    torch.save(rng, os.path.join(bundle_dir, "rng.pt"))
+                except Exception:
+                    pass
+
+                # Config snapshot: all args + git SHA + env flags.
+                import json as _json
+                import subprocess as _sp
+                try:
+                    git_sha = _sp.check_output(
+                        ["git", "rev-parse", "HEAD"], stderr=_sp.DEVNULL
+                    ).decode().strip()
+                except Exception:
+                    git_sha = "unknown"
+                ak_envs = {
+                    k: os.environ.get(k, "")
+                    for k in [
+                        "AUTOKERNEL_FIX_ROPE_GATE",
+                        "AUTOKERNEL_CAUSAL_CONV_SHIM",
+                        "AUTOKERNEL_SPECTRA_BRANCHLESS",
+                        "HSA_OVERRIDE_GFX_VERSION",
+                        "TORCH_COMPILE_MODE",
+                    ]
+                }
+                # args namespace -> plain dict (drop non-serializable keys)
+                args_dict = {}
+                for k, v in vars(args).items():
+                    try:
+                        _json.dumps(v)
+                        args_dict[k] = v
+                    except Exception:
+                        args_dict[k] = repr(v)
+                cfg = {
+                    "git_sha": git_sha,
+                    "env": ak_envs,
+                    "args": args_dict,
+                    "trigger": trigger,
+                    "step": int(step),
+                    "global_step": int(global_step),
+                }
+                with open(os.path.join(bundle_dir, "config.json"), "w", encoding="utf-8") as f:
+                    _json.dump(cfg, f, indent=2, default=str)
+
+                # Activation snapshot (last N samples, if monitor has any)
+                if monitor is not None:
+                    try:
+                        stats = monitor.current_stats()
+                        with open(os.path.join(bundle_dir, "activation_stats_window.json"), "w", encoding="utf-8") as f:
+                            _json.dump(stats, f, indent=2, default=str)
+                    except Exception:
+                        pass
+
+                print(f"  [fp16-forensics] replay bundle -> {bundle_dir}")
+            except Exception as exc:
+                print(f"  [fp16-forensics] WARNING: replay bundle dump failed: "
+                      f"{type(exc).__name__}: {exc}")
         return path
     except Exception as exc:
         print(f"  [fp16-forensics] WARNING: NaN dump failed: "
@@ -792,6 +896,11 @@ def main():
     parser.add_argument("--class-name", required=True, help="Model class name")
     parser.add_argument("--dataset", required=True, help="Pre-tokenized .bin file")
     parser.add_argument("--resume-from", default=None, help="Checkpoint for CPT (weights only)")
+    parser.add_argument("--resume-preserve-optimizer", action="store_true",
+                        help="v3 T-5 C.1: also restore optimizer + scaler state from "
+                             "--resume-from. Default resume is weights-only; this enables "
+                             "the preserved-state warm-start variant (tests v3 H14).")
+
     parser.add_argument("--checkpoint-dir", default=None)
     parser.add_argument("--checkpoint-interval", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=1)
@@ -1091,6 +1200,11 @@ def main():
         os.environ["AUTOKERNEL_FIX_ROPE_GATE"] = "1"
     if getattr(args, "ak_spectra_branchless", False) or getattr(args, "ak_sync_cleanup", False):
         os.environ["AUTOKERNEL_SPECTRA_BRANCHLESS"] = "1"
+    # v3 T-3.2 (2nd half): route conv_blocks through autokernel::causal_conv1d
+    # custom_op (eliminates second graph-break location + enables compiled
+    # autograd clean path).
+    if getattr(args, "ak_causal_conv_shim", False):
+        os.environ["AUTOKERNEL_CAUSAL_CONV_SHIM"] = "1"
 
     # v3 T-4 compiled autograd activation. Must be set BEFORE any
     # torch.compile call. Risk: may regress DDP allreduce overlap
@@ -1262,7 +1376,9 @@ def main():
                       f"error: {_pfexc}")
 
     # Resume (Approach B: weights only, fresh optimizer)
+    _resume_ckpt_cache = None  # v3 T-5 C.1: optimizer/scaler state to restore post-construction
     if args.resume_from:
+
         # fp16-stability P5: tighten max_grad_norm default on resumed runs.
         # Accumulated weight magnitude in a resumed model is higher than at
         # fresh init, making large grads more likely to overflow fp16. Only
@@ -1284,9 +1400,18 @@ def main():
             model.load_state_dict(state_dict, strict=False)
             if rank == 0:
                 print("  Warning: loaded with strict=False")
-        if rank == 0:
-            print(f"  Resumed from step {ckpt.get('step', '?')}, fresh optimizer")
-        del ckpt, state_dict
+        # v3 T-5 C.1: optionally preserve optimizer + scaler state. Default
+        # remains weights-only (fresh optimizer) for back-compat; the
+        # preserve-state variant is gated by --resume-preserve-optimizer.
+        if getattr(args, "resume_preserve_optimizer", False):
+            _resume_ckpt_cache = ckpt  # keep for use after optimizer is constructed
+            if rank == 0:
+                print(f"  Resumed from step {ckpt.get('step', '?')}, optimizer+scaler state PRESERVED")
+        else:
+            if rank == 0:
+                print(f"  Resumed from step {ckpt.get('step', '?')}, fresh optimizer")
+            del ckpt
+        del state_dict
 
     model.train()
 
@@ -1411,6 +1536,38 @@ def main():
     # a single outlier batch cannot overflow catastrophically.
     scaler = torch.amp.GradScaler("cuda", init_scale=1024.0, backoff_factor=0.25,
                                   growth_interval=500)
+
+    # v3 T-5 C.1: restore optimizer + scaler state when --resume-preserve-optimizer
+    # was set. The checkpoint was cached during the resume_from block above;
+    # we apply it here now that optimizer + scaler exist.
+    if getattr(args, "resume_preserve_optimizer", False) and _resume_ckpt_cache is not None:
+        _rc = _resume_ckpt_cache
+        try:
+            if "optimizer_state_dict" in _rc:
+                optimizer.load_state_dict(_rc["optimizer_state_dict"])
+                if rank == 0:
+                    print("  [resume] optimizer state restored")
+            else:
+                if rank == 0:
+                    print("  [resume] WARN: no optimizer_state_dict in checkpoint; "
+                          "using fresh optimizer")
+        except Exception as _exc:
+            if rank == 0:
+                print(f"  [resume] WARN: optimizer restore failed ({_exc}); fresh state")
+        try:
+            if "scaler_state_dict" in _rc:
+                scaler.load_state_dict(_rc["scaler_state_dict"])
+                if rank == 0:
+                    print("  [resume] scaler state restored")
+            elif "scaler" in _rc:  # v3 replay bundle layout fallback
+                scaler.load_state_dict(_rc["scaler"])
+                if rank == 0:
+                    print("  [resume] scaler state restored (replay-bundle layout)")
+        except Exception as _exc:
+            if rank == 0:
+                print(f"  [resume] WARN: scaler restore failed ({_exc}); fresh state")
+        del _resume_ckpt_cache, _rc
+
 
     # --- Metrics ---
     n_params = sum(p.numel() for p in raw_model.parameters())
@@ -1932,6 +2089,8 @@ def main():
                             recent_grad_norms=recent_grad_norms,
                             monitor=monitor,
                             global_step=global_step,
+                            optimizer=optimizer,
+                            args=args,
                         )
                     if too_many_skips and rank == 0:
                         print(f"  [StabilityGuard] {_consecutive_skips} consecutive grad skips, rolling back")

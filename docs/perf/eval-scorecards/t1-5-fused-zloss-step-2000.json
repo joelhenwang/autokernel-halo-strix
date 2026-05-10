@@ -1,0 +1,242 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/t1-5-fused-zloss/step_2000.pt",
+  "checkpoint_name": "t1-5-fused-zloss-step-2000",
+  "step": 2000,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "a",
+  "eval_timestamp": "2026-05-10T20:27:11Z",
+  "eval_duration_s": 60.31,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.0971,
+    "gpt_small_val": 2.0572,
+    "stem_crawl_val": 1.624,
+    "dolma_val": 1.6018,
+    "_raw_ce": {
+      "wikitext_val": 5.233,
+      "gpt_small_val": 5.1334,
+      "stem_crawl_val": 4.0525,
+      "dolma_val": 3.9971
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.6,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 0
+    },
+    "distinct_2": 0.4994,
+    "self_ppl": 2.852,
+    "avg_length": 89.3,
+    "sample_preview": "The history of the Roman Empire is traced back to the Renaissance. The Roman Empire of Roman history",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.4335,
+        "self_ppl": 2.372
+      },
+      "stage2_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.4335,
+        "self_ppl": 2.372
+      },
+      "stage3_winner": {
+        "temperature": 0.6,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 0,
+        "distinct_2": 0.4994,
+        "self_ppl": 2.852
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 57690.3,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 67715.6,
+    "peak_mem_gb_seq512": 0.432,
+    "tok_s_seq1024_bs1": 73198.2,
+    "peak_mem_gb_seq1024": 0.535
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:2dc38d145d1563e0",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new period in which the Roman Empire was first developed.\nA Roman Empire started with an initial history of the Rom",
+      "In the field of particle physics, the Standard Model describes the phase space of the Hamiltonian and is given as a solution, given by:\n\n$$\\frac{dx}{dt} = \\frac",
+      "To prove that the square root of 2 is irrational, we assume that $a \\sim \\text{Exp}(b) = (a + b)(a + b)(a + c)\\), which implies that $a + b^2 = a + b + c\\ = a +"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/t1-5-fused-zloss/step_1500.pt",
+      "prior_hash": "sha256:d17017a76f12367a",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with a new period in which the Roman Empire was first developed.\nA Roman Empire started with an initial history of the Rom",
+          "prior": "The history of the Roman Empire began with its new beginnings in the early 1900s and early nineteenth century.\n\nQuestion: What was the title of the historical c"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the phase space of the Hamiltonian and is given as a solution, given by:\n\n$$\\frac{dx}{dt} = \\frac",
+          "prior": "In the field of particle physics, the Standard Model describes the first-order linear model (1) as a constant, which is not a constant and is not a constant. Th"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume that $a \\sim \\text{Exp}(b) = (a + b)(a + b)(a + c)\\), which implies that $a + b^2 = a + b + c\\ = a +",
+          "prior": "To prove that the square root of 2 is irrational, we assume that the square root of 2 is rational.\n\nSince the square root of 2 is rational, it implies that the "
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      0.11,
+      0.012,
+      -0.036,
+      -0.074,
+      -0.034,
+      13.023,
+      3.561,
+      4.697,
+      6.362,
+      8.324,
+      10.936,
+      18.993,
+      31.022,
+      3.14
+    ],
+    "layer_rms_norm": [
+      7.447,
+      9.343,
+      9.673,
+      9.226,
+      8.091,
+      4.664,
+      7.931,
+      8.391,
+      8.69,
+      8.881,
+      8.991,
+      8.927,
+      8.613,
+      42.225
+    ],
+    "mean_layer_kurtosis": 7.145,
+    "mean_layer_rms_norm": 10.792,
+    "max_layer_kurtosis": 31.022,
+    "max_layer_rms_norm": 42.225,
+    "_split_used": "wikitext_val"
+  },
+  "convergence_stats": {
+    "num_batches": 3,
+    "seq_len": 512,
+    "batch_size": 2,
+    "is_looped": false,
+    "mean_recurrence": 1,
+    "num_layers": 14,
+    "tau": 0.95,
+    "per_layer_cos_to_final": [
+      0.3992,
+      0.4648,
+      0.4773,
+      0.4976,
+      0.525,
+      0.5344,
+      0.7953,
+      0.8069,
+      0.8082,
+      0.8017,
+      0.7873,
+      0.7408,
+      0.6001,
+      1.0
+    ],
+    "per_layer_cos_to_final_frac_high": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "inter_layer_transition_cos": [
+      0.9862,
+      0.9973,
+      0.9964,
+      0.9925,
+      0.8128,
+      0.7742,
+      0.992,
+      0.9933,
+      0.9925,
+      0.991,
+      0.9832,
+      0.9486,
+      0.6001
+    ],
+    "effective_rank_final": 1.0397,
+    "_split_used": "wikitext_val",
+    "iter_k_cos_to_final": null,
+    "iter_k_cos_to_final_frac_high": null,
+    "iter_transition_cos": null
+  }
+}

@@ -99,6 +99,29 @@ _TRAINING_PATH_OPS = [
         "phase_b_fixed": False,
         "graph_break_cause": "older custom_op semantics (external extension)",
     },
+    # v3 T-3.2 fix: wraps the legacy graph-break path in a proper custom_op
+    # with register_autograd + register_autocast. When --ak-fix-rope-gate-op
+    # is on, model routes through this op instead of the raw kernel_fn.
+    {
+        "op_name": "autokernel::fused_rope_gate_mul",
+        "graph_break_source": False,
+        "enabled_by_flags": ["--ak-fix-rope-gate-op"],
+        "module": "kernels.hip._torch_ops",
+        "attr": "fused_rope_gate_mul_op",
+        "phase_b_fixed": True,
+        "fixes": "kernels.hip.fused_rope_gate_mul.kernel_fn",
+    },
+    # v3 T-3.2 (2nd half) fix: wraps DaoAILab's causal_conv1d_fn as custom_op.
+    # When --ak-causal-conv-shim is on, model routes through this.
+    {
+        "op_name": "autokernel::causal_conv1d",
+        "graph_break_source": False,
+        "enabled_by_flags": ["--ak-causal-conv-shim"],
+        "module": "kernels.hip._torch_ops",
+        "attr": "causal_conv1d_shim_op",
+        "phase_b_fixed": True,
+        "fixes": "DaoAILab::causal_conv1d_fn",
+    },
 ]
 
 
