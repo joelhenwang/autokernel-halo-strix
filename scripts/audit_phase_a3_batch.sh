@@ -79,6 +79,11 @@ run_probe() {
     # Fixed small batch to fit memory uniformly; the point is grad flow, not tok/s.
     # num-workers=2 minimizes dataloader startup overhead.
     # warmup-steps=10 is short because we only run 50 steps.
+    # Pass Sprint 1 feature flags so head_gate / v_res_scale / doc_mask
+    # paths are actually exercised in forward — otherwise preflight
+    # false-positives on these unused-parameter cases (2026-05-11 fix).
+    # Auto-cleared by models that don't implement the flag via
+    # getattr(args, ...) checks in train_ddp.py.
     set +e
     torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 \
       --master_addr=127.0.0.1 --master_port=29512 \
@@ -91,6 +96,7 @@ run_probe() {
       --max-grad-norm 1.0 \
       --checkpoint-dir "$CKPT" --checkpoint-interval 9999 --log-interval 10 \
       --max-steps 50 \
+      --intra-doc-mask --value-residuals --head-gating \
       --diag-frozen-params "$CKPT/diag.jsonl" \
       $CONFIG_FLAGS \
       > "$CKPT/run.log" 2>&1
@@ -101,11 +107,15 @@ run_probe() {
         echo "  FAIL rc=$rc; last 5 lines of log:"
         tail -5 "$CKPT/run.log" 2>/dev/null | sed 's/^/    /'
         echo "$LABEL $CONFIG FAIL rc=$rc" >> "$AUDIT_DIR/_failures.log"
+        # Give GPU a moment to settle after any HIP-level failure.
+        sleep 5
+        return 1
     else
         # Emit a one-line summary.
         STEPS_RECORDED=$(wc -l < "$CKPT/diag.jsonl" 2>/dev/null || echo 0)
         LAST_LOSS=$(grep -oE 'best loss=[0-9.]+' "$CKPT/run.log" 2>/dev/null | tail -1)
         echo "  OK steps=$STEPS_RECORDED $LAST_LOSS"
+        return 0
     fi
 }
 
