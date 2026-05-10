@@ -1092,6 +1092,26 @@ def main():
     if getattr(args, "ak_spectra_branchless", False) or getattr(args, "ak_sync_cleanup", False):
         os.environ["AUTOKERNEL_SPECTRA_BRANCHLESS"] = "1"
 
+    # v3 T-4 compiled autograd activation. Must be set BEFORE any
+    # torch.compile call. Risk: may regress DDP allreduce overlap
+    # (PyTorch DDP notes warn whole-backward compilation prevents hooks
+    # from firing until compiled backward finishes). T-0.6 DDP trace will
+    # capture this. Continue-gate: >=2.5-3% net DDP tok/s + no overlap
+    # regression + no recompile churn.
+    if getattr(args, "ak_compiled_autograd", False):
+        import torch._dynamo as _dynamo
+        try:
+            _dynamo.config.compiled_autograd = True
+            print("[compiled-autograd] enabled: torch._dynamo.config.compiled_autograd = True")
+        except AttributeError:
+            # Older torch versions don't have this field; try the runtime enabler.
+            try:
+                import torch._dynamo.compiled_autograd as _ca
+                _ca.enable(torch.compile(fullgraph=False))
+                print("[compiled-autograd] enabled via runtime context (older torch)")
+            except Exception as _e:
+                print(f"[compiled-autograd] enable failed: {_e}")
+
     use_async = not args.no_async
     use_fp16 = not args.no_fp16_compress
 
