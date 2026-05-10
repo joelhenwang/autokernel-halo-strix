@@ -5,6 +5,31 @@
 
 ---
 
+## AutoKernel 40k throughput effort (2026-05-11, IN PROGRESS)
+
+Nominal target: 40k aggregate tok/s across 2× Strix Halo systems.
+
+Engineering success criterion: ≥36k aggregate tok/s with clean 2000-step loss parity,
+no newly frozen params, no GradScaler collapse, no nonfinite update events, and no
+post-NorMuon update-ratio pathology.
+
+Strong success: ≥38k aggregate tok/s under the same stability and learning gates.
+
+Stretch: 40k aggregate tok/s. Do not treat failure to reach 40k as failure if ≥36k
+is stable and learning-equivalent. Speedups from frozen params, severed gradients,
+or unstable fp16 behavior do not count.
+
+Blanket `--optimize-kernels` remains disabled for production training until granular
+kernel flags pass per-feature throughput, gradient-flow, dtype, and 2000-step stability gates.
+
+**Execution plan:** `docs/research/autokernel-40k-v3-execution-plan.md` (single source of truth).
+
+**Current phase:** T-0 instrumentation (Days 0-1 of 18-day campaign).
+
+**Baseline:** ~31,331 tok/s (OdinFlat Sprint 3A-confirm, no `--optimize-kernels`).
+
+---
+
 ## Autokernel Remediation (2026-05-11, IN PROGRESS)
 
 **Context:** OdinFlat throughput investigation (2026-05-10) revealed that
