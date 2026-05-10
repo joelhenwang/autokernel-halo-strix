@@ -34,6 +34,7 @@ class AutokernelAutogradSafetyCI(unittest.TestCase):
 
     ALLOWED_ZERO_PATTERNS = {
         "v_res_scale",   # first-layer, no v_prev
+        "head_gate",     # only active when caller passes head_gate_active=True
     }
 
     def _check_grads(self, model, label: str):

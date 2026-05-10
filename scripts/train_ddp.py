@@ -596,6 +596,9 @@ def _autokernel_autograd_preflight(model, device, args) -> tuple[bool, str]:
     # no v_prev input).
     ALLOWED_ZERO_PATTERNS = {
         "v_res_scale",  # first-layer, no v_prev — documented in Track 3.A
+        "head_gate",    # only active when caller passes head_gate_active=True
+                        # (not guaranteed in every forward; OdinHalo's
+                        # shared_layer head_gate is unused per B4 diag)
     }
     offenders = []
     none_offenders = []
