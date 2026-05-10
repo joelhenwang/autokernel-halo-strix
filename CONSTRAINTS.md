@@ -32,6 +32,17 @@
 - [ ] **_skip_autokernel flag** — momentum-free blocks set `_skip_autokernel = True`. Sub-module optimizations (FusedQKV, FusedSwiGLU) still apply.
 - [ ] **Autokernel before checkpoint load** — fused QKV keys must exist before `load_state_dict()`
 - [ ] **Autokernel + value_bias** — detect fused replacement with `hasattr(self.attn, 'w_qkv')` before passing extra kwargs
+- [ ] **HIP kernels in training paths MUST use `torch.library.custom_op` + `register_autograd`** OR `torch.autograd.Function`. Raw pybind calls (`self.kernel_fn(...)`) in `forward()` return tensors with `grad_fn=None` which silently severs gradient flow to upstream parameters. Caused OdinFlat's +0.65 loss regression at step 2000. See `docs/perf/autokernel-deep-analysis.md`. Pre-merge gate: run `scripts/audit_autokernel_replacements.py`; any `UNSAFE` verdict blocks merge.
+- [ ] **Run `scripts/test_phase_b_autograd_safety.py` before any autokernel PR** — CUDA smoke test asserts every leaf param gets a non-None `.grad` after one forward+backward with the replacement active.
+- [ ] **`--optimize-kernels` preflight check in `train_ddp.py`** (Phase E, 2026-05-11+) — on training launch with `--optimize-kernels`, trainer dispatches a dummy batch, asserts every param with `requires_grad=True` received a finite grad. Aborts with actionable error if not.
+
+## Triton Kernel Authoring (Phase D.A+)
+
+- [ ] **Use `TritonAutogradFunction` base class** from `autokernel/triton_base.py`. Don't roll your own `torch.autograd.Function` subclass; the base handles dtype/device validation uniformly.
+- [ ] **Cache autotune results with `cached_autotune`** from `autokernel/triton_autotune.py`. Never hardcode tile sizes — they depend on shape and dtype.
+- [ ] **Parity + bench gate** — every Triton kernel must pass `scripts/kernel_parity_harness.py` (fwd + bwd rel_err < 5e-3 at fp16) AND post a bench result from `scripts/kernel_bench_harness.py` (≥ 1.05× vs eager for ship).
+- [ ] **Ship gate: ≥5% total step wall improvement** at production shape + loss parity at step 200 in a training probe. Isolated bench speedup is necessary but not sufficient.
+- [ ] **Authoring reference**: `knowledge/kernels/triton_author_guide.md`.
 
 ## Looped Models (Parcae)
 

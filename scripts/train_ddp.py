@@ -526,6 +526,119 @@ def average_grads(model, world_size):
 
 _consecutive_skips = 0
 
+def _autokernel_autograd_preflight(model, device, args) -> tuple[bool, str]:
+    """Phase E.3 preflight (2026-05-11): dispatch one forward+backward on a
+    small dummy batch, then assert every parameter with requires_grad=True
+    received a finite, non-None gradient. Catches autograd severance bugs
+    in autokernel Replacements before committing compute budget to a run.
+
+    Returns (ok, message). ok=False aborts the launch. message on failure
+    enumerates the first offending parameters.
+    """
+    import torch
+
+    # Sample a tiny batch from the dataloader's distribution. We use a
+    # single-step dummy to avoid entangling with the outer training loop
+    # or the compile warmup cache.
+    try:
+        block_size = int(args.block_size)
+        batch_size = min(2, int(args.batch_size))
+        # Use a lightweight vocab range; load_model_from_file guarantees
+        # tok_embeddings exists; fall back to 100 if not inferrable.
+        vocab = 100
+        if hasattr(model, "module"):
+            inner = model.module
+        else:
+            inner = model
+        for name, mod in inner.named_modules():
+            if hasattr(mod, "num_embeddings"):
+                vocab = int(mod.num_embeddings)
+                break
+        x = torch.randint(0, vocab, (batch_size, block_size),
+                          device=device, dtype=torch.long)
+        t = torch.randint(0, vocab, (batch_size, block_size),
+                          device=device, dtype=torch.long)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"preflight dummy-input construction failed: {exc}"
+
+    # Zero grads before the test so we can distinguish "got grad now" vs
+    # "carried over from earlier".
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad.zero_()
+
+    model.train()
+    try:
+        with torch.amp.autocast("cuda", dtype=torch.float16):
+            out = model(x, targets=t) if _model_accepts_kwargs(model, "targets") else model(x)
+            if isinstance(out, torch.Tensor) and out.dim() == 0:
+                loss = out
+            elif isinstance(out, dict) and "logits" in out:
+                logits = out["logits"]
+                loss = torch.nn.functional.cross_entropy(
+                    logits.view(-1, logits.size(-1)).float(),
+                    t.view(-1),
+                )
+            elif isinstance(out, torch.Tensor):
+                loss = torch.nn.functional.cross_entropy(
+                    out.view(-1, out.size(-1)).float(),
+                    t.view(-1),
+                )
+            else:
+                return False, f"preflight unknown output type: {type(out)}"
+        loss.backward()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"preflight forward/backward raised: {exc}"
+
+    # Inspect grads. A parameter is considered OK if its grad is finite and
+    # not all zeros. Parameters with all-zero grads are allowed ONLY if
+    # they are documented as such (e.g. v_res_scale on the first layer with
+    # no v_prev input).
+    ALLOWED_ZERO_PATTERNS = {
+        "v_res_scale",  # first-layer, no v_prev — documented in Track 3.A
+    }
+    offenders = []
+    none_offenders = []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if p.grad is None:
+            if any(allowed in name for allowed in ALLOWED_ZERO_PATTERNS):
+                continue
+            none_offenders.append(name)
+            continue
+        # p.grad is not None; check finite-ness
+        gnorm = float(p.grad.detach().float().abs().sum().item())
+        if not torch.isfinite(p.grad).all():
+            offenders.append(f"{name} (non-finite grad)")
+        elif gnorm == 0.0 and not any(allowed in name for allowed in ALLOWED_ZERO_PATTERNS):
+            offenders.append(f"{name} (grad all zero)")
+
+    if none_offenders:
+        sample = ", ".join(none_offenders[:5])
+        more = f" (+ {len(none_offenders) - 5} more)" if len(none_offenders) > 5 else ""
+        return False, (
+            f"{len(none_offenders)} parameters received grad=None: {sample}{more}"
+        )
+    if offenders:
+        sample = "; ".join(offenders[:5])
+        more = f" (+ {len(offenders) - 5} more)" if len(offenders) > 5 else ""
+        return False, f"{len(offenders)} parameter grads malformed: {sample}{more}"
+
+    return True, ""
+
+
+def _model_accepts_kwargs(model, kwarg: str) -> bool:
+    """Minimal introspection helper; skipped for DDP-wrapped models."""
+    inner = model.module if hasattr(model, "module") else model
+    try:
+        import inspect
+        sig = inspect.signature(inner.forward)
+        return kwarg in sig.parameters
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _complete_step(model, optimizer, scaler, scheduler, world_size, max_grad_norm, rank, diag_writer=None):
     """Unscale, clip, step optimizer, update scaler. Returns grad_norm.
 
@@ -861,6 +974,38 @@ def main():
         except Exception as e:
             if rank == 0:
                 print(f"autokernel skipped: {e}")
+
+        # Phase E.3 (2026-05-11): autograd-safety preflight.
+        # After pattern replacement, dispatch a dummy forward+backward and
+        # verify every parameter with requires_grad=True received a finite
+        # gradient. Catches raw-pybind replacements that sever gradient
+        # flow (see docs/perf/autokernel-deep-analysis.md for history).
+        if rank == 0:
+            try:
+                _preflight_ok, _preflight_msg = _autokernel_autograd_preflight(
+                    model, device, args
+                )
+                if not _preflight_ok:
+                    raise RuntimeError(
+                        f"autokernel preflight FAILED: {_preflight_msg}\n"
+                        f"This means --optimize-kernels installed a "
+                        f"Replacement that severs gradient flow. Do NOT "
+                        f"train with this configuration; loss will descend "
+                        f"but model quality degrades. See "
+                        f"docs/perf/autokernel-deep-analysis.md. "
+                        f"Workaround: pass --no-optimize-kernels, OR run "
+                        f"scripts/audit_autokernel_replacements.py and "
+                        f"file a fix. Abort."
+                    )
+                print(f"  [autokernel] preflight OK: all parameters "
+                      f"received gradients after dummy forward+backward")
+            except RuntimeError:
+                raise
+            except Exception as _pfexc:  # noqa: BLE001
+                # Preflight infra itself broke; don't block launch on that,
+                # but emit a visible warning.
+                print(f"  [autokernel] preflight skipped due to harness "
+                      f"error: {_pfexc}")
 
     # Resume (Approach B: weights only, fresh optimizer)
     if args.resume_from:
