@@ -23,10 +23,18 @@ Blanket `--optimize-kernels` remains disabled for production training until gran
 kernel flags pass per-feature throughput, gradient-flow, dtype, and 2000-step stability gates.
 
 **Execution plan:** `docs/research/autokernel-40k-v3-execution-plan.md` (single source of truth).
+**Session log:** `docs/research/../../docs/perf/v3-session-execution-log.md`.
 
-**Current phase:** T-0 instrumentation (Days 0-1 of 18-day campaign).
+**Current phase:** T-1 complete (preliminary), T-3.2 complete. Stack A ready to launch.
 
 **Baseline:** ~31,331 tok/s (OdinFlat Sprint 3A-confirm, no `--optimize-kernels`).
+**T-1.5 preliminary (step 300):** **~33,750 tok/s (+7.7%)** with fused zloss. Full 2000-step run in progress.
+
+**Launch command (Stack A, production-ready):**
+```bash
+STACK=A bash scripts/launch_sprint3a.sh    # OdinFlat ~61h
+STACK=A bash scripts/launch_sprint3b.sh    # OdinHalo ~77h
+```
 
 ---
 
