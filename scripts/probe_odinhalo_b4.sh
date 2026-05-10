@@ -28,9 +28,11 @@
 # Usage (from Machine A):
 #   bash scripts/probe_odinhalo_b4.sh
 
-set -eo pipefail
+set -eo pipefail  # no -u: venv's activate script references unbound vars
 
 cd ~/Desktop/ai_lab/autokernel-halo-strix
+# Activate venv so launch_ddp.sh's rank 0 torchrun command resolves on PATH.
+source .venv/bin/activate
 
 CKPT=checkpoints/odinhalo-b4-probe
 rm -rf "$CKPT"
