@@ -557,16 +557,27 @@ class _FusedSwiGLUReplacement(nn.Module):
         self.w_gate_up = original.w_gate_up
         self.w_down = original.w_down
         self.kernel_fn = kernel_fn
-        # Phase III note (2026-05-09): we DO NOT route this through the
-        # autograd-registered torch.ops.autokernel.silu_gate_mul op despite
-        # the same pattern existing. Empirically (P3-FIXED-v2 probe 2026-05-09)
-        # using the autograd op caused gradient explosion on OdinFlat via
-        # compile_zones+fp16 autocast (scale collapses to 1e-2, maxabs
-        # explodes to 10000+). The raw kernel_fn path (original) trains
-        # correctly at loss parity (Phase II P2: 4.67 vs baseline 4.70).
-        # Hypothesis: the HIP silu_gate_mul_backward kernel has subtly
-        # wrong gradient math that triggers on OdinFlat's deep SwiGLU
-        # chain. Leaving original; TODO: investigate backward numerics.
+        # IMPORTANT (2026-05-10 Phase V finding): this replacement has
+        # two failure modes, both bad:
+        #   - If self.kernel_fn is called directly (current code): the
+        #     output has no grad_fn. w_gate_up silently freezes. Forward
+        #     is +30% faster but training quality degrades over long
+        #     horizons (Phase V V1: loss +0.65 at step 2000 vs baseline).
+        #   - If routed through torch.ops.autokernel.silu_gate_mul (which
+        #     has proper autograd): training is correct but throughput
+        #     DROPS BELOW baseline (~31K → ~30.9K tok/s) because the
+        #     save-for-backward + HIP backward overhead exceeds the
+        #     forward savings (Phase V V2 measurement).
+        #
+        # Conclusion: this replacement provides no net benefit for
+        # OdinFlat. Use autokernel ONLY for other models (e.g. OdinHalo
+        # where iter_norm resets mask the silent-freeze effect) or
+        # investigate a better Triton-based rewrite.
+        #
+        # Keeping the raw-kernel path (the "wrong but fast" one) for
+        # backward compatibility with models that don't care about
+        # w_gate_up gradient flow. OdinFlat's Sprint 3A recipe should
+        # NOT enable --optimize-kernels.
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate, up = self.w_gate_up(x).chunk(2, dim=-1)
