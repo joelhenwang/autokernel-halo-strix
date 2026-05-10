@@ -27,6 +27,11 @@ from typing import List, Dict, Any
 
 import torch
 
+# Ensure repo root on sys.path regardless of invocation cwd.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 # --------------------------------------------------------------------------
 # Op catalog: training-path custom ops on OdinFlat/OdinHalo.
 # From T-0.4 findings (docs/perf/graph-breaks-inventory.md):
@@ -135,18 +140,33 @@ def _introspect_op(spec: Dict[str, Any]) -> Dict[str, Any]:
     record["attr_present"] = True
 
     # For torch.library.custom_op objects, introspect registrations.
-    # The public API surface for this is limited; we heuristically
-    # check attribute presence.
-    record["has_register_fake"] = hasattr(op, "register_fake") or hasattr(
-        op, "_opoverload"
-    )
-    record["has_register_autograd"] = hasattr(op, "register_autograd")
-    # register_autocast is the newer API; not all ops will have it.
-    record["has_register_autocast"] = hasattr(op, "register_autocast")
+    # Heuristic: scan source for register_autocast/register_autograd/register_fake
+    # CALLS (not just method presence) in the module text. This catches whether
+    # a rule was actually registered vs just the API being available.
+    import inspect
+    try:
+        src = inspect.getsource(mod)
+    except Exception:
+        src = ""
 
-    # Note: actual registration presence is hard to detect without running
-    # the op. For now, we report whether the op object exists + has the
-    # expected API methods. Tier 2 deep parity will exercise the ops.
+    # The op-specific decorators look like:
+    #   @rmsnorm_op.register_fake
+    #   rmsnorm_op.register_autograd(...)
+    #   rmsnorm_op.register_autocast(...)
+    attr = spec["attr"]
+    record["has_register_fake"] = (
+        f"@{attr}.register_fake" in src
+    )
+    record["has_register_autograd"] = (
+        f"{attr}.register_autograd" in src
+    )
+    record["has_register_autocast"] = (
+        f"{attr}.register_autocast" in src
+    )
+
+    # Note: actual registration semantics is hard to detect without running
+    # the op. For now, we rely on source-text heuristics above. Tier 2 deep
+    # parity will exercise the ops with actual tensors.
 
     return record
 
