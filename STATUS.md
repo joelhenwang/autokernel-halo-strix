@@ -71,18 +71,51 @@ eager-fallback for fp32. Ship-gate measurement pending.
 
 ### In progress / pending
 
-- **B4 probe (OdinHalo 2000-step `--optimize-kernels`)** — running since
-  ~10:31. Currently step 1700, loss 2.76, tok/s ~30K. Uses pre-B code
-  (launched before B.1-B.4 committed). If loss @ 2000 < 3.8 → OdinHalo
-  is NOT affected by the silent-freeze (iter_norm resets mask it).
-- **Phase A.3 batch** — queues after B4 completes on Machine B.
-- **Phase A.4 synthesis** — waits on A.3.
-- **Phase C (verification probes with Phase B fixes)** — 2000-step
-  probes on OdinFlat + OdinHalo with new code. Determines Sprint 3A/3B
-  final recipes.
-- **Sprint 3A + 3B launch** — blocked on Phase C.
-- **Phase D.B-D kernels** — ship-gate measurements after Phase C
-  establishes baseline.
+- **Phase C (2026-05-11)**: Three attempts all diverged at step 200-250
+  (v1 single-node + fused-zloss, v2 single-node, v3 DDP batch=256).
+  Root cause: Phase B autograd-safe path has slightly different
+  numerical characteristics than vanilla Inductor-fused path; at
+  lr_2d=5e-3 crosses fp16 stability edge. Pre-Phase-B masked this with
+  the silent-freeze. See `docs/perf/phase-c-final-analysis.md`.
+- **B4 probe (OdinHalo 2000-step PRE-B-fix `--optimize-kernels`)**:
+  completed 2026-05-11. Loss 2.51, 14/61 params frozen (silent-freeze
+  confirmed). See `docs/perf/odinhalo-b4-findings.md`.
+- **Phase A.3 audit**: complete, rescoped to Odin family (7 models ×
+  3 configs = 21 probes, 15 successful). Post-fix shows 0 newly-frozen
+  params across all 5 successful production Odin models. Phase B fixes
+  empirically validated at probe scale. See
+  `docs/perf/autokernel-audit-2026-05-11-synthesis.md`.
+
+### Ship decisions (locked)
+
+- **Sprint 3A (OdinFlat)**: DROP `--optimize-kernels`. Use Sprint
+  3A-confirm recipe (validated at loss 3.15 @ step 2000). Expected
+  ~61h wall.
+- **Sprint 3B (OdinHalo)**: needs 500-step verification probe with
+  post-fix `--optimize-kernels` before committing. Three options:
+  1. Conservative: drop `--optimize-kernels`, ~77h wall
+  2. Pre-fix-buggy: keep broken silu path, 48h wall, suboptimal model
+  3. Post-fix-validated: run 500-step probe, ship if stable, 48h wall
+- **`--use-fused-zloss`**: remains opt-in, not validated end-to-end.
+
+### Shipped despite Phase C outcome
+
+Even though Phase C didn't enable `--optimize-kernels` for Sprint 3A,
+the session delivered:
+
+1. **Phase B fixes** (5 replacements + z-loss gradient) — future-proofs
+   the autokernel path. Any model training at a lower LR can safely
+   enable `--optimize-kernels`.
+2. **Phase A audit tooling** — static audit + dynamic probes + CI test
+   + runtime preflight. Regressions caught before ship.
+3. **Phase D.A Triton harness** — foundation for future kernels.
+4. **Phase D.B Triton fused SwiGLU** — first Triton kernel shipped.
+5. **Empirical validation** — 5/5 production Odin models show clean
+   grad flow post-Phase-B at probe scale.
+6. **Documentation** — CONSTRAINTS.md + AGENTS.md + knowledge/ all
+   updated with autograd-safety rules.
+
+### Pending work
 
 ### Commit history (this remediation)
 
