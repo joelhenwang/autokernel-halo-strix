@@ -1,0 +1,88 @@
+[Gloo] Rank 0 is connected to 1 peer ranks. Expected number of connected peer ranks is : 1
+DDP: world_size=2, backend=gloo, async=True, fp16_compress=True
+OdinHalo: 57.6M params
+/home/joelwang-ai-2/Desktop/ai_lab/autokernel-halo-strix/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py:1367: UserWarning: expandable_segments not supported on this platform (Triggered internally at /__w/rockrel/rockrel/external-builds/pytorch/pytorch/c10/hip/HIPAllocatorConfig.h:40.)
+  return t.to(
+[Sprint 1] WARNING: feature flags requested but OdinHalo does not expose any; all ignored.
+[fp16-stability] attn_score_softcap=50.0 applied to 1 Attention modules
+autokernel optimizations applied
+  [autokernel] rmsnorm: 14 modules
+  [autokernel] fused_silu_gate_mul: 6 modules
+Compiling model (per-zone for looped model)...
+compile_zones: per-layer torch.compile mode=default
+PreTokenizedDataset: 6,839,359,091 tokens -> 26,612,292 chunks of 256
+IMU-1 optimizer: NorMuon(2D, n=23,013,120, lr=0.002, ns_dtype=float16, neuron_norm_min_dim=0, cautious_wd=True, flat, no-spectra) + AdamW(1D, n=34,553,888, lr=0.0008, wd=0)
+Training: 57.6M params, batch=16x8x2=256, block=256, lr=0.001
+Steps/epoch: 831634, optimizer steps: 103954, epochs: 1
+[fp16-stability] activation monitor ON: interval=200, out=checkpoints/odinhalo-b4-probe/activation_stats.jsonl, tracked=10 layers
+  [diag-frozen-params] Writing per-param grads to checkpoints/odinhalo-b4-probe/diag.jsonl
+[92mSuccessfully preprocessed all matching files.[0m
+[92mSuccessfully preprocessed all matching files.[0m
+/home/joelwang-ai-2/Desktop/ai_lab/autokernel-halo-strix/.venv/lib/python3.12/site-packages/torch/_dynamo/variables/functions.py:1946: UserWarning: Dynamo does not know how to trace the builtin `posix.stat.` This function is either a Python builtin (e.g. _warnings.warn) or a third-party C/C++ Python extension (perhaps created with pybind).
+If it is a Python builtin, please file an issue on GitHub so the PyTorch team can add support for it and see the next case for a workaround.
+If it is a third-party C/C++ Python extension, please either wrap it into a PyTorch-understood custom operator (see https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html for more details) or, if it is traceable, use `torch.compiler.allow_in_graph`.
+  torch._dynamo.utils.warn_once(explanation + "\n" + "\n".join(hints))
+/home/joelwang-ai-2/Desktop/ai_lab/autokernel-halo-strix/.venv/lib/python3.12/site-packages/torch/_dynamo/variables/functions.py:1946: UserWarning: Dynamo does not know how to trace the builtin `_hashlib.openssl_sha256.` This function is either a Python builtin (e.g. _warnings.warn) or a third-party C/C++ Python extension (perhaps created with pybind).
+If it is a Python builtin, please file an issue on GitHub so the PyTorch team can add support for it and see the next case for a workaround.
+If it is a third-party C/C++ Python extension, please either wrap it into a PyTorch-understood custom operator (see https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html for more details) or, if it is traceable, use `torch.compiler.allow_in_graph`.
+  torch._dynamo.utils.warn_once(explanation + "\n" + "\n".join(hints))
+[92mSuccessfully preprocessed all matching files.[0m
+/home/joelwang-ai-2/Desktop/ai_lab/autokernel-halo-strix/.venv/lib/python3.12/site-packages/torch/_dynamo/variables/functions.py:1946: UserWarning: Dynamo does not know how to trace the builtin `silu_gate_mul_hip_14f8fad8b4e53f86.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.silu_gate_mul_hip.` This function is either a Python builtin (e.g. _warnings.warn) or a third-party C/C++ Python extension (perhaps created with pybind).
+If it is a Python builtin, please file an issue on GitHub so the PyTorch team can add support for it and see the next case for a workaround.
+If it is a third-party C/C++ Python extension, please either wrap it into a PyTorch-understood custom operator (see https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html for more details) or, if it is traceable, use `torch.compiler.allow_in_graph`.
+  torch._dynamo.utils.warn_once(explanation + "\n" + "\n".join(hints))
+[step     50] loss=10.2516 bpb=4.108 lr=3.33e-04 grad=2.66 tok/s=21,229 mfu=6.2% mem=6.5GB scale=1.0e+03
+[step    100] loss=7.1569 bpb=2.868 lr=6.67e-04 grad=0.50 tok/s=32,943 mfu=9.6% mem=6.5GB scale=1.0e+03
+[step    150] loss=6.2508 bpb=2.505 lr=1.00e-03 grad=0.31 tok/s=32,718 mfu=9.5% mem=6.5GB scale=1.0e+03
+[step    200] loss=5.8249 bpb=2.334 lr=1.33e-03 grad=0.32 tok/s=32,767 mfu=9.5% mem=6.5GB scale=1.0e+03
+[step    250] loss=5.6266 bpb=2.255 lr=1.67e-03 grad=0.43 tok/s=32,729 mfu=9.5% mem=6.5GB scale=1.0e+03
+[step    300] loss=5.4238 bpb=2.174 lr=2.00e-03 grad=0.29 tok/s=32,712 mfu=9.5% mem=6.5GB scale=1.0e+03
+[step    350] loss=5.2583 bpb=2.107 lr=2.00e-03 grad=0.33 tok/s=32,697 mfu=9.5% mem=6.5GB scale=1.0e+03
+[step    400] loss=5.1197 bpb=2.052 lr=2.00e-03 grad=0.25 tok/s=32,665 mfu=9.5% mem=6.5GB scale=1.0e+03
+[step    450] loss=4.9667 bpb=1.990 lr=2.00e-03 grad=0.28 tok/s=32,547 mfu=9.5% mem=6.5GB scale=1.0e+03
+[step    500] loss=4.8701 bpb=1.952 lr=2.00e-03 grad=0.28 tok/s=32,653 mfu=9.5% mem=6.5GB scale=2.0e+03
+[rank 0] Checkpoint saved: checkpoints/odinhalo-b4-probe/step_500.pt
+[rank 0] >>> auto-eval spawned for checkpoints/odinhalo-b4-probe/step_500.pt (log: checkpoints/odinhalo-b4-probe/step_500.pt.eval.log)
+[step    550] loss=4.7803 bpb=1.916 lr=2.00e-03 grad=0.30 tok/s=29,189 mfu=8.5% mem=6.5GB scale=2.0e+03
+[step    600] loss=4.6046 bpb=1.845 lr=2.00e-03 grad=0.28 tok/s=30,206 mfu=8.8% mem=6.5GB scale=2.0e+03
+[step    650] loss=4.4397 bpb=1.779 lr=2.00e-03 grad=0.31 tok/s=29,828 mfu=8.7% mem=6.5GB scale=2.0e+03
+[step    700] loss=4.2655 bpb=1.709 lr=2.00e-03 grad=0.36 tok/s=30,874 mfu=9.0% mem=6.5GB scale=2.0e+03
+[step    750] loss=4.0591 bpb=1.627 lr=2.00e-03 grad=0.40 tok/s=32,584 mfu=9.5% mem=6.5GB scale=2.0e+03
+[step    800] loss=3.8784 bpb=1.554 lr=2.00e-03 grad=0.47 tok/s=32,593 mfu=9.5% mem=6.5GB scale=2.0e+03
+[step    850] loss=3.7096 bpb=1.487 lr=2.00e-03 grad=0.50 tok/s=32,585 mfu=9.5% mem=6.5GB scale=2.0e+03
+[step    900] loss=3.5911 bpb=1.439 lr=2.00e-03 grad=0.60 tok/s=32,581 mfu=9.5% mem=6.5GB scale=2.0e+03
+[step    950] loss=3.4842 bpb=1.396 lr=2.00e-03 grad=0.55 tok/s=32,585 mfu=9.5% mem=6.5GB scale=2.0e+03
+[step   1000] loss=3.3977 bpb=1.362 lr=2.00e-03 grad=0.50 tok/s=32,479 mfu=9.4% mem=6.5GB scale=4.1e+03
+[rank 0] Checkpoint saved: checkpoints/odinhalo-b4-probe/step_1000.pt
+[rank 0] >>> auto-eval spawned for checkpoints/odinhalo-b4-probe/step_1000.pt (log: checkpoints/odinhalo-b4-probe/step_1000.pt.eval.log)
+[step   1050] loss=3.3281 bpb=1.334 lr=2.00e-03 grad=0.54 tok/s=29,132 mfu=8.5% mem=6.5GB scale=4.1e+03
+[step   1100] loss=3.2477 bpb=1.302 lr=2.00e-03 grad=0.64 tok/s=30,109 mfu=8.8% mem=6.5GB scale=4.1e+03
+[step   1150] loss=3.1707 bpb=1.271 lr=2.00e-03 grad=0.60 tok/s=30,087 mfu=8.7% mem=6.5GB scale=4.1e+03
+[step   1200] loss=3.1588 bpb=1.266 lr=2.00e-03 grad=0.61 tok/s=29,879 mfu=8.7% mem=6.5GB scale=4.1e+03
+[step   1250] loss=3.1031 bpb=1.244 lr=2.00e-03 grad=0.70 tok/s=31,551 mfu=9.2% mem=6.5GB scale=4.1e+03
+[step   1300] loss=3.0674 bpb=1.229 lr=2.00e-03 grad=0.59 tok/s=32,456 mfu=9.4% mem=6.5GB scale=4.1e+03
+[step   1350] loss=3.0119 bpb=1.207 lr=2.00e-03 grad=0.64 tok/s=32,572 mfu=9.5% mem=6.5GB scale=4.1e+03
+[step   1400] loss=2.9533 bpb=1.184 lr=2.00e-03 grad=0.72 tok/s=32,568 mfu=9.5% mem=6.5GB scale=4.1e+03
+[step   1450] loss=2.8956 bpb=1.160 lr=2.00e-03 grad=0.69 tok/s=32,562 mfu=9.5% mem=6.5GB scale=4.1e+03
+[step   1500] loss=2.8579 bpb=1.145 lr=2.00e-03 grad=0.73 tok/s=32,567 mfu=9.5% mem=6.5GB scale=8.2e+03
+[rank 0] Checkpoint saved: checkpoints/odinhalo-b4-probe/step_1500.pt
+[rank 0] >>> auto-eval spawned for checkpoints/odinhalo-b4-probe/step_1500.pt (log: checkpoints/odinhalo-b4-probe/step_1500.pt.eval.log)
+[step   1550] loss=2.8034 bpb=1.123 lr=2.00e-03 grad=0.65 tok/s=29,000 mfu=8.4% mem=6.5GB scale=8.2e+03
+[step   1600] loss=2.7719 bpb=1.111 lr=2.00e-03 grad=0.64 tok/s=30,069 mfu=8.7% mem=6.5GB scale=8.2e+03
+[step   1650] loss=2.7488 bpb=1.102 lr=2.00e-03 grad=0.72 tok/s=29,782 mfu=8.7% mem=6.5GB scale=8.2e+03
+[step   1700] loss=2.7635 bpb=1.107 lr=2.00e-03 grad=0.77 tok/s=30,451 mfu=8.9% mem=6.5GB scale=8.2e+03
+[step   1750] loss=2.7866 bpb=1.117 lr=2.00e-03 grad=0.66 tok/s=32,544 mfu=9.5% mem=6.5GB scale=8.2e+03
+[step   1800] loss=2.7340 bpb=1.096 lr=2.00e-03 grad=0.72 tok/s=32,530 mfu=9.5% mem=6.5GB scale=8.2e+03
+[step   1850] loss=2.7087 bpb=1.086 lr=2.00e-03 grad=0.90 tok/s=32,432 mfu=9.4% mem=6.5GB scale=8.2e+03
+[step   1900] loss=2.7239 bpb=1.092 lr=2.00e-03 grad=0.85 tok/s=32,575 mfu=9.5% mem=6.5GB scale=8.2e+03
+[step   1950] loss=2.6616 bpb=1.067 lr=2.00e-03 grad=0.72 tok/s=32,593 mfu=9.5% mem=6.5GB scale=8.2e+03
+[step   2000] loss=2.5144 bpb=1.008 lr=2.00e-03 grad=1.03 tok/s=32,561 mfu=9.5% mem=6.5GB scale=1.6e+04
+[rank 0] Checkpoint saved: checkpoints/odinhalo-b4-probe/step_2000.pt
+[rank 0] >>> auto-eval spawned for checkpoints/odinhalo-b4-probe/step_2000.pt (log: checkpoints/odinhalo-b4-probe/step_2000.pt.eval.log)
+Max steps reached: 2000
+[rank 0] Flush skipped _complete_step (backwards_in_cycle=0 after early termination); handles waited cleanly
+  [diag-frozen-params] Closed checkpoints/odinhalo-b4-probe/diag.jsonl
+[rank 0] Checkpoint saved: checkpoints/odinhalo-b4-probe/step_2000.pt
+[rank 0] >>> auto-eval spawned for checkpoints/odinhalo-b4-probe/step_2000.pt (log: checkpoints/odinhalo-b4-probe/step_2000.pt.eval.log)
+
+Done: 2000 steps, 131,137,536 tokens in 4191s (31,291 tok/s), best loss=2.5144
