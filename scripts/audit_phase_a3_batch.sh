@@ -35,24 +35,22 @@ AUDIT_DIR="checkpoints/audit-phase-a3"
 mkdir -p "$AUDIT_DIR"
 
 # Model catalog: (label, model_file, class_name, block_size)
-# block_size picked to respect each model's architectural tolerance.
-# Uses the Sprint-1.5 recipe flags for all (so any model that supports them
-# gets the same stress-test; models that don't auto-ignore).
+# Scoped to ODIN family only (2026-05-11 refinement). OdinFlat + OdinHalo
+# are the production path for Sprint 3A/3B. Their variants (Ablation,
+# Mini, 30M) exercise the same code paths.
+#
+# Other halo models (Vidar, Baldr, Chimera, Fenrir, Tyr, Jormungandr)
+# are off-path research models; the static audit covers them
+# architecturally and they share the same autokernel Replacement code.
+# If later needed, add them back to this list.
 MODELS=(
     "odin_flat           models/odin_flat.py           OdinFlat            512"
     "odin_flat_ablation  models/odin_flat.py           OdinFlatAblation    512"
     "odin_flat_mini      models/odin_flat.py           OdinFlatMini        256"
     "odin_flat_30m       models/odin_flat_30m.py       OdinFlat30M         512"
-    "odin_flat_30m_mini  models/odin_flat_30m.py       OdinFlat30MMini     256"
     "odin_halo           models/odin_halo.py           OdinHalo            256"
     "odin_halo_ablation  models/odin_halo.py           OdinHaloAblation    256"
     "odin_halo_mini      models/odin_halo.py           OdinHaloMini        256"
-    "vidar_halo          models/vidar_halo.py          VidarHalo           256"
-    "baldr_halo          models/baldr_halo.py          BaldrHalo           256"
-    "chimera_halo        models/chimera_halo.py        ChimeraHalo         256"
-    "fenrir_halo         models/fenrir_halo.py         FenrirHalo          256"
-    "tyr_halo            models/tyr_halo.py            TyrHalo             256"
-    "jormungandr_halo    models/jormungandr_halo.py    JormungandrHalo     256"
 )
 
 CONFIGS=("V0" "V1" "V3")
