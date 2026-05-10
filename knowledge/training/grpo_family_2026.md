@@ -178,7 +178,70 @@ All public datasets.
 - Adopt **difficulty-aware length penalty** — free win, no cost
 - Full 5-domain setup is overkill at 122M; start with math + code
 
+## ZAYA1-8B validated RL cascade (May 2026)
+
+Zyphra's ZAYA1-8B technical report ships a **concrete end-to-end RL cocktail**
+used to train a production 760M-active reasoning MoE. Recipe below; full
+context + Odin applicability in
+[zaya1_8b_findings_2026.md](zaya1_8b_findings_2026.md).
+
+### The algorithmic spine
+
+| Component | Value | Rationale |
+|-----------|-------|-----------|
+| Trust region | **DPPO Binary-TV**, δ=0.1 | Replaces PPO ratio-clip; binary mask on tokens where divergence > δ. Tune δ against the largest value that still constrains reward-growth vs an unconstrained baseline |
+| Loss aggregation | **Dr-GRPO SMTSN** (sequence-mean over token-sum-norm) | Removes GRPO's implicit length normalization bias toward long responses |
+| Advantage | **MaxRL**: `Â_i = (r_i − r̄) / r̄` | Divide by per-prompt **mean**, not stddev. Unbiased for truncated-MLE objective, stronger gradient on hard prompts |
+| KL in reward | **None** | See "Length-bias trap" below |
+| Optimizer | **Momentum-free Muon** on matrix weights; AdamW on embeds + LM head | Each RL update depends only on the current rollout batch; no cross-batch momentum averaging incompatible gradient directions. Also saves first-moment buffer memory |
+| Async | PipelineRL, 2–5× rollout workers/trainer, weight sync every 2 iters, 2-update staleness bound | Standard async setup |
+| Router replay | vLLM writes per-token/layer expert indices; trainer pins to same assignments | **MoE-only** — not applicable to dense Odin |
+
+### Length-bias trap (negative result worth memorising)
+
+Combining **signed K1 log-ratio KL in reward + sequence-level aggregation +
+broadcast to all tokens + PipelineRL stale mixed-policy rollouts** creates a
+**length-dependent positive reward offset** unrelated to task quality. Long
+completions accumulate more negative `l_t` terms; subtracted from reward they
+become a length bonus.
+
+**Mitigation used in production:** remove KL-in-reward entirely; trust region
+is DPPO Binary-TV alone. **Adopt the same default** when we build RL.
+
+Alternatives Zyphra list but don't deploy:
+- Chunk-local signed-log-ratio isolation (aggregate per-chunk not whole-seq).
+- Staleness rescaling by `g(Δ_c) = max(1, Δ_c)` (Bartoldson 2026 first-order
+  EMA-reference approximation).
+
+### Reward gating via content canaries
+
+- **Streaming LZ77** (zlib wbits=−10, level-1, Z_SYNC_FLUSH) — flag rollouts
+  with any chunk `r_c < 0.05`; **zero task reward before advantage computation**,
+  even if verifier accepts the answer.
+- **Rare-token fraction** (top-10 % of tokenizer ID range) — logged per batch.
+
+### Curriculum: RLVE-Gym Thompson/IRT
+
+ZAYA1 uses **Thompson sampling over a Gaussian-prior pool of logistic IRT
+parameters** `(μ, s)` to calibrate each of 400 verifiable environments to a
+0.5 solve rate — the maximum Fisher information point of the logistic model —
+with ε-greedy around target and allowed regressions. Weighted environment
+sampling favours the least-sampled envs. This is a generic RLVR pattern and
+should be the default when we do multi-environment RLVR.
+
+### Where this sits relative to the variants above
+
+ZAYA1's cascade is GRPO-family (Dr-GRPO + MaxRL advantage) with **DPPO
+Binary-TV in place of PPO clip**. It does not overlap with F-GRPO / Scaf-GRPO
+/ GRPO-SG / f-GRPO / Apriel — those are orthogonal ideas (focal weighting,
+scaffolding hints, sharpness guidance, divergence unification, difficulty-
+aware length penalty) and could be composed on top of this spine.
+
+For Odin post-training: **ZAYA1 spine + F-GRPO focal advantage + Scaf-GRPO
+scaffolding** is a reasonable "pick the best of each" stack when we get there.
+
 ## Recommended stack for Odin post-training
+
 
 Given zero existing infra, build this in order:
 

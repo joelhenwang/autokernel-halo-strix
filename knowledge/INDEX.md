@@ -50,6 +50,8 @@ tags: [%index, %knowledge]
 | [grpo_family_2026.md](training/grpo_family_2026.md) | **GRPO variant family: F-GRPO, Scaf-GRPO, GRPO-SG, f-GRPO, Apriel-Reasoner. Post-R1 RLVR landscape** |
 | [cpt_best_practices_2026.md](training/cpt_best_practices_2026.md) | **Continued pretraining recipes: token replay 7-10%, LR rewind 30-50%, stage order, eval schedule. Consolidated from 2025-2026 CPT papers** |
 | [scaling_laws_t2_2026.md](training/scaling_laws_t2_2026.md) | **T² scaling laws, Chinchilla Approach 2 biases, architecture-conditional scaling. "Overtrain is compute-optimal" when inference cost included** |
+| [zaya1_8b_findings_2026.md](training/zaya1_8b_findings_2026.md) | **ZAYA1-8B technical report — applicable-findings synthesis + Odin applicability matrix. AP-trimming, LZ77 canary, learned residual scaling, RL cocktail (DPPO Binary-TV + Dr-GRPO SMTSN + MaxRL + no-KL-in-reward + momentum-free Muon)** |
+| [ap_trimming_recipe.md](training/ap_trimming_recipe.md) | **Answer-Preserving trimming — standalone recipe for using long-CoT data at short context. Source: ZAYA1 §III-A** |
 
 ## architectures/
 
@@ -63,6 +65,8 @@ tags: [%index, %knowledge]
 | [looped_model_design_lessons.md](architectures/looped_model_design_lessons.md) | 13 lessons from OUROBOROS->JORMUNGANDR: momentum risk, staged activation, L2 estimates |
 | [moda_cross_layer_2026.md](architectures/moda_cross_layer_2026.md) | **Cross-layer MoDA (arXiv:2603.15619): different from our Parcae MoDA. +2.11% tasks at 1.5B, 3.7% FLOP overhead. Naming-collision warning** |
 | [small_lm_arch_interventions_2026.md](architectures/small_lm_arch_interventions_2026.md) | **Consolidated playbook: QK-Norm, value residuals, LayerNorm scaling, per-head gating, no-WD-on-embeds, intra-doc masking, SeeDNorm. Rough port checklist for OdinFlat** |
+| [looped_moe_design_2026.md](architectures/looped_moe_design_2026.md) | **Looped MoE (Parcae + ZAYA1 MoE) design: R2 sticky routing, E1 shared experts, N1 per-expert per-iter \u03b3_{e,i}, 2.5-iter Sched-A + M3. Companion to FrankenMoE-Loop v2 spec** |
+| [v3_speculative_directions_2026.md](architectures/v3_speculative_directions_2026.md) | **18-idea v3 research catalogue: complex MoE, reversible Parcae, hidden-state diffusion, shared workspace, Kolmogorov routing, mycelial graph, path superposition, entropy conservation, forward-forward, momentum teacher + 8 more. Compatibility matrix + dream-stack + if-only-one ranking. Spec-quality depth per idea; design-only research menu** |
 
 ## research/
 
@@ -70,3 +74,11 @@ tags: [%index, %knowledge]
 |------|-------------|
 | [../docs/research/small-lm-research-2026-05-06.md](../docs/research/small-lm-research-2026-05-06.md) | Focused synthesis: SmolLM3 recipe + APO + Odin-specific action queue |
 | [../docs/research/broad-research-synthesis-2026-05-06.md](../docs/research/broad-research-synthesis-2026-05-06.md) | **Broad synthesis: 240+ recent papers across pretraining / CPT / RLVR / optimizers / new architectures, 20-item ranked action queue, bets list** |
+| [../docs/research/zaya1_8b_technical_report/zaya1_8b_technical_report.md](../docs/research/zaya1_8b_technical_report/zaya1_8b_technical_report.md) | **Full ZAYA1-8B technical report (source). Applied-findings synthesis at [training/zaya1_8b_findings_2026.md](training/zaya1_8b_findings_2026.md)** |
+| [../docs/research/subq_ssa_watchlist_2026.md](../docs/research/subq_ssa_watchlist_2026.md) | SubQ / SSA — watch-list note. No technical paper published yet; revisit when one drops |
+
+## Active design specs (not yet implemented)
+
+| File | Description |
+|------|-------------|
+| [../docs/superpowers/specs/2026-05-07-frankenmoe-loop-design.md](../docs/superpowers/specs/2026-05-07-frankenmoe-loop-design.md) | **FrankenMoE-Loop v2 + v2.5 spec. Looped MoE on OdinHalo backbone with R2 sticky routing + E1 shared experts + N1 per-expert per-iter γ + Sched-A 2.5-iter + M3 narrow FFN. Implementation blocked on FrankenMoE-Flat v1 L9.** |
