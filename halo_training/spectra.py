@@ -85,6 +85,23 @@ def apply_post_clip(
     if not torch.is_tensor(sigma1):
         sigma1 = torch.tensor(float(sigma1), device=M.device, dtype=M.dtype)
 
+    # v3 T-1.1 + T-2.3: branchless path (no sigma1.item() per-param-per-step sync).
+    # Environment override: set AUTOKERNEL_SPECTRA_BRANCHLESS=1 to force on even
+    # when callers use apply_post_clip directly. The NorMuon path has its own
+    # dedicated branchless control via --ak-spectra-branchless; this is for
+    # out-of-NorMuon callers (if any).
+    import os as _os
+    _branchless = _os.environ.get("AUTOKERNEL_SPECTRA_BRANCHLESS", "") in ("1", "true", "True")
+    if _branchless:
+        # scale = min(1.0, clip_norm * safety_margin / max(sigma1, 1e-12))
+        # When sigma1 * (1/safety_margin) <= clip_norm, scale >= 1.0 so clamp to 1.0
+        # and M*scale == M (no-op multiplication).
+        scale = torch.clamp(
+            clip_norm * safety_margin / torch.clamp(sigma1, min=1e-12),
+            max=1.0,
+        ).to(M.dtype)
+        return M * scale
+
     sigma1_val = sigma1.item()
     # Fast path: no clipping needed (allow a small gate above threshold
     # since our estimator can be slightly low).

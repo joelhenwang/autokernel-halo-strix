@@ -1445,6 +1445,9 @@ def main():
     total_tokens = 0
     running_loss = 0.0
     step_loss = 0.0  # accumulates across microsteps within one optimizer step
+    # v3 T-1.2: tensor-side step loss accumulator (used only when
+    # --ak-sync-cleanup is on; else None and per-microstep .item() path runs).
+    _step_loss_t = None
     best_loss = float("inf")
     start_time = time.time()
     last_log_time = start_time
@@ -1736,13 +1739,25 @@ def main():
                     backwards_in_cycle += 1
 
                 total_tokens += input_ids.numel()
-                loss_val = loss.item()
-                if not math.isnan(loss_val):
-                    step_loss += loss_val
+                # v3 T-1.2 hot-path sync removal: when --ak-sync-cleanup is on,
+                # accumulate loss tensor-side and defer .item() to step boundary.
+                # At accum=8 this reduces per-opt-step .item() calls from 8 to 1.
+                # NaN detection moves to end-of-step (GradScaler handles grad NaN
+                # independently via inf-grad skip).
+                if getattr(args, "ak_sync_cleanup", False):
+                    # Lazy init of tensor accumulator
+                    if "_step_loss_t" not in locals() or _step_loss_t is None:
+                        _step_loss_t = torch.zeros((), device=device, dtype=torch.float32)
+                    _step_loss_t = _step_loss_t + loss.detach().float()
+                    loss_val = 0.0  # deferred; won't be used for per-microstep branch
                 else:
-                    # Transient NaN in microstep — GradScaler will handle via inf grads
-                    if rank == 0:
-                        print(f"  [StabilityGuard] NaN microstep loss at batch {batch_idx}, continuing")
+                    loss_val = loss.item()
+                    if not math.isnan(loss_val):
+                        step_loss += loss_val
+                    else:
+                        # Transient NaN in microstep — GradScaler will handle via inf grads
+                        if rank == 0:
+                            print(f"  [StabilityGuard] NaN microstep loss at batch {batch_idx}, continuing")
 
                 if not is_last_microstep:
                     continue
@@ -1765,6 +1780,15 @@ def main():
                     # v3 T-0.6 DDP trace: emit JSONL for this step + reset state.
                     _ddp_trace_emit(world_size, rank)
                     _ddp_trace_reset_step(global_step)
+                    # v3 T-1.2: materialize deferred loss accumulator (1 sync/step
+                    # vs previous 8/step at accum=8). Replaces per-microstep .item().
+                    if getattr(args, "ak_sync_cleanup", False):
+                        try:
+                            if "_step_loss_t" in locals() and _step_loss_t is not None:
+                                step_loss = float(_step_loss_t.item())
+                                _step_loss_t = None  # reset for next opt step
+                        except Exception:
+                            step_loss = 0.0
                     # Bug-fix: completed optimizer step consumed this cycle's
                     # accumulated backwards; reset counter for next cycle.
                     backwards_in_cycle = 0
@@ -1929,6 +1953,14 @@ def main():
                     # v3 T-0.6 DDP trace emit + reset on sync path
                     _ddp_trace_emit(world_size, rank)
                     _ddp_trace_reset_step(global_step)
+                    # v3 T-1.2 deferred loss materialization (sync path)
+                    if getattr(args, "ak_sync_cleanup", False):
+                        try:
+                            if "_step_loss_t" in locals() and _step_loss_t is not None:
+                                step_loss = float(_step_loss_t.item())
+                                _step_loss_t = None
+                        except Exception:
+                            step_loss = 0.0
                     pending_handles = None
                     # Bug-fix: sync path also consumed the accum cycle.
                     backwards_in_cycle = 0
