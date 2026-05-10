@@ -22,7 +22,7 @@
 #
 # Plan: docs/superpowers/plans/2026-05-10-odinflat-throughput-investigation-plan.md
 
-set -euo pipefail
+set -eo pipefail  # intentionally no -u: venv's activate script references unbound vars
 
 CONFIG="${CONFIG:?CONFIG must be V0, V1, or V3}"
 

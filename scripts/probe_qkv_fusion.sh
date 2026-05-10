@@ -14,7 +14,7 @@
 #
 # Plan: docs/superpowers/plans/2026-05-10-odinflat-throughput-investigation-plan.md §4.2.6
 
-set -euo pipefail
+set -eo pipefail  # intentionally no -u: venv's activate script references unbound vars
 
 # Path resolver + venv activation (handles both Machine A and B layouts).
 if [ -d ~/Desktop/comfyui-rocm7.12/autokernel-halo-strix ]; then
