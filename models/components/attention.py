@@ -67,7 +67,25 @@ def _attention_core(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
 
 
 class Attention(nn.Module):
-    """GQA with RoPE + QK-Norm. Uses separate wq/wk/wv/wo for autokernel FusedQKV pattern."""
+    """GQA with RoPE + QK-Norm.
+
+    Track 2 (2026-05-10) introduces fused QKV projection: instead of three
+    separate ``wq``/``wk``/``wv`` Linears, a single ``wqkv`` Linear produces
+    ``[q_dim + 2*kv_dim]`` along the last axis which is then split. This
+    replaces three smaller matmuls with one larger one — empirically faster
+    on rocBLAS for GQA shapes.
+
+    **Checkpoint compatibility:** ``_load_from_state_dict`` detects pre-
+    fusion checkpoints (keys ``wq.weight``/``wk.weight``/``wv.weight``) and
+    fuses them into ``wqkv.weight`` on load, so existing checkpoints still
+    work.
+
+    **autokernel interaction:** ``FusedQKVPattern`` looks for the split-style
+    ``wq``/``wk``/``wv`` attrs and becomes a no-op on fused modules. The
+    primary HALO training path (OdinFlat, OdinHalo via NoPECodaAttention)
+    already opts out via ``_skip_autokernel = True``, so no production
+    regression is expected.
+    """
 
     def __init__(self, dim: int, n_heads: int, n_kv_heads: int, qk_norm: bool = True,
                  attn_score_softcap: float = 0.0):
@@ -85,20 +103,53 @@ class Attention(nn.Module):
         # See knowledge/training/fp16_stability_gfx1151.md.
         self.attn_score_softcap = float(attn_score_softcap)
 
-        self.wq = nn.Linear(dim, n_heads * self.head_dim, bias=False)
-        self.wk = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
-        self.wv = nn.Linear(dim, n_kv_heads * self.head_dim, bias=False)
+        # Track 2 (2026-05-10): fused QKV projection.
+        self._q_dim = n_heads * self.head_dim           # output: query chunk width
+        self._kv_dim = n_kv_heads * self.head_dim       # output: key/value chunk width
+        self.wqkv = nn.Linear(dim, self._q_dim + 2 * self._kv_dim, bias=False)
         self.wo = nn.Linear(n_heads * self.head_dim, dim, bias=False)
 
         if qk_norm:
             self.q_scale = nn.Parameter(torch.ones(n_heads, 1, 1) * math.sqrt(self.head_dim))
             self.k_scale = nn.Parameter(torch.ones(n_kv_heads, 1, 1) * math.sqrt(self.head_dim))
 
+    def _split_qkv(self, x: torch.Tensor, B: int, T: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run the fused QKV projection and return (q, k, v) with shapes
+        ``[B, T, n_heads, head_dim]`` and ``[B, T, n_kv_heads, head_dim]``.
+        """
+        qkv = self.wqkv(x)
+        q, k, v = qkv.split([self._q_dim, self._kv_dim, self._kv_dim], dim=-1)
+        q = q.view(B, T, self.n_heads, self.head_dim)
+        k = k.view(B, T, self.n_kv_heads, self.head_dim)
+        v = v.view(B, T, self.n_kv_heads, self.head_dim)
+        return q, k, v
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata,
+                              strict, missing_keys, unexpected_keys, error_msgs):
+        """Fuse legacy wq/wk/wv/weight entries into wqkv.weight on load.
+
+        Track 2 (2026-05-10): maintains checkpoint compatibility with all
+        pre-fusion checkpoints (Sprint 1, Sprint 1.5, Sprint 3A-confirm,
+        Stage 1 variants). No-op when the checkpoint is already fused.
+        """
+        wq_key = prefix + "wq.weight"
+        wk_key = prefix + "wk.weight"
+        wv_key = prefix + "wv.weight"
+        wqkv_key = prefix + "wqkv.weight"
+        if wqkv_key not in state_dict and all(
+                k in state_dict for k in (wq_key, wk_key, wv_key)):
+            wq = state_dict.pop(wq_key)
+            wk = state_dict.pop(wk_key)
+            wv = state_dict.pop(wv_key)
+            # Concat along output-feature axis (dim 0 of Linear.weight).
+            state_dict[wqkv_key] = torch.cat([wq, wk, wv], dim=0)
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict,
+            missing_keys, unexpected_keys, error_msgs)
+
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
         B, T, _ = x.shape
-        q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
-        k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
-        v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
+        q, k, v = self._split_qkv(x, B, T)
         q, k = apply_rotary_emb(q, k, freqs_cis)
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
@@ -142,9 +193,7 @@ class CodaAttention(Attention):
                 depth_kvs: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
                 ) -> torch.Tensor:
         B, T, _ = x.shape
-        q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
-        k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
-        v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
+        q, k, v = self._split_qkv(x, B, T)
 
         if value_bias is not None:
             v = v + value_bias.view(B, T, self.n_kv_heads, self.head_dim)
@@ -266,9 +315,7 @@ class NoPECodaAttention(Attention):
             the pre-residual [B, n_kv_heads, T, head_dim] V tensor.
         """
         B, T, _ = x.shape
-        q = self.wq(x).view(B, T, self.n_heads, self.head_dim)
-        k = self.wk(x).view(B, T, self.n_kv_heads, self.head_dim)
-        v = self.wv(x).view(B, T, self.n_kv_heads, self.head_dim)
+        q, k, v = self._split_qkv(x, B, T)
 
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
