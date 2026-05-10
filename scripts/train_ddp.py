@@ -753,6 +753,19 @@ def main():
                         help="Path to JSONL file for per-param grad norms "
                              "(Track 3.A diagnostic). Empty=disabled.")
 
+    # Phase B.5 (2026-05-11): opt-in fused z-loss. When enabled AND
+    # --z-loss > 0, routes the final logits through kernel.ce_full with
+    # z_loss_weight which bakes z-loss into the HIP forward AND its
+    # gradient contribution back to logits. Eliminates the separate
+    # aten::logsumexp pass (16.7% of step per Track 1.3 profile).
+    # Off by default pending Phase C validation.
+    parser.add_argument("--use-fused-zloss", dest="use_fused_zloss",
+                        action="store_true",
+                        help="Route z-loss through kernel.ce_full (fused fwd+bwd).")
+    parser.add_argument("--no-use-fused-zloss", dest="use_fused_zloss",
+                        action="store_false")
+    parser.set_defaults(use_fused_zloss=False)
+
     args = parser.parse_args()
 
     use_async = not args.no_async
@@ -1209,36 +1222,79 @@ def main():
                                 _z_loss_warned = True
                         elif isinstance(output, dict):
                             logits = output["logits"]
-                            loss = ce_loss_fn(
-                                logits.view(-1, logits.size(-1)), targets.view(-1)
-                            ) / args.accum_steps
-                            if "mtp1" in output:
-                                mtp1 = output["mtp1"]
-                                mtp_targets = targets[:, 2:].reshape(-1)
-                                loss = loss + 0.3 * ce_loss_fn(
-                                    mtp1.reshape(-1, logits.size(-1)), mtp_targets
+                            # Phase B.5 (2026-05-11): opt-in fused z-loss via
+                            # kernel.ce_full. Bakes z-loss into the HIP kernel
+                            # forward AND adds the correct gradient contribution
+                            # back to logits in backward. Eliminates the
+                            # separate aten::logsumexp pass (16.7% of step).
+                            z_active = (args.z_loss > 0
+                                        and global_step < total_steps * args.z_loss_fraction)
+                            if (args.use_fused_zloss and z_active
+                                    and logits.dtype == torch.float16
+                                    and logits.is_cuda):
+                                import kernel as _ce_k
+                                logits_flat = logits.view(-1, logits.size(-1))
+                                loss = _ce_k.ce_full(
+                                    logits_flat, targets.view(-1),
+                                    softcap=0.0, ignore_index=-100,
+                                    label_smoothing=0.0,
+                                    mode="tiny",
+                                    z_loss_weight=float(args.z_loss),
                                 ) / args.accum_steps
-                            # fp16-stability P1: z-loss auxiliary regularization.
-                            # Penalizes drift of log-partition-function magnitudes.
-                            # Active during first z_loss_fraction of training only.
-                            # Track 2.b (2026-05-10): compute logsumexp in fp16
-                            # (safe with --attn-softcap 50 → lse ≤ ~60.4, well
-                            # within fp16 range) then promote the small [B*T]
-                            # vector to fp32 for the pow(2).mean() reduction.
-                            # Avoids a 1 GB fp32 copy of the [B, T, V] logits
-                            # tensor — previously the #3 op by wall time (11%).
-                            if args.z_loss > 0 and global_step < total_steps * args.z_loss_fraction:
-                                z_loss_val = args.z_loss * logits.logsumexp(dim=-1).float().pow(2).mean()
-                                loss = loss + z_loss_val / args.accum_steps
+                                if "mtp1" in output:
+                                    mtp1 = output["mtp1"]
+                                    mtp_targets = targets[:, 2:].reshape(-1)
+                                    loss = loss + 0.3 * ce_loss_fn(
+                                        mtp1.reshape(-1, logits.size(-1)), mtp_targets
+                                    ) / args.accum_steps
+                            else:
+                                loss = ce_loss_fn(
+                                    logits.view(-1, logits.size(-1)), targets.view(-1)
+                                ) / args.accum_steps
+                                if "mtp1" in output:
+                                    mtp1 = output["mtp1"]
+                                    mtp_targets = targets[:, 2:].reshape(-1)
+                                    loss = loss + 0.3 * ce_loss_fn(
+                                        mtp1.reshape(-1, logits.size(-1)), mtp_targets
+                                    ) / args.accum_steps
+                                # fp16-stability P1: z-loss auxiliary regularization.
+                                # Penalizes drift of log-partition-function magnitudes.
+                                # Active during first z_loss_fraction of training only.
+                                # Track 2.b (2026-05-10): compute logsumexp in fp16
+                                # (safe with --attn-softcap 50 → lse ≤ ~60.4, well
+                                # within fp16 range) then promote the small [B*T]
+                                # vector to fp32 for the pow(2).mean() reduction.
+                                # Avoids a 1 GB fp32 copy of the [B, T, V] logits
+                                # tensor — previously the #3 op by wall time (11%).
+                                if z_active:
+                                    z_loss_val = args.z_loss * logits.logsumexp(dim=-1).float().pow(2).mean()
+                                    loss = loss + z_loss_val / args.accum_steps
                         else:
-                            loss = ce_loss_fn(
-                                output.view(-1, output.size(-1)), targets.view(-1)
-                            ) / args.accum_steps
-                            # fp16-stability P1: z-loss on raw-logits tensor path.
-                            # Track 2.b (2026-05-10): see note above.
-                            if args.z_loss > 0 and global_step < total_steps * args.z_loss_fraction:
-                                z_loss_val = args.z_loss * output.logsumexp(dim=-1).float().pow(2).mean()
-                                loss = loss + z_loss_val / args.accum_steps
+                            # Phase B.5 (2026-05-11): same fused-zloss path for
+                            # the raw-tensor logits output convention.
+                            z_active = (args.z_loss > 0
+                                        and global_step < total_steps * args.z_loss_fraction)
+                            if (args.use_fused_zloss and z_active
+                                    and output.dtype == torch.float16
+                                    and output.is_cuda):
+                                import kernel as _ce_k
+                                loss = _ce_k.ce_full(
+                                    output.view(-1, output.size(-1)),
+                                    targets.view(-1),
+                                    softcap=0.0, ignore_index=-100,
+                                    label_smoothing=0.0,
+                                    mode="tiny",
+                                    z_loss_weight=float(args.z_loss),
+                                ) / args.accum_steps
+                            else:
+                                loss = ce_loss_fn(
+                                    output.view(-1, output.size(-1)), targets.view(-1)
+                                ) / args.accum_steps
+                                # fp16-stability P1: z-loss on raw-logits tensor path.
+                                # Track 2.b (2026-05-10): see note above.
+                                if z_active:
+                                    z_loss_val = args.z_loss * output.logsumexp(dim=-1).float().pow(2).mean()
+                                    loss = loss + z_loss_val / args.accum_steps
 
                         # Phase 3 LEAP: add layer-exit aux loss if enabled.
                         # `leap` is None unless --leap-layers was passed.

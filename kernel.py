@@ -563,6 +563,10 @@ class _CrossEntropyHIP(torch.autograd.Function):
         mode: "fused" (default) or "tiny". fused saves grad_logits in forward
             (backward is ~no-op); tiny saves only row_max+sum (lower memory).
         return_z: if True, also return per-row logsumexp for z-loss.
+        z_loss_weight: if > 0, bakes ``w * lse^2.mean()`` into the returned
+            loss AND adds the correct gradient contribution back to logits
+            in backward. Forces tiny mode because we need logits saved for
+            backward softmax recompute. Phase B.5 (2026-05-11).
 
     Returns:
         loss scalar (mean over non-ignored rows).
@@ -571,9 +575,14 @@ class _CrossEntropyHIP(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, logits, targets, softcap, ignore_index,
-                label_smoothing, mode, return_z):
+                label_smoothing, mode, return_z, z_loss_weight=0.0):
         mod = _get_fwd_module()
         B = logits.size(0)
+        # Phase B.5: force tiny mode when z_loss needed (backward requires
+        # logits saved for softmax recompute).
+        z_loss_weight = float(z_loss_weight)
+        if z_loss_weight > 0.0 and mode != "tiny":
+            mode = "tiny"
         write_grad = 1 if mode == "fused" else 0
         save_max_sum = 1 if mode == "tiny" else 0
 
@@ -609,6 +618,16 @@ class _CrossEntropyHIP(torch.autograd.Function):
         else:
             loss = losses.mean()
 
+        # Phase B.5: bake z_loss into the returned scalar loss. The backward
+        # adds the corresponding grad contribution back to grad_logits.
+        if z_loss_weight > 0.0:
+            if valid_mask is not None:
+                lse_valid = lse * valid_mask.to(lse.dtype)
+                z_loss = z_loss_weight * (lse_valid * lse_valid).sum() / n_valid_t
+            else:
+                z_loss = z_loss_weight * lse.pow(2).mean()
+            loss = loss + z_loss
+
         # Save for backward
         ctx.mode = mode
         ctx.softcap = float(softcap)
@@ -617,6 +636,7 @@ class _CrossEntropyHIP(torch.autograd.Function):
         ctx.return_z = bool(return_z)
         ctx.n_valid_item = n_valid_scalar
         ctx.scale_grad = scale_grad  # already baked into saved grad in fused mode
+        ctx.z_loss_weight = z_loss_weight
 
         if mode == "fused":
             ctx.save_for_backward(grad_logits)
@@ -642,16 +662,33 @@ class _CrossEntropyHIP(torch.autograd.Function):
                 ctx.softcap, ctx.ignore_index,
                 ctx.label_smoothing, scale,
             )
-            return grad_logits, None, None, None, None, None, None
+            # Phase B.5: add z-loss gradient contribution to grad_logits.
+            # d/d(logits[i,j]) of (z_weight * lse[i]^2 / N) =
+            #   (2 * z_weight / N) * lse[i] * softmax[i,j]
+            # chained by grad_loss (typically 1 for loss.backward()).
+            if ctx.z_loss_weight > 0.0:
+                with torch.no_grad():
+                    grad_loss_scalar = float(grad_loss.item()) if grad_loss.dim() == 0 else 1.0
+                    # softmax = exp(logits - row_max) / row_sum
+                    shifted = logits.float() - row_max.unsqueeze(-1)
+                    softmax = torch.exp(shifted) / row_sum.unsqueeze(-1)
+                    lse_vec = row_max + torch.log(row_sum)        # [B] fp32
+                    coef = (2.0 * ctx.z_loss_weight / ctx.n_valid_item) * grad_loss_scalar
+                    z_grad = coef * lse_vec.unsqueeze(-1) * softmax  # [B, V] fp32
+                    if ctx.ignore_index is not None:
+                        valid = (targets != ctx.ignore_index).float().unsqueeze(-1)
+                        z_grad = z_grad * valid
+                    grad_logits = grad_logits + z_grad.to(grad_logits.dtype)
+            return grad_logits, None, None, None, None, None, None, None
         else:
             # Fused: grad already pre-scaled by 1/n_valid in forward. If grad_loss==1
             # (standard loss.backward() path), return saved tensor directly (zero-copy).
             (saved_grad,) = ctx.saved_tensors
             # grad_loss is a scalar fp32 tensor. Check if it's ~1.0 for zero-copy path.
             if grad_loss.dim() == 0 and grad_loss.item() == 1.0:
-                return saved_grad, None, None, None, None, None, None
+                return saved_grad, None, None, None, None, None, None, None
             # General case: multiply (full-tensor pass, but rare)
-            return saved_grad * grad_loss.to(saved_grad.dtype), None, None, None, None, None, None
+            return saved_grad * grad_loss.to(saved_grad.dtype), None, None, None, None, None, None, None
 
 
 # =============================================================================
@@ -680,7 +717,7 @@ def kernel_fn(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         return (losses * valid).sum() / n_valid
 
     # Training path: fused mode (default), saves grad_logits for ~no-op backward.
-    return _CrossEntropyHIP.apply(logits, targets, 0.0, -100, 0.0, "fused", False)
+    return _CrossEntropyHIP.apply(logits, targets, 0.0, -100, 0.0, "fused", False, 0.0)
 
 
 def ce_full(
@@ -692,6 +729,7 @@ def ce_full(
     label_smoothing: float = 0.0,
     mode: str = "fused",
     return_z: bool = False,
+    z_loss_weight: float = 0.0,
 ):
     """Full-featured CE entry point.
 
@@ -703,6 +741,9 @@ def ce_full(
         label_smoothing: alpha (0 = off).
         mode: "fused" (default) or "tiny".
         return_z: if True, also return per-row logsumexp tensor.
+        z_loss_weight: if > 0, adds ``w * lse^2.mean()`` to the returned loss
+            and propagates the gradient contribution back to logits. Forces
+            tiny mode. Phase B.5 (2026-05-11).
 
     Returns:
         loss (scalar) or (loss, lse) if return_z.
@@ -717,8 +758,18 @@ def ce_full(
             ignore_index=ignore_index,
             label_smoothing=label_smoothing,
         )
-        if return_z:
+        lse = None
+        if z_loss_weight > 0.0 or return_z:
             lse = torch.logsumexp(logits, dim=-1)
+            if z_loss_weight > 0.0:
+                if ignore_index is not None:
+                    valid = (targets != ignore_index).to(lse.dtype)
+                    lse_valid = lse * valid
+                    n_valid = valid.sum().clamp_(min=1.0)
+                    loss = loss + z_loss_weight * (lse_valid * lse_valid).sum() / n_valid
+                else:
+                    loss = loss + z_loss_weight * lse.pow(2).mean()
+        if return_z:
             return loss, lse
         return loss
 
@@ -727,4 +778,5 @@ def ce_full(
 
     return _CrossEntropyHIP.apply(
         logits, targets, softcap, ignore_index, label_smoothing, mode, return_z,
+        float(z_loss_weight),
     )
