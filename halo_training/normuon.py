@@ -223,10 +223,12 @@ class NorMuon(torch.optim.Optimizer):
 
         # v3 T-0.2 build name map AFTER super().__init__() populates self.param_groups.
         # Map param tensor id() -> readable name if provided via muon_params as a
-        # list of dicts each with optional 'param_names'. Otherwise names are synthetic.
+        # list of dicts each with optional '_telem_param_names' (underscore-prefixed
+        # to avoid collision with PyTorch optimizer's reserved 'param_names' key).
+        # Otherwise names are synthetic.
         self._param_names: dict = {}
         for g in self.param_groups:
-            names = g.get("param_names", None)
+            names = g.get("_telem_param_names", None)
             plist = g.get("params", [])
             for i, p in enumerate(plist):
                 if names is not None and i < len(names):

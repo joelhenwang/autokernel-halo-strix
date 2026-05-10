@@ -178,11 +178,17 @@ def build_mup_param_groups(
     hidden_lr = base_lr / d_ratio
     readout_lr = base_lr / (d_ratio ** 2)
 
+    # NB: keep the optimizer-facing keys minimal. The v3 T-0.2 telemetry
+    # pipeline reads the readable names from '_telem_param_names' when
+    # build_imu1_optimizer assembles NorMuon groups; we emit them here as
+    # a sidecar key that optimizer.py copies under that name. Using the
+    # reserved 'param_names' key here would fail PyTorch's optimizer
+    # validation (all-or-none policy across groups).
     return [
-        {"params": emb_params, "param_names": emb_names, "lr": base_lr,
+        {"params": emb_params, "_mup_param_names": emb_names, "lr": base_lr,
          "weight_decay": weight_decay, "_mup_group": "embedding"},
-        {"params": hidden_params, "param_names": hidden_names, "lr": hidden_lr,
+        {"params": hidden_params, "_mup_param_names": hidden_names, "lr": hidden_lr,
          "weight_decay": weight_decay, "_mup_group": "hidden"},
-        {"params": readout_params, "param_names": readout_names, "lr": readout_lr,
+        {"params": readout_params, "_mup_param_names": readout_names, "lr": readout_lr,
          "weight_decay": weight_decay, "_mup_group": "readout"},
     ]

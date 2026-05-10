@@ -235,10 +235,12 @@ def build_imu1_optimizer(
         if use_mup and mup_groups is not None:
             # When μP is active, feed the 3-way split to NorMuon as separate
             # muon_params groups so each retains its per-group LR.
-            # v3 T-0.2: attach param_names for telemetry readability.
+            # v3 T-0.2: attach _telem_param_names for telemetry readability
+            # (underscore-prefixed to avoid collision with PyTorch's reserved
+            # 'param_names' optimizer key which requires all-or-none groups).
             muon_groups_for_normuon = [
                 {"params": grp["params"],
-                 "param_names": grp.get("param_names",
+                 "_telem_param_names": grp.get("_mup_param_names",
                                          [f"mup_{grp['_mup_group']}_{i}"
                                           for i in range(len(grp["params"]))]),
                  "lr": grp["lr"],
@@ -271,7 +273,7 @@ def build_imu1_optimizer(
         else:
             opt = NorMuon(
                 muon_params=[{"params": [p for _, p in group_2d],
-                              "param_names": [n for n, _ in group_2d]}],
+                              "_telem_param_names": [n for n, _ in group_2d]}],
                 adamw_params=[
                     {"params": [p for _, p in group_1d], "lr": lr_1d, "weight_decay": 0.0},
                 ],
