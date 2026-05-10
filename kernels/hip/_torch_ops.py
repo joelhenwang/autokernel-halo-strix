@@ -675,3 +675,136 @@ def _fused_gated_conv_backward(ctx, grad_output):
 fused_gated_conv_op.register_autograd(
     _fused_gated_conv_backward, setup_context=_fused_gated_conv_setup
 )
+
+
+# ---------------------------------------------------------------------------
+# fused_rope_gate_mul — v3 T-3.2 fix
+# Was previously used via @torch.compiler.disable wrapper (no register_autograd),
+# which caused silent-freeze of b/h_tilde upstream parameters in training. Now
+# registered as proper custom_op with autograd so gradients flow.
+#
+# Math:
+#   Forward: y = RoPE(b) * h_tilde
+#           RoPE pairs (b_even, b_odd) -> (b_even*cos - b_odd*sin, b_even*sin + b_odd*cos)
+#   Backward (native PyTorch; matches fused_rope_gate_mul.py semantics):
+#           grad_b = RoPE^T(grad_y * h_tilde)   = inverse rotation (swap sin sign)
+#           grad_h_tilde = grad_y * RoPE(b)
+# ---------------------------------------------------------------------------
+
+@torch.library.custom_op(
+    "autokernel::fused_rope_gate_mul", mutates_args=()
+)
+def fused_rope_gate_mul_op(
+    b: torch.Tensor,           # (M, D) fp16
+    h_tilde: torch.Tensor,     # (M, D) fp16
+    freqs_cos: torch.Tensor,   # (T, R_half) fp32
+    freqs_sin: torch.Tensor,   # (T, R_half) fp32
+    T: int,
+    D: int,
+    R_half: int,
+) -> torch.Tensor:
+    """Forward: RoPE(b) * h_tilde, via HIP kernel."""
+    from kernels.hip.fused_rope_gate_mul import kernel_fn
+    return kernel_fn(b, h_tilde, freqs_cos, freqs_sin, T, D, R_half)
+
+
+@fused_rope_gate_mul_op.register_fake
+def _(b, h_tilde, freqs_cos, freqs_sin, T, D, R_half):
+    return b.new_empty(b.shape)
+
+
+def _fused_rope_gate_mul_native(b, h_tilde, freqs_cos, freqs_sin, T, D, R_half):
+    """Pure PyTorch equivalent of HIP fused_rope_gate_mul (used in backward)."""
+    # b: (M, D); reshape to (B, T, H, pairs, 2) where H*pairs*2 == D
+    # R_half = rope_head_dim // 2 (number of rotation pairs per head)
+    M = b.shape[0]
+    B = M // T
+    # H heads * pairs pairs * 2 = D, so H*pairs = D//2
+    pairs = R_half  # assumes rope applies only to first R_half pairs per head
+    # Actually from kernel: pair = (d_idx / 2) % R_half, meaning rope is applied
+    # modulo R_half on pair index. The kernel applies rope uniformly across all D/2 pairs
+    # with freqs_cos/sin indexed by (pair = (d_idx/2) % R_half).
+    # We'll do an equivalent reshape.
+    b_view = b.view(B, T, D // 2, 2).float()
+    h_view = h_tilde.view(B, T, D // 2, 2).float()
+    b_even = b_view[..., 0]
+    b_odd = b_view[..., 1]
+    h_even = h_view[..., 0]
+    h_odd = h_view[..., 1]
+    # freqs_cos: (T, R_half); index by (pair = d_idx/2 % R_half)
+    # Construct expanded cos/sin along D//2 axis
+    pair_idx = torch.arange(D // 2, device=b.device) % R_half
+    cos_bcast = freqs_cos[:, pair_idx]  # (T, D//2)
+    sin_bcast = freqs_sin[:, pair_idx]  # (T, D//2)
+    cos_bcast = cos_bcast.unsqueeze(0)  # (1, T, D//2)
+    sin_bcast = sin_bcast.unsqueeze(0)
+    rot_a = b_even * cos_bcast - b_odd * sin_bcast
+    rot_b = b_even * sin_bcast + b_odd * cos_bcast
+    y_even = rot_a * h_even
+    y_odd = rot_b * h_odd
+    y = torch.stack([y_even, y_odd], dim=-1).flatten(-2)  # (B, T, D)
+    return y.view(M, D).to(b.dtype)
+
+
+def _fused_rope_gate_mul_setup(ctx, inputs, output):
+    b, h_tilde, freqs_cos, freqs_sin, T, D, R_half = inputs
+    ctx.save_for_backward(b, h_tilde, freqs_cos, freqs_sin)
+    ctx.T = T
+    ctx.D = D
+    ctx.R_half = R_half
+
+
+def _fused_rope_gate_mul_backward(ctx, grad_y):
+    """Backward via pure PyTorch (simpler and parity-checkable)."""
+    b, h_tilde, freqs_cos, freqs_sin = ctx.saved_tensors
+    T = ctx.T
+    D = ctx.D
+    R_half = ctx.R_half
+
+    M = grad_y.shape[0]
+    B = M // T
+
+    grad_y_view = grad_y.view(B, T, D // 2, 2).float()
+    b_view = b.view(B, T, D // 2, 2).float()
+    h_view = h_tilde.view(B, T, D // 2, 2).float()
+    gy_even = grad_y_view[..., 0]
+    gy_odd = grad_y_view[..., 1]
+    b_even = b_view[..., 0]
+    b_odd = b_view[..., 1]
+    h_even = h_view[..., 0]
+    h_odd = h_view[..., 1]
+
+    pair_idx = torch.arange(D // 2, device=b.device) % R_half
+    cos_bcast = freqs_cos[:, pair_idx].unsqueeze(0)  # (1, T, D//2)
+    sin_bcast = freqs_sin[:, pair_idx].unsqueeze(0)
+
+    # Forward: rot_a = b_even*cos - b_odd*sin, rot_b = b_even*sin + b_odd*cos
+    # y_even = rot_a * h_even, y_odd = rot_b * h_odd
+    # dL/d(rot_a) = gy_even * h_even
+    # dL/d(rot_b) = gy_odd * h_odd
+    # dL/d(b_even) = dL/d(rot_a)*cos + dL/d(rot_b)*sin
+    # dL/d(b_odd)  = -dL/d(rot_a)*sin + dL/d(rot_b)*cos
+    # dL/d(h_even) = gy_even * rot_a
+    # dL/d(h_odd)  = gy_odd * rot_b
+    grad_rot_a = gy_even * h_even
+    grad_rot_b = gy_odd * h_odd
+    grad_b_even = grad_rot_a * cos_bcast + grad_rot_b * sin_bcast
+    grad_b_odd = -grad_rot_a * sin_bcast + grad_rot_b * cos_bcast
+
+    rot_a = b_even * cos_bcast - b_odd * sin_bcast
+    rot_b = b_even * sin_bcast + b_odd * cos_bcast
+    grad_h_even = gy_even * rot_a
+    grad_h_odd = gy_odd * rot_b
+
+    grad_b = torch.stack([grad_b_even, grad_b_odd], dim=-1).flatten(-2).view(M, D).to(b.dtype)
+    grad_h_tilde = torch.stack([grad_h_even, grad_h_odd], dim=-1).flatten(-2).view(M, D).to(h_tilde.dtype)
+
+    # freqs_cos/freqs_sin are inputs but not learnable in practice; return None.
+    # T, D, R_half are SymInt — return None.
+    return grad_b, grad_h_tilde, None, None, None, None, None
+
+
+fused_rope_gate_mul_op.register_autograd(
+    _fused_rope_gate_mul_backward, setup_context=_fused_rope_gate_mul_setup
+)
+

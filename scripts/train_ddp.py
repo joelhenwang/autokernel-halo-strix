@@ -1085,6 +1085,13 @@ def main():
     if getattr(args, "ak_loss_zloss", False):
         args.use_fused_zloss = True
 
+    # v3 T-3.2: set env vars for model-side feature flags BEFORE DDP init +
+    # model construction so they're visible during forward.
+    if getattr(args, "ak_fix_rope_gate_op", False):
+        os.environ["AUTOKERNEL_FIX_ROPE_GATE"] = "1"
+    if getattr(args, "ak_spectra_branchless", False) or getattr(args, "ak_sync_cleanup", False):
+        os.environ["AUTOKERNEL_SPECTRA_BRANCHLESS"] = "1"
+
     use_async = not args.no_async
     use_fp16 = not args.no_fp16_compress
 

@@ -278,13 +278,31 @@ class HyPEShortConvBlock(nn.Module):
             # contiguous row-major float arrays, so we MUST call .contiguous() here.
             # Without this, the kernel silently reads interleaved real/imag as cos,
             # producing garbled RoPE rotation.
-            from kernels.hip.fused_rope_gate_mul import kernel_fn as fused_rope_mul
             freqs_cos = freqs_cis.real[:T, :self.rope_head_dim // 2].contiguous().float()
             freqs_sin = freqs_cis.imag[:T, :self.rope_head_dim // 2].contiguous().float()
-            y = fused_rope_mul(b.reshape(B*T, self.d_conv).half(),
-                               h_tilde.reshape(B*T, self.d_conv).half(),
-                               freqs_cos, freqs_sin,
-                               T, self.d_conv, self.rope_head_dim // 2).float().view(B, T, self.d_conv)
+            # v3 T-3.2: when AUTOKERNEL_FIX_ROPE_GATE=1, use the properly
+            # registered torch.library.custom_op with register_autograd. This
+            # fixes the pre-fix silent-freeze bug where b/h_tilde grads were
+            # severed (no autograd on the @torch.compiler.disable'd kernel_fn).
+            import os as _os
+            _fix_rope_gate = (_os.environ.get("AUTOKERNEL_FIX_ROPE_GATE", "0")
+                              in ("1", "true", "True"))
+            if _fix_rope_gate:
+                # Import triggers registration of autokernel::fused_rope_gate_mul
+                import kernels.hip._torch_ops  # noqa: F401
+                y = torch.ops.autokernel.fused_rope_gate_mul(
+                    b.reshape(B*T, self.d_conv).half(),
+                    h_tilde.reshape(B*T, self.d_conv).half(),
+                    freqs_cos, freqs_sin,
+                    T, self.d_conv, self.rope_head_dim // 2,
+                ).float().view(B, T, self.d_conv)
+            else:
+                # Legacy path (silent-freeze risk — keep for A/B testing only).
+                from kernels.hip.fused_rope_gate_mul import kernel_fn as fused_rope_mul
+                y = fused_rope_mul(b.reshape(B*T, self.d_conv).half(),
+                                   h_tilde.reshape(B*T, self.d_conv).half(),
+                                   freqs_cos, freqs_sin,
+                                   T, self.d_conv, self.rope_head_dim // 2).float().view(B, T, self.d_conv)
 
         if getattr(self, "_compile_friendly", False):
             # Pure PyTorch conv path — no DaoAILab extension boundary
