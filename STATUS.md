@@ -18,9 +18,19 @@ collapse, zero divergence. MFU 21.4%.
 
 **Sprint 3 launch command (awaits explicit user approval):**
 ```bash
-STACK=D bash scripts/launch_sprint3a.sh    # OdinFlat, ~61h
+STACK=D bash scripts/launch_sprint3a.sh    # OdinFlat, ~61h — RECOMMENDED
 STACK=D bash scripts/launch_sprint3b.sh    # OdinHalo, ~77h (recommend 500-step smoke first)
+STACK=E bash scripts/launch_sprint3a.sh    # ALT: delayed-enable (two-stage, modest loss edge)
 ```
+
+### Phase C post-hoc additions (2026-05-11 session 2 completion)
+
+- **C.1 warm-start matrix:** all 4 configs PASS; H14 RULED OUT; C.1.c/d show
+  -0.033 to -0.123 better final loss than Stack D direct (single-run evidence).
+  Stack E shipped as opt-in alternative (two-stage: native 1000 → Stack D
+  resume with preserved optim). `docs/perf/t5-c1-warmstart-findings.md`.
+- **C.3 w_gate_up staging:** NULL-EFFECT. Update-scale confirmed not a
+  mechanism. `docs/perf/t5-c3-wgu-staging-findings.md`.
 
 ### 40k target realism
 

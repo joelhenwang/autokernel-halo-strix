@@ -185,12 +185,70 @@ interconnect upgrade.
 **STOP before Sprint 3A/3B launch.** Per user directive, agent awaits
 explicit approval. Presenting:
 - Winner: **Stack D (34,697 tok/s, +10.7% vs baseline)**
+- Alternative: **Stack E (delayed-enable, -0.033 to -0.123 better final loss on single-run evidence; ~-1% aggregate tok/s)**
 - Expected Sprint 3A wall: ~61h (OdinFlat, dolma-10b, 1 epoch)
 - Expected Sprint 3B wall: ~77h (OdinHalo, dolma-10b, 1 epoch, recommend smoke first)
 - Launch commands:
   ```bash
-  STACK=D bash scripts/launch_sprint3a.sh
+  STACK=D bash scripts/launch_sprint3a.sh         # recommended canonical
+  STACK=E bash scripts/launch_sprint3a.sh         # delayed-enable alt
   STACK=D bash scripts/launch_sprint3b.sh
   ```
 
 Wait for user go-ahead.
+
+---
+
+## Post-Phase-D additions (session 2 completion, 2026-05-11)
+
+User requested running the deferred Phase C diagnostic probes (C.1 warm-start matrix + C.3 w_gate_up staging). Both completed successfully.
+
+### C.3 w_gate_up staging — NULL-EFFECT
+
+- 1500 steps with Stack D + `--ak-w-gate-up-scale 0.25 --ak-w-gate-up-ramp-steps 1000`
+- 94 min wall, 34,857 tok/s (ties Stack D), best loss 3.2387 (same trajectory)
+- 0 trust_cap_triggered events across 3479 telemetry records
+- **Confirms C.2:** update-scale mechanism (H1/H4/H5) is ruled out
+- `docs/perf/t5-c3-wgu-staging-findings.md`
+
+### C.1 warm-start matrix — all 4 PASS; c/d outperform Stack D direct
+
+Manual per-phase execution with MASTER_PORT rotation (29500/29510/29520/29530) + inter-phase sleep + scp checkpoints to Machine B. The initial session-1 attempt failed on both gloo port-stale (rank 1 couldn't bind) AND missing checkpoints on Machine B (resume path broke). Both issues fixed by manual run.
+
+| Config | Total steps | Final loss | tok/s | Verdict |
+|---|---:|---:|---:|---|
+| Stack D (ref) | 2000 | 3.1384 | 34,697 | ref |
+| C.1.a native 500 + preserved | 1500 | 3.3079 | 34,764 | PASS (behind ref at 1500) |
+| C.1.b native 500 + fresh | 1500 | 3.3081 | 34,803 | PASS (tied with a) |
+| C.1.c native 1000 + preserved | 2000 | **3.1065** | 34,740 | **PASS + beats ref by -0.033** |
+| C.1.d native 1000 + loss-only 500 + full 500 | 2000 | **3.0152** | 34,424 | **PASS + beats ref by -0.123** |
+
+**Total wall: ~5.5h across 6 phases.** Zero divergence, zero GradScaler collapse, zero frozen params in any config.
+
+**Hypothesis verdicts updated:**
+- H14 (optimizer state mismatch) **RULED OUT** — C.1.a (preserved) and C.1.b (fresh) produce essentially identical tok/s + loss at matching step count.
+- H5b (warmup-local instability) **MODEST positive signal** — C.1.c/d's final loss advantages suggest a mild effect; single-run evidence only.
+
+**Stack E shipped as alt recipe** per user pre-commit "if only c passes, ship Stack E" (interpreted as: ship Stack E since delayed-enable works + gives quality edge). `scripts/launch_sprint3a_stackE.sh` is a two-stage launcher: native 1000 steps → Stack D resume with preserved optimizer. Handles inter-stage checkpoint scp to Machine B automatically.
+
+- `docs/perf/t5-c1-warmstart-findings.md`
+
+### Phase C diagnostic matrix — final summary
+
+| Probe | Config | Result | Verdict |
+|---|---|---|---|
+| C.0 | Replay-bundle dump infra | Shipped | done |
+| C.1 | Warm-start matrix (4 configs) | All PASS; c/d beat ref | H14 ruled out; Stack E shipped as alt |
+| C.2 | Trust cap tau=0.02 on w_gate_up | 0 triggers / 2059 samples | update-scale ruled out |
+| C.3 | w_gate_up staging 0.25→1.0 | null-effect, tied Stack D | confirms C.2 |
+| C.4 | Stack D 2000-step gate | PASS +10.7% tok/s + better quality | **SHIPPED as canonical** |
+
+### Commits this session (final)
+
+1. `e3baf27` — Phase A + T-1.5 FINAL
+2. `1ee2e5c` — Phase B complete
+3. `cf8ace2` — Stack D PASSES gate
+4. `99cdc00` — C.3 w_gate_up staging null-effect
+5. (this commit) — C.1 warm-start matrix + Stack E launcher + scorecard/STATUS/session-log updates
+
+Total session time: ~16h wall. Within user's "one long session" budget with final Sprint 3 launches still deferred to explicit user approval.

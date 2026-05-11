@@ -1,31 +1,35 @@
 #!/bin/bash
-# T-6 Sprint 3A launch: OdinFlat 1 epoch on dolma-10B with best-passing
-# throughput stack. Based on T-1 through T-5 findings.
+# T-6 Sprint 3A launch: OdinFlat 1 epoch on dolma-10B.
 #
-# Current Stack A composition (as of T-1 in-progress):
-#   - branchless SPECTRA          (--ak-spectra-branchless)
-#   - fused z-loss                (--use-fused-zloss + --ak-loss-zloss)
-#   - deferred loss sync          (--ak-sync-cleanup)
-#   - DDP tuned                   (--ak-ddp-tune)   [conditional on T-1.4]
-#   - NorMuon telemetry on        (--ak-normuon-telemetry)
+# Stack lookup (2026-05-11+, v3 campaign results):
+#   STACK=A   Fused z-loss only (T-1.5 canonical; +6.6% tok/s vs baseline)
+#   STACK=B   SAME as A (batch=32 null-effect per T-2.1, DDP bucket null per T-1.4)
+#   STACK=C   SAME as A (compiled autograd regresses per T-4)
+#   STACK=D   A + ak-fix-rope-gate-op + ak-causal-conv-shim + ak-sync-cleanup
+#             + ak-spectra-branchless + ak-normuon-telemetry
+#             (+10.7% tok/s + better quality; T-5 C.4 canonical winner)
+#   STACK=E   Delayed-enable: run scripts/launch_sprint3a_stackE.sh (two-stage)
+#             Stage 1: native 1000 steps, Stage 2: Stack D resume (preserve optim)
+#             T-5 C.1.c evidence: -0.033 better loss at matching total step than
+#             Stack D from-scratch. Slightly more operator overhead.
 #
-# To upgrade to Stack B (after T-2 batch=32 probe passes):
-#   Add BATCH=32 ACCUM=4 environment overrides.
-#
-# To upgrade to Stack C (after T-4 compiled autograd gate passes):
-#   Add --ak-compiled-autograd to EXTRA_FLAGS.
-#
-# To upgrade to Stack D (after T-5 hidden-kernel recovery + T-3.2 test):
-#   Add --ak-fix-rope-gate-op, --ak-trust-cap 0.02, --ak-trust-cap-scope
-#   w_gate_up, --ak-w-gate-up-scale 0.25, --ak-w-gate-up-ramp-steps 1000.
+# C.2 showed trust cap + w_gate_up staging have 0 effect (update-scale ruled out
+# as a divergence mechanism). They were removed from Stack D production recipe.
 #
 # Launch from Machine A:
-#   bash scripts/launch_sprint3a.sh
+#   STACK=D bash scripts/launch_sprint3a.sh   # recommended
+#   STACK=E bash scripts/launch_sprint3a.sh   # delayed-enable; alt recipe
 
 set -e
 
-# Stack selection via env var; default to Stack A (locked).
-STACK="${STACK:-A}"
+# Stack selection via env var; default to Stack D (T-5 canonical winner).
+STACK="${STACK:-D}"
+
+# Stack E is implemented as a separate two-stage script — delegate to it.
+if [ "$STACK" = "E" ]; then
+  echo "Sprint 3A Stack E: delegating to launch_sprint3a_stackE.sh"
+  exec bash "$(dirname "$0")/launch_sprint3a_stackE.sh"
+fi
 
 EXTRA_FLAGS_BASE="--imu1-groups --normuon --lr-2d 5e-3 --lr-1d 8e-4 \
   --intra-doc-mask --value-residuals --head-gating \
@@ -34,46 +38,41 @@ EXTRA_FLAGS_BASE="--imu1-groups --normuon --lr-2d 5e-3 --lr-1d 8e-4 \
   --mup --mup-base-width 256 \
   --spectra-post --spectra-clip-norm 1.0 \
   --ema --auto-eval \
-  --ak-spectra-branchless \
-  --ak-sync-cleanup \
-  --use-fused-zloss --ak-loss-zloss \
-  --ak-normuon-telemetry"
+  --use-fused-zloss --ak-loss-zloss"
 
 BATCH_OVERRIDE="16"
 ACCUM_OVERRIDE="8"
 
 case "$STACK" in
   A)
-    # Baseline v3 safe stack — no compiled autograd, no hidden kernels.
+    # T-1.5 canonical: fused zloss only. +6.6% vs Sprint 3A-confirm baseline.
     EXTRA_FLAGS="$EXTRA_FLAGS_BASE"
-    echo "Sprint 3A Stack A: loss + DDP + sync (conservative)"
+    echo "Sprint 3A Stack A: fused z-loss only (T-1.5 canonical, +6.6%)"
     ;;
   B)
-    # Stack A + batch=32 (requires T-2.1 gate pass).
-    EXTRA_FLAGS="$EXTRA_FLAGS_BASE --ak-ddp-tune"
-    BATCH_OVERRIDE="32"
-    ACCUM_OVERRIDE="4"
-    echo "Sprint 3A Stack B: A + batch=32/accum=4 + DDP tune"
+    # Stack B is not a thing — batch=32 + DDP bucket both null-effect per
+    # T-2.1 + T-1.4. Fall through to Stack A recipe (identical throughput).
+    EXTRA_FLAGS="$EXTRA_FLAGS_BASE --ak-sync-cleanup --ak-spectra-branchless"
+    echo "Sprint 3A Stack B (= A + sync-cleanup; batch=32 + bucket null-effect per B.1/B.2)"
     ;;
   C)
-    # Stack B + compiled autograd (requires T-4 gate pass).
-    EXTRA_FLAGS="$EXTRA_FLAGS_BASE --ak-ddp-tune --ak-compiled-autograd"
-    BATCH_OVERRIDE="32"
-    ACCUM_OVERRIDE="4"
-    echo "Sprint 3A Stack C: B + compiled autograd"
+    # Stack C = Stack B (compiled autograd regresses per T-4)
+    EXTRA_FLAGS="$EXTRA_FLAGS_BASE --ak-sync-cleanup --ak-spectra-branchless"
+    echo "Sprint 3A Stack C (= B; compiled autograd regresses per T-4)"
     ;;
   D)
-    # Stack C + hidden kernel recovery (requires T-3.2 + T-5 gates).
-    EXTRA_FLAGS="$EXTRA_FLAGS_BASE --ak-ddp-tune --ak-compiled-autograd \
-      --ak-fix-rope-gate-op \
-      --ak-trust-cap 0.02 --ak-trust-cap-scope w_gate_up \
-      --ak-w-gate-up-scale 0.25 --ak-w-gate-up-ramp-steps 1000"
-    BATCH_OVERRIDE="32"
-    ACCUM_OVERRIDE="4"
-    echo "Sprint 3A Stack D: C + hidden kernel recovery (experimental)"
+    # T-5 C.4 canonical winner: 34,697 tok/s (+10.7%), strictly better
+    # quality than Stack A (BPB, kurtosis, effective rank all improved).
+    EXTRA_FLAGS="$EXTRA_FLAGS_BASE \
+      --ak-fix-rope-gate-op --ak-causal-conv-shim \
+      --ak-sync-cleanup --ak-spectra-branchless \
+      --ak-normuon-telemetry"
+    echo "Sprint 3A Stack D: CANONICAL WINNER (+10.7%, T-5 C.4 validated)"
     ;;
   *)
-    echo "Unknown STACK=$STACK (must be A, B, C, or D)"
+    echo "Unknown STACK=$STACK (must be A, B, C, D, or E)"
+    echo "Recommended: STACK=D (canonical winner)"
+    echo "Alt:         STACK=E (delayed-enable; slight quality edge per C.1.c/d)"
     exit 1
     ;;
 esac

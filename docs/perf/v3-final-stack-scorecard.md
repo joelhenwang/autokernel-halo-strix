@@ -17,6 +17,7 @@
 | B | = A (batch=32/bucket null) | 33,410 | +6.6% | — | — | — | B.1/B.2 null |
 | C | = A (CA regresses) | 33,410 | +6.6% | — | — | — | B.3 gate fail |
 | **D** | **A + ak-fix-rope-gate-op + ak-causal-conv-shim + ak-sync-cleanup + ak-spectra-branchless + ak-normuon-telemetry + register_autocast on 5 ops** | **34,697** | **+10.7%** | **3.1384** | 0 | stable | **CANONICAL-LOCKED** |
+| E | Native 1000 → Stack D resume (preserved optim) — 2-stage | ~33.5k agg (Stage 1 drags; net -1-2% vs D) | +9-10% | **3.1065** (C.1.c single-run evidence; -0.033 vs D) | 0 | stable | ALT recipe (opt-in) |
 
 ## Stack D recipe (production)
 
@@ -152,7 +153,8 @@ not more kernel optimization.
 
 Sprint 3A (OdinFlat, dolma-10b, 1 epoch, ~61h):
 ```bash
-STACK=D bash scripts/launch_sprint3a.sh  # DO NOT RUN without explicit user approval
+STACK=D bash scripts/launch_sprint3a.sh    # RECOMMENDED (canonical winner)
+STACK=E bash scripts/launch_sprint3a.sh    # ALT (delayed-enable, modest single-run quality edge)
 ```
 
 Sprint 3B (OdinHalo, dolma-10b, 1 epoch, ~77h) — after OdinHalo Stack D smoke:
@@ -163,3 +165,19 @@ STACK=D bash scripts/launch_sprint3b.sh  # DO NOT RUN without explicit user appr
 Per session start rule: the agent **STOPS HERE and awaits explicit user
 approval** for Sprint 3A/3B launches. Present Stack D composition, expected
 throughput, expected wall time, and wait for user go-ahead.
+
+## Phase C post-hoc additions (session 2 completion)
+
+After the initial Phase D close, C.1 warm-start matrix + C.3 w_gate_up staging
+were run to completion per user request:
+
+- **C.1 warm-start matrix:** all 4 configs PASS (a/b tied, c/d show better
+  final loss than Stack D from-scratch). H14 (optimizer state mismatch) RULED
+  OUT (C.1.a vs C.1.b tied). Delayed-enable (C.1.c/d) shows modest quality
+  edge (-0.033 to -0.123 final loss vs Stack D direct). Single-run evidence
+  only — not conclusive as a systematic win, but shipped Stack E as opt-in
+  alternative recipe for users who want the edge.
+- **C.3 w_gate_up staging:** NULL-EFFECT (tok/s + loss indistinguishable
+  from Stack D). Confirms C.2 finding that update-scale is not a mechanism.
+
+Full details: `docs/perf/t5-c1-warmstart-findings.md`, `docs/perf/t5-c3-wgu-staging-findings.md`.
