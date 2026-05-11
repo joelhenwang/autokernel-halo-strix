@@ -1,0 +1,242 @@
+{
+  "schema_version": "1.0",
+  "checkpoint": "checkpoints/t5-c4-stackd/step_2000.pt",
+  "checkpoint_name": "t5-c4-stackd-step-2000",
+  "step": 2000,
+  "model": {
+    "file": "models/odin_flat.py",
+    "class": "OdinFlat",
+    "total_params": 121681722,
+    "trainable_params": 121681722,
+    "d_model": 768,
+    "n_layers": null
+  },
+  "eval_machine": "a",
+  "eval_timestamp": "2026-05-11T04:54:32Z",
+  "eval_duration_s": 67.0,
+  "eval_config": {
+    "max_tokens_per_domain": 50000,
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "prior_checkpoint": null
+  },
+  "per_domain_bpb": {
+    "wikitext_val": 2.0935,
+    "gpt_small_val": 2.0447,
+    "stem_crawl_val": 1.6239,
+    "dolma_val": 1.593,
+    "_raw_ce": {
+      "wikitext_val": 5.2241,
+      "gpt_small_val": 5.1021,
+      "stem_crawl_val": 4.0523,
+      "dolma_val": 3.975
+    },
+    "_empirical_bytes_per_token": {
+      "wikitext_val": 6.686,
+      "gpt_small_val": 6.469,
+      "stem_crawl_val": 5.517,
+      "dolma_val": 5.798
+    },
+    "_bpb_formula": "ce/ln(2)/3.6 (matches train_ddp.py)",
+    "_block_size": 512,
+    "_batch_size": 8,
+    "_max_tokens_per_domain": 50000
+  },
+  "sampling": {
+    "winning_config": {
+      "temperature": 0.8,
+      "repetition_penalty": 1.0,
+      "top_p": 0.95,
+      "top_k": 40
+    },
+    "distinct_2": 0.7619,
+    "self_ppl": 5.723,
+    "avg_length": 102.8,
+    "sample_preview": "The history of the Roman Empire is an ancient mythological figure. It is an ancient mythological fig",
+    "prompts": [
+      "The history of the Roman Empire",
+      "In the field of physics,"
+    ],
+    "_ablation_summary": {
+      "stage1_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.7619,
+        "self_ppl": 5.723
+      },
+      "stage2_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.7619,
+        "self_ppl": 5.723
+      },
+      "stage3_winner": {
+        "temperature": 0.8,
+        "repetition_penalty": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "distinct_2": 0.7619,
+        "self_ppl": 5.723
+      }
+    }
+  },
+  "inference_profile": {
+    "_warmup_forwards": 10,
+    "_measure_forwards": 30,
+    "_batch_size": 1,
+    "tok_s_seq256_bs1": 46565.3,
+    "peak_mem_gb_seq256": 0.381,
+    "tok_s_seq512_bs1": 64152.2,
+    "peak_mem_gb_seq512": 0.432,
+    "tok_s_seq1024_bs1": 67896.5,
+    "peak_mem_gb_seq1024": 0.535
+  },
+  "sample_pack": {
+    "prompts_file": "evals/sample_pack_v1.txt",
+    "num_prompts": 20,
+    "sampling_config": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 40,
+      "repetition_penalty": 1.1,
+      "max_tokens": 100,
+      "base_seed": 777
+    },
+    "output_hash": "sha256:3e203a64d85ab43f",
+    "samples_preview": [
+      "The history of the Roman Empire began with a new colonial empire. The city of Rome was in its early part of its modern territory, it was the first state of Rome",
+      "In the field of particle physics, the Standard Model describes the phase transitions in the Hamiltonian and is given by a constant term. The phase transitions a",
+      "To prove that the square root of 2 is irrational, we assume that each polynomial \\(x\\) satisfies \\(x^2 - x + \\leq 1\\). Here, \\(x = 1\\) and \\(x = 1\\) implies tha"
+    ],
+    "diff_vs_prior": {
+      "prior_checkpoint": "checkpoints/t5-c4-stackd/step_1500.pt",
+      "prior_hash": "sha256:8484bf6086cc6f1f",
+      "diff_count": 20,
+      "total_prompts": 20,
+      "preview": [
+        {
+          "prompt_idx": 0,
+          "current": "The history of the Roman Empire began with a new colonial empire. The city of Rome was in its early part of its modern territory, it was the first state of Rome",
+          "prior": "The history of the Roman Empire began with the new creation of a new city, and it was made up of the Romanian Empire, which he began to build the first island o"
+        },
+        {
+          "prompt_idx": 1,
+          "current": "In the field of particle physics, the Standard Model describes the phase transitions in the Hamiltonian and is given by a constant term. The phase transitions a",
+          "prior": "In the field of particle physics, the Standard Model describes the model's behavior of the particle.\n\nThe model describes a particle that is applied to an objec"
+        },
+        {
+          "prompt_idx": 2,
+          "current": "To prove that the square root of 2 is irrational, we assume that each polynomial \\(x\\) satisfies \\(x^2 - x + \\leq 1\\). Here, \\(x = 1\\) and \\(x = 1\\) implies tha",
+          "prior": "To prove that the square root of 2 is irrational, we assume that each x equals 3, and since x can't be a negative number, we need to prove that x = 3.\n\nNext, we"
+        }
+      ]
+    }
+  },
+  "activation_stats": {
+    "num_layers": 14,
+    "num_batches": 5,
+    "seq_len": 512,
+    "batch_size": 4,
+    "layer_kurtosis": [
+      0.378,
+      0.096,
+      0.223,
+      0.392,
+      0.387,
+      6.178,
+      1.83,
+      2.653,
+      3.169,
+      4.171,
+      5.707,
+      6.775,
+      14.833,
+      2.401
+    ],
+    "layer_rms_norm": [
+      12.735,
+      13.133,
+      12.302,
+      11.1,
+      10.037,
+      6.046,
+      9.395,
+      9.926,
+      10.263,
+      10.548,
+      10.842,
+      11.042,
+      10.622,
+      59.93
+    ],
+    "mean_layer_kurtosis": 3.514,
+    "mean_layer_rms_norm": 14.137,
+    "max_layer_kurtosis": 14.833,
+    "max_layer_rms_norm": 59.93,
+    "_split_used": "wikitext_val"
+  },
+  "convergence_stats": {
+    "num_batches": 3,
+    "seq_len": 512,
+    "batch_size": 2,
+    "is_looped": false,
+    "mean_recurrence": 1,
+    "num_layers": 14,
+    "tau": 0.95,
+    "per_layer_cos_to_final": [
+      0.4283,
+      0.4887,
+      0.5061,
+      0.5125,
+      0.5352,
+      0.4562,
+      0.7307,
+      0.7427,
+      0.7428,
+      0.7353,
+      0.7208,
+      0.6938,
+      0.5268,
+      1.0
+    ],
+    "per_layer_cos_to_final_frac_high": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "inter_layer_transition_cos": [
+      0.9119,
+      0.98,
+      0.9881,
+      0.9833,
+      0.7731,
+      0.7328,
+      0.9894,
+      0.9904,
+      0.9903,
+      0.9899,
+      0.9874,
+      0.9403,
+      0.5268
+    ],
+    "effective_rank_final": 1.03,
+    "_split_used": "wikitext_val",
+    "iter_k_cos_to_final": null,
+    "iter_k_cos_to_final_frac_high": null,
+    "iter_transition_cos": null
+  }
+}

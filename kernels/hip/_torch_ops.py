@@ -847,11 +847,13 @@ fused_rope_gate_mul_op.register_autograd(
 )
 
 
-# v3 T-3.3 (H11 fix): autocast rule for RoPE*gate fusion.
-try:
-    fused_rope_gate_mul_op.register_autocast("cuda", torch.float16)
-except AttributeError:
-    pass
+# v3 T-3.3 NOTE: `fused_rope_gate_mul` has MIXED-dtype inputs by design:
+#   b, h_tilde -> fp16 (activations, cast by caller via .half())
+#   freqs_cos, freqs_sin -> fp32 (precomputed RoPE tables)
+# register_autocast("cuda", torch.float16) would incorrectly downcast the
+# fp32 freqs tables to fp16 and crash the HIP kernel. DO NOT add autocast
+# rule for this op — hand-managed dtypes at the conv_blocks.py call site
+# are the correct contract.
 
 
 
