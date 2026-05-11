@@ -2,6 +2,12 @@
 
 AutoKernel: autonomous GPU kernel optimization + halo model training on AMD Strix Halo (gfx1151, RDNA 3.5, ROCm 7.12).
 
+This repository is **autoregressive-only**. The diffusion LM work lives in a sibling project at
+`../halo-dllm/` with its own `AGENTS.md` and `CONSTRAINTS.md`. Do not mutate `../halo-dllm/`
+from this repo. Shared primitives (HIP kernels, stability guard, activation monitor, remote
+sync scripts) were copied once at halo-dllm's Pre-P0 and then diverged; fix bugs manually in
+both places as needed — never auto-sync.
+
 ## Before anything else
 
 - **Read [STATUS.md](STATUS.md) first** — active runs, best/corrupted checkpoints, hard rules.
