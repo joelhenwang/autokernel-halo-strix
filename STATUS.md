@@ -5,9 +5,99 @@
 
 ---
 
+## AutoKernel 40k throughput campaign — **Stack D locked** (2026-05-11, COMPLETE)
+
+### Headline
+
+**Stack D** = **34,697 tok/s aggregate** = **+10.7% vs Sprint 3A-confirm baseline (31,331)**.
+
+2000-step canonical gate PASSED. Strictly-better quality than Stack A
+(-0.036 wikitext BPB, -0.125 gpt_small BPB, -0.088 dolma BPB, 52% lower max
+layer kurtosis, improved effective rank). Zero frozen params, zero GradScaler
+collapse, zero divergence. MFU 21.4%.
+
+**Sprint 3 launch command (awaits explicit user approval):**
+```bash
+STACK=D bash scripts/launch_sprint3a.sh    # OdinFlat, ~61h
+STACK=D bash scripts/launch_sprint3b.sh    # OdinHalo, ~77h (recommend 500-step smoke first)
+```
+
+### 40k target realism
+
+Nominal target 40k NOT reached (34.7k = 87% of way). Engineering success 36k
+not reached either. Phase A-C exhausted the kernel/optimizer dimension;
+reaching 36-40k requires orthogonal changes (larger block, different
+accumulation, algorithmic, or TB4 bandwidth upgrade). **Stack D at 34.7k is
+the honest ceiling for this session's scope.**
+
+### Stack D recipe (canonical)
+
+```bash
+# On top of Sprint 3A-confirm baseline:
+--use-fused-zloss --ak-loss-zloss \
+--ak-fix-rope-gate-op --ak-causal-conv-shim \
+--ak-sync-cleanup --ak-spectra-branchless \
+--ak-normuon-telemetry
+```
+
+Plus (shipped in `kernels/hip/_torch_ops.py`):
+- `register_autocast("cuda", fp16)` on silu_gate_mul, rmsnorm, fused_res_rmsnorm, causal_conv1d
+- `register_autocast("cuda", fp32)` on rotary_emb_fp32
+- Explicit NO autocast rule on fused_rope_gate_mul (mixed-dtype op; hand-managed)
+
+### What v3 confirmed
+
+- **v3 H11 is the root cause of Phase C/G divergence:** custom-op autocast
+  boundary dtype drift. Phase B's autograd-safe wiring was necessary but
+  insufficient; H11 fix required register_autocast rules with per-op dtype
+  management.
+- **Update-scale (H1/H4/H5) is NOT the mechanism:** C.2 trust cap produced
+  0 triggers across 2059 samples; update/weight ratio stayed well below 0.02.
+- **Backward is near-theoretical:** T-0.1 measured 2.18× forward for 2× FLOPs.
+  Compiled autograd provides no material upside on this workload (B.3 proved).
+- **Batch=32 provides no throughput win:** workload is bandwidth/IO-bound
+  (MFU 21.4%), not compute-bound. Memory doubling doesn't help.
+- **DDP bucket tuning is null:** manual allreduce dominates the allreduce path.
+
+### Full scorecard
+
+`docs/perf/v3-final-stack-scorecard.md` — comprehensive comparison across
+all 4 stacks + hypothesis retrospective + deferred items.
+
+### Execution plan + artifacts
+
+- **Strategic plan:** `docs/research/autokernel-40k-v3-execution-plan.md`
+- **This session's log:** `docs/perf/v3-session-2-execution-log.md`
+- **Prior session:** `docs/perf/v3-session-execution-log.md`
+- **Handoff (for post-compaction):** `docs/research/autokernel-40k-v3-handoff-next-session.md`
+- **Phase A artifacts:**
+  - `scripts/test_causal_conv1d_shim.py` (4/4 PASS)
+  - `scripts/test_tier2_parity.py` (8/8 PASS)
+  - `docs/perf/dtype-autocast-inventory-post-A3.md` (6/9 ops with register_autocast)
+- **Phase B findings:**
+  - `docs/perf/t1-4-ddp-bucket-sweep-findings.md` (null)
+  - `docs/perf/t2-1-batch32-findings.md` (null)
+  - `docs/perf/t4-compiled-autograd-findings.md` (gate fail, infra-only)
+- **Phase C findings:**
+  - `docs/perf/t1-5-fused-zloss-final.md` (Stack A canonical)
+  - `docs/perf/t5-c4-stackd-findings.md` (Stack D winner)
+  - `docs/perf/t5-c2-trust-cap-findings.md` (update-scale ruled out)
+
+### Previous Stack A reference (superseded by Stack D)
+
+Stack A (fused zloss alone) = 33,410 tok/s (+6.6%) was the Phase A canonical.
+Stack D subsumes Stack A (adds hidden-kernel custom_op route + autocast
+rules + sync cleanup) and improves it by 3.9% throughput with better quality.
+
+---
+
 ## AutoKernel 40k throughput effort (2026-05-11, IN PROGRESS)
 
+*** This section is preserved for historical reference; it has been SUPERSEDED
+by the Stack D lock-in above. ***
+
 Nominal target: 40k aggregate tok/s across 2× Strix Halo systems.
+
 
 Engineering success criterion: ≥36k aggregate tok/s with clean 2000-step loss parity,
 no newly frozen params, no GradScaler collapse, no nonfinite update events, and no
