@@ -20,6 +20,15 @@ if _HAS_CAUSAL_CONV1D:
 
 from models.components.attention import Attention, CodaAttention
 
+# Autokernel custom ops (fused_rope_gate_mul, causal_conv1d).
+# When available, these provide autograd-safe fused HIP kernels.
+# When unavailable (no HIP/ROCm), fall back to pure PyTorch equivalents.
+try:
+    import kernels.hip._torch_ops  # noqa: F401 — triggers op registration
+    _HAS_AUTOKERNEL_OPS = True
+except (ImportError, RuntimeError):
+    _HAS_AUTOKERNEL_OPS = False
+
 try:
     from models.argus import TTTSwiGLU
     from models.argus_prime import MultiStepTTTSwiGLU
@@ -264,15 +273,16 @@ class HyPEShortConvBlock(nn.Module):
         normed = self.pre_norm(x)
         b, c, h_tilde = self.proj(normed).chunk(3, dim=-1)
 
-        # Compile-friendly path (pure PyTorch ops, Inductor-fusable) when flag set.
-        if getattr(self, "_compile_friendly", False):
+        # Compile-friendly path (pure PyTorch ops, Inductor-fusable) when flag
+        # set, OR when autokernel ops are unavailable (no HIP/ROCm).
+        if getattr(self, "_compile_friendly", False) or not _HAS_AUTOKERNEL_OPS:
             y = self._rope_gate_mul_native(
                 b.reshape(B * T, self.d_conv),
                 h_tilde.reshape(B * T, self.d_conv),
                 freqs_cis, T,
             ).view(B, T, self.d_conv)
         else:
-            # Fused RoPE + gate multiply (saves intermediate b_rope tensor).
+            # Fused RoPE + gate multiply via autograd-safe custom_op.
             # IMPORTANT: .real / .imag on a complex tensor returns a NON-contiguous view
             # (complex memory interleaves real+imag). The HIP kernel reads them as
             # contiguous row-major float arrays, so we MUST call .contiguous() here.
@@ -280,48 +290,28 @@ class HyPEShortConvBlock(nn.Module):
             # producing garbled RoPE rotation.
             freqs_cos = freqs_cis.real[:T, :self.rope_head_dim // 2].contiguous().float()
             freqs_sin = freqs_cis.imag[:T, :self.rope_head_dim // 2].contiguous().float()
-            # v3 T-3.2: when AUTOKERNEL_FIX_ROPE_GATE=1, use the properly
-            # registered torch.library.custom_op with register_autograd. This
-            # fixes the pre-fix silent-freeze bug where b/h_tilde grads were
-            # severed (no autograd on the @torch.compiler.disable'd kernel_fn).
-            import os as _os
-            _fix_rope_gate = (_os.environ.get("AUTOKERNEL_FIX_ROPE_GATE", "0")
-                              in ("1", "true", "True"))
-            if _fix_rope_gate:
-                # Import triggers registration of autokernel::fused_rope_gate_mul
-                import kernels.hip._torch_ops  # noqa: F401
-                y = torch.ops.autokernel.fused_rope_gate_mul(
-                    b.reshape(B*T, self.d_conv).half(),
-                    h_tilde.reshape(B*T, self.d_conv).half(),
-                    freqs_cos, freqs_sin,
-                    T, self.d_conv, self.rope_head_dim // 2,
-                ).float().view(B, T, self.d_conv)
-            else:
-                # Legacy path (silent-freeze risk — keep for A/B testing only).
-                from kernels.hip.fused_rope_gate_mul import kernel_fn as fused_rope_mul
-                y = fused_rope_mul(b.reshape(B*T, self.d_conv).half(),
-                                   h_tilde.reshape(B*T, self.d_conv).half(),
-                                   freqs_cos, freqs_sin,
-                                   T, self.d_conv, self.rope_head_dim // 2).float().view(B, T, self.d_conv)
+            y = torch.ops.autokernel.fused_rope_gate_mul(
+                b.reshape(B*T, self.d_conv).half(),
+                h_tilde.reshape(B*T, self.d_conv).half(),
+                freqs_cos, freqs_sin,
+                T, self.d_conv, self.rope_head_dim // 2,
+            ).float().view(B, T, self.d_conv)
 
         if getattr(self, "_compile_friendly", False):
             # Pure PyTorch conv path — no DaoAILab extension boundary
             z = self._manual_causal_conv1d(y)
+        elif _HAS_CAUSAL_CONV1D and _HAS_AUTOKERNEL_OPS:
+            # Autograd-safe custom_op gives Dynamo a clean op boundary
+            # (no graph break) and preserves correct autograd.
+            z = torch.ops.autokernel.causal_conv1d(
+                y.transpose(1, 2).contiguous(), self.conv_weight, self.conv_bias
+            ).transpose(1, 2)
         elif _HAS_CAUSAL_CONV1D:
-            # v3 T-3.2 (2nd half): route through autokernel::causal_conv1d
-            # custom_op when AUTOKERNEL_CAUSAL_CONV_SHIM=1. This gives Dynamo
-            # a clean op boundary (no graph break) and preserves correct
-            # autograd under compiled-autograd.
-            import os as _os
-            if _os.environ.get("AUTOKERNEL_CAUSAL_CONV_SHIM", "0") in ("1", "true", "True"):
-                import kernels.hip._torch_ops  # noqa: F401 — trigger op registration
-                z = torch.ops.autokernel.causal_conv1d(
-                    y.transpose(1, 2).contiguous(), self.conv_weight, self.conv_bias
-                ).transpose(1, 2)
-            else:
-                z = causal_conv1d_fn(
-                    y.transpose(1, 2), self.conv_weight, self.conv_bias
-                ).transpose(1, 2)
+            # DaoAILab extension (has autograd via torch.autograd.Function,
+            # but causes graph break under torch.compile)
+            z = causal_conv1d_fn(
+                y.transpose(1, 2), self.conv_weight, self.conv_bias
+            ).transpose(1, 2)
         else:
             z = self.conv(y.transpose(1, 2))[:, :, :T].transpose(1, 2)
         conv_out = self.out_proj(c * z)

@@ -42,8 +42,8 @@ from torch.amp import custom_fwd, custom_bwd
 
 
 def _get_ce_kernel():
-    """Import Phase 1 CE kernel lazily to avoid circular import and compile cost."""
-    import kernel as _k
+    """Import fused CE kernel lazily to avoid circular import and compile cost."""
+    from kernels import ce_fused as _k
     return _k
 
 

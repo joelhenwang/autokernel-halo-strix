@@ -21,6 +21,7 @@ from halo_training.evaluate import evaluate_bpb, benchmark_inference
 from halo_training.chat_template import ChatMLTokenizer, build_tokenizer, resize_embeddings
 from halo_training.sft_data import SFTDataset
 from halo_training.sft_loss import WeightedCrossEntropyLoss, build_sft_loss_fn
+from halo_training.stability import StabilityGuard, save_nan_forensics
 
 __all__ = [
     "train",
@@ -50,4 +51,6 @@ __all__ = [
     "SFTDataset",
     "WeightedCrossEntropyLoss",
     "build_sft_loss_fn",
+    "StabilityGuard",
+    "save_nan_forensics",
 ]
