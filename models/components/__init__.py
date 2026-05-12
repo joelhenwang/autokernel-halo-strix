@@ -17,3 +17,4 @@ from models.components.mtp import MTPHead
 from models.components.speculative import (
     DraftHeads, ForecastEmbeddings, concurrent_generate,
 )
+from models.components.mixer_blocks import GriffinGlobalBlock

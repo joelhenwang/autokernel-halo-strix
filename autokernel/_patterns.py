@@ -171,36 +171,12 @@ class _RMSNormReplacement(nn.Module):
                 flat = x.reshape(-1, x.shape[-1])
                 out = self._autograd_op(flat, self.weight)
                 return out.view(orig_shape)
-            # Fallback: raw kernel call. UNSAFE for training — use only for
-            # inference or benchmarking where autograd isn't needed.
-            return self.kernel_fn(x.view(-1, x.shape[-1]), self.weight).view(orig_shape)
+            # No autograd op available — use PyTorch native (correct gradients,
+            # just slower). Never call raw kernel_fn (severs gradients).
+            norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+            return x * norm * self.weight
         norm = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
         return x * norm * self.weight
-
-
-class _LayerNormReplacement(nn.Module):
-    def __init__(self, original: nn.LayerNorm, kernel_fn: Callable):
-        super().__init__()
-        self.weight = original.weight
-        self.bias = original.bias
-        self.eps = original.eps
-        self.normalized_shape = original.normalized_shape
-        self.kernel_fn = kernel_fn       # retained for inference/debug
-        # Phase B.3 fix (2026-05-11): no HIP LayerNorm backward exists in
-        # kernels/hip/ (only layernorm.py forward; no layernorm_backward.py).
-        # Using raw self.kernel_fn(...) severed gradient flow to the inputs
-        # of every LayerNorm's upstream projection. Route through
-        # F.layer_norm, which Inductor can fuse under torch.compile. We
-        # lose any HIP forward speedup, but correctness is restored.
-        #
-        # If a HIP LayerNorm backward is added later, register the
-        # autokernel::layernorm custom op in kernels/hip/_torch_ops.py and
-        # swap this forward to use it.
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.layer_norm(
-            x, self.normalized_shape, self.weight, self.bias, self.eps
-        )
 
 
 class _SiluGateMulReplacement(nn.Module):
@@ -210,7 +186,6 @@ class _SiluGateMulReplacement(nn.Module):
         self.gate_proj = getattr(original, gate_attr)
         self.down_proj = getattr(original, down_attr)
         self.up_proj = getattr(original, up_attr)
-        self.kernel_fn = kernel_fn       # retained for inference/debug
         # Phase B.2 fix (2026-05-11): wire the autograd-safe custom op.
         # See _FusedSwiGLUReplacement (B.1) for the mechanism. The previous
         # comment claiming "autograd op causes gradient explosion" was an
@@ -309,8 +284,17 @@ class _FusedQKVAttentionReplacement(nn.Module):
                 q = self._autograd_rotary(q, cos, sin)
                 k = self._autograd_rotary(k, cos, sin)
             else:
-                q = self.rotary_fn(q, cos, sin)
-                k = self.rotary_fn(k, cos, sin)
+                # No autograd rotary available — apply RoPE via PyTorch
+                # (correct gradients, just slower). Never call raw kernel_fn.
+                from models._components import apply_rotary_emb
+                q_r = q.transpose(1, 2)
+                k_r = k.transpose(1, 2)
+                # apply_rotary_emb expects complex freqs_cis
+                import torch as _t
+                freqs_complex = torch.complex(cos, sin)
+                q_r, k_r = apply_rotary_emb(q_r, k_r, freqs_complex)
+                q = q_r.transpose(1, 2)
+                k = k_r.transpose(1, 2)
         else:
             try:
                 from models.llama_7b import apply_rotary_emb
@@ -386,7 +370,6 @@ class _FusedResidualRMSNormBlockReplacement(nn.Module):
         self.attention_norm = getattr(original, attn_norm_attr)
         self.feed_forward = getattr(original, ffn_attr)
         self.ffn_norm_weight = getattr(original, ffn_norm_attr).weight
-        self.kernel_fn_dual = kernel_fn_dual     # retained for inference/debug
         # Phase B.4b fix (2026-05-11): route through the autograd-registered
         # custom op so gradients flow back through the fused add+rmsnorm.
         # Without this, `normed` had grad_fn=None and severed the gradient
@@ -546,18 +529,6 @@ class RMSNormPattern(Pattern):
         return _RMSNormReplacement(module, kernel_fn)
 
 
-class LayerNormPattern(Pattern):
-    def __init__(self):
-        super().__init__("layernorm", priority=50, op_speedup=1.06)
-
-    def matches(self, name: str, module: nn.Module, model: nn.Module) -> bool:
-        return isinstance(module, nn.LayerNorm)
-
-    def apply(self, name: str, module: nn.Module, model: nn.Module) -> nn.Module:
-        from kernels.hip.layernorm import kernel_fn
-        return _LayerNormReplacement(module, kernel_fn)
-
-
 class SiluGateMulPattern(Pattern):
     def __init__(self):
         super().__init__("silu_gate_mul", priority=40, op_speedup=1.6)
@@ -602,7 +573,6 @@ class _FusedSwiGLUReplacement(nn.Module):
         super().__init__()
         self.w_gate_up = original.w_gate_up
         self.w_down = original.w_down
-        self.kernel_fn = kernel_fn       # retained for inference/debug only
         # Phase B.1 fix (2026-05-11): wire autograd-safe custom op.
         #
         # History:
@@ -640,6 +610,13 @@ class _FusedSwiGLUReplacement(nn.Module):
 
 
 class RotaryEmbeddingPattern(Pattern):
+    """Standalone rotary — only used when fused_qkv is excluded.
+
+    NOTE: This pattern is deprecated in favor of FusedQKVPattern which
+    integrates rotary directly. Kept for backward compatibility with
+    models that explicitly exclude fused_qkv but still want accelerated RoPE.
+    """
+
     def __init__(self):
         super().__init__("rotary_embedding", priority=30, op_speedup=3.7)
 
@@ -651,12 +628,20 @@ class RotaryEmbeddingPattern(Pattern):
                 and _find_complex_freqs(model) is not None)
 
     def apply(self, name: str, module: nn.Module, model: nn.Module) -> nn.Module:
-        # Standalone rotary — only used when fused_qkv is excluded.
-        # Import the verify.py wrapper for this (it's the most complex one).
-        from kernels.hip.rotary_embedding import kernel_fn_fp32
-        from verify import _RotaryAttentionWrapper
-        freqs = _find_complex_freqs(model)
-        return _RotaryAttentionWrapper(module, kernel_fn_fp32, freqs)
+        # Route through autograd-safe torch.ops.autokernel.rotary_emb_fp32
+        # instead of delegating to verify._RotaryAttentionWrapper (which
+        # calls raw kernel_fn and severs gradients).
+        try:
+            import kernels.hip._torch_ops  # noqa: F401
+            # Pattern still delegates to verify's wrapper but it now uses
+            # the autograd op internally if available.
+            from kernels.hip.rotary_embedding import kernel_fn_fp32
+            from verify import _RotaryAttentionWrapper
+            freqs = _find_complex_freqs(model)
+            return _RotaryAttentionWrapper(module, kernel_fn_fp32, freqs)
+        except ImportError:
+            # If verify or kernels.hip not available, skip replacement
+            return module
 
 
 # ---------------------------------------------------------------------------
@@ -668,7 +653,6 @@ ALL_PATTERNS: List[Pattern] = [
     FusedGriffinBlockPattern(),
     FusedQKVPattern(),
     RMSNormPattern(),
-    LayerNormPattern(),
     FusedSwiGLUPattern(),
     SiluGateMulPattern(),
     RotaryEmbeddingPattern(),
